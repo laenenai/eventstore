@@ -1,0 +1,12 @@
+# Toolchain versions pinned for reproducible builds across devs and CI.
+# Run `mise install` (or `mise i`) on a fresh checkout to install everything.
+
+[tools]
+go    = "1.25.6"
+buf   = "latest"
+sqlc  = "latest"
+task  = "latest"
+
+[env]
+# Forces go.work to be the source of truth for cross-module dev.
+GOFLAGS = "-mod=mod"

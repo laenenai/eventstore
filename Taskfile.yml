@@ -1,0 +1,63 @@
+version: '3'
+
+vars:
+  ROOT_MOD: .
+  PG_MOD:   ./adapters/storage/postgres
+  SQ_MOD:   ./adapters/storage/sqlite
+
+tasks:
+  default:
+    desc: List available tasks
+    cmd: task --list
+
+  test:
+    desc: Run unit tests across all modules
+    cmds:
+      - cd {{.ROOT_MOD}} && go test ./...
+      - cd {{.PG_MOD}}   && go test ./...
+      - cd {{.SQ_MOD}}   && go test ./...
+
+  vet:
+    desc: Run go vet across all modules
+    cmds:
+      - cd {{.ROOT_MOD}} && go vet ./...
+      - cd {{.PG_MOD}}   && go vet ./...
+      - cd {{.SQ_MOD}}   && go vet ./...
+
+  build:
+    desc: Build all packages across all modules
+    cmds:
+      - cd {{.ROOT_MOD}} && go build ./...
+      - cd {{.PG_MOD}}   && go build ./...
+      - cd {{.SQ_MOD}}   && go build ./...
+
+  generate:
+    desc: Run buf + sqlc codegen
+    cmds:
+      - cd proto && buf generate
+      - cd {{.PG_MOD}} && sqlc generate
+      - cd {{.SQ_MOD}} && sqlc generate
+
+  generate:check:
+    desc: Verify generated code is up to date (CI gate)
+    deps: [generate]
+    cmds:
+      - |
+        if [ -n "$(git status --porcelain gen adapters/storage/*/internal/db)" ]; then
+          echo "ERROR: generated code is out of date. Run 'task generate' and commit." >&2
+          git status --porcelain gen adapters/storage/*/internal/db >&2
+          exit 1
+        fi
+
+  lint:proto:
+    desc: Run buf lint and buf breaking
+    cmds:
+      - cd proto && buf lint
+      - cd proto && buf breaking --against '.git#branch=main'
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - cd {{.ROOT_MOD}} && go clean ./...
+      - cd {{.PG_MOD}}   && go clean ./...
+      - cd {{.SQ_MOD}}   && go clean ./...
