@@ -25,6 +25,12 @@ var (
 
 func main() {
 	protogen.Options{}.Run(func(plugin *protogen.Plugin) error {
+		// Note: buf invokes this plugin once per .proto file (default
+		// strategy=directory). Each invocation's plugin.Files contains
+		// the target file plus its transitive imports. Cross-file
+		// artifacts (e.g., a process-wide type-URL registry) are
+		// assembled at runtime via init() registrations, not emitted as
+		// a single big file at codegen time.
 		for _, file := range plugin.Files {
 			if !file.Generate {
 				continue
