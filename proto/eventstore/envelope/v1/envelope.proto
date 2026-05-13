@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package eventstore.envelope.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/eventstore/envelope/v1;envelopev1";
+
+// Envelope is the framework-defined wrapper around every event.
+// See docs/adr/0005-event-envelope-schema.md.
+//
+// All fields are required unless explicitly marked. Adapters reject
+// envelopes missing required fields at append time.
+message Envelope {
+  // ---- Identity & ordering ----
+
+  // UUID v7. Globally unique, time-sortable. Used for dedup, signing,
+  // hashing, and index locality.
+  string event_id = 1;
+
+  // Required, non-empty. Multi-tenancy is first-class (ADR 0007).
+  string tenant_id = 2;
+
+  // Canonical "<type>-<id>" form. Opaque to the store layer; structured
+  // by convention via es.StreamID typed wrappers (ADR 0008).
+  string stream_id = 3;
+
+  // Per-stream, monotonic. Starts at 1. Drives optimistic concurrency
+  // via the events PRIMARY KEY (tenant_id, stream_id, version).
+  uint64 version = 4;
+
+  // Store-wide monotonic. Allocated inside the append transaction via
+  // pg_advisory_xact_lock + nextval (ADR 0009).
+  uint64 global_position = 5;
+
+  // ---- Type & schema ----
+
+  // Fully-qualified proto type identifier, e.g.
+  // "myapp.user.v1.UserEmailChanged".
+  string type_url = 6;
+
+  // Upcaster dispatch key. Bumps when semantics change (ADR 0013).
+  uint32 schema_version = 7;
+
+  // ---- Time ----
+
+  // Domain time, from the command.
+  google.protobuf.Timestamp occurred_at = 8;
+
+  // DB time, set on commit. Monotonic relative to commit order.
+  google.protobuf.Timestamp recorded_at = 9;
+
+  // ---- Causality & audit ----
+
+  // Same across all events from one logical request or trace.
+  string correlation_id = 10;
+
+  // The event_id or command_id that directly caused this event.
+  string causation_id = 11;
+
+  // The command that produced this event. Used for idempotency.
+  string command_id = 12;
+
+  // Who or what initiated the action.
+  Actor actor = 13;
+
+  // ---- Payload ----
+
+  // Marshaled proto of the concrete event. Stored as BYTEA in Postgres
+  // and BLOB in SQLite. Opaque to the store layer.
+  bytes payload = 20;
+
+  // Per-field key references used by crypto-shredding. NULL when no
+  // field is encrypted. JSONB in storage (ADR 0010).
+  bytes encryption_key_refs = 21;
+}
+
+// Actor describes who or what initiated an action. Stored as proto
+// bytes on the events row; the actor.principal denormalization is
+// indexed separately for audit queries.
+message Actor {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_USER        = 1; // human user
+    KIND_SYSTEM      = 2; // a service or scheduled job
+    KIND_SERVICE     = 3; // a service acting on behalf of another principal
+    KIND_INTEGRATION = 4; // third-party integration
+  }
+
+  Kind kind = 1;
+
+  // Primary identifier for the actor. Indexed via the
+  // events.actor_principal column for audit queries.
+  string principal = 2;
+
+  // For "service acting on behalf of": the principal the service is
+  // acting for. Empty when not applicable.
+  string on_behalf_of = 3;
+
+  // Optional API key or token identifier — not the secret itself,
+  // just the key id. Useful for audit ("which API key did this?").
+  string api_key_id = 4;
+
+  // Free-form attribution metadata. Discouraged for primary identity
+  // (use principal); allowed for things like device id, IP region, etc.
+  map<string, string> attributes = 5;
+}

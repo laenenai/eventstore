@@ -1,0 +1,17 @@
+version: v2
+
+managed:
+  enabled: true
+
+plugins:
+  # Standard Go protobuf codegen. Produces the wire-format types used
+  # by adapter code and by consumers.
+  - remote: buf.build/protocolbuffers/go
+    out: ../gen
+    opt:
+      - paths=source_relative
+
+  # The framework-specific codegen plugin (protoc-gen-es-go) is added
+  # here in Phase 2 once it exists. For Phase 1 (storage spike) the
+  # standard protobuf-go output is sufficient — we only need the
+  # Envelope and Actor wire types.
