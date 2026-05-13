@@ -53,9 +53,11 @@ produces sealed Go interfaces for the command and event sum types,
 marker methods on each variant, and `Codec` implementations that
 marshal each variant under its full proto type URL.
 
-What stays hand-written per aggregate: the state struct, error
-sentinels, and the `Decider{Initial, Decide, Evolve}` — these carry
-the business rules codegen cannot guess.
+What stays hand-written per aggregate: error sentinels and the
+`Decider{Initial, Decide, Evolve}` — these carry the business rules
+codegen cannot guess. The State message defined in the .proto is
+used directly as the aggregate's folded state (see
+[examples/party/](examples/party/) for a complex real example).
 
 ### File layout
 
@@ -182,25 +184,22 @@ tag the `EncodedEvent` with the variant's full proto type name
 
 ### Wiring it up
 
-The hand-written piece per aggregate is small:
+The hand-written piece per aggregate is small. The recommended
+pattern uses the proto-defined State message directly:
 
 ```go
-// State is a plain Go struct. It doesn't have to be the proto Counter
-// message — the decider is generic over (S, C, E) and only the wire
-// shapes (C, E) need to come from codegen.
-type State struct {
-    Initialized bool
-    Count       int64
-    Min, Max    int64
-}
+// State is the proto-defined message — no parallel Go struct needed.
+// proto.Marshal(state) gives you free snapshots (ADR 0011) and the
+// schema lives in exactly one place.
+type State = counterv1.Counter
 
-var Decider = es.Decider[State, counterv1.Command, counterv1.Event]{
-    Initial: func() State { return State{} },
+var Decider = es.Decider[*State, counterv1.Command, counterv1.Event]{
+    Initial: func() *State { return &State{} },
 
-    Decide: func(s State, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
+    Decide: func(s *State, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
         switch cmd := c.(type) {
         case *counterv1.Init:
-            if s.Initialized {
+            if s.GetInitialized() {
                 return nil, nil, errAlreadyInit
             }
             return []counterv1.Event{
@@ -211,7 +210,7 @@ var Decider = es.Decider[State, counterv1.Command, counterv1.Event]{
         }
     },
 
-    Evolve: func(s State, e counterv1.Event) State {
+    Evolve: func(s *State, e counterv1.Event) *State {
         switch evt := e.(type) {
         case *counterv1.Initialized:
             s.Initialized = true
@@ -226,7 +225,7 @@ var Decider = es.Decider[State, counterv1.Command, counterv1.Event]{
 Then wire the runtime against any `es.Store`:
 
 ```go
-runtime := &aggregate.Runtime[State, counterv1.Command, counterv1.Event]{
+runtime := &aggregate.Runtime[*State, counterv1.Command, counterv1.Event]{
     Store:   store,                  // postgres or sqlite adapter
     Decider: Decider,
     Codec:   counterv1.EventCodec{}, // generated
@@ -236,6 +235,29 @@ result, err := runtime.Handle(ctx, streamID, &counterv1.Init{
     Min: 0, Max: 100, Initial: 5,
 })
 ```
+
+### Hand-written state struct — when it's the right choice
+
+For aggregates where the state has derived fields, requires
+specialized data structures (e.g., a map for O(1) lookup), or is
+much smaller than the wire representation, a hand-written Go struct
+is also defensible:
+
+```go
+type State struct {
+    Initialized bool
+    Count       int64
+    Min, Max    int64
+}
+
+var Decider = es.Decider[State, counterv1.Command, counterv1.Event]{...}
+```
+
+The framework supports either — `aggregate.Runtime[S, C, E]` is
+generic over the state type. The test fixture at
+[`adapters/storage/sqlite/aggregate_test.go`](adapters/storage/sqlite/aggregate_test.go)
+uses this pattern for the toy Counter. The Party example uses proto
+state for production-shape illustration.
 
 ### Conventions
 

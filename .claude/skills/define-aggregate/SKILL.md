@@ -120,7 +120,7 @@ Verify with `go build ./...`. If buf reports lint errors, the most common are:
 
 Create a Go file alongside the gen output, typically in a new package per aggregate. Conventional location depends on the consumer's repo — for a test fixture in this framework it sits beside the test that uses it; for a production app, place it under your domain layer.
 
-Skeleton:
+**Recommended pattern — use the proto State message directly:**
 
 ```go
 package <aggregate>
@@ -132,11 +132,10 @@ import (
     <aggregate>v1 "github.com/<owner>/<repo>/gen/<prefix>/<aggregate>/v1"
 )
 
-// State is the folded representation of the aggregate. Plain Go struct;
-// does not have to mirror the proto <Aggregate> message exactly.
-type State struct {
-    // ...
-}
+// State is the proto-defined message used directly as the
+// aggregate's folded state. No parallel Go struct.
+// Snapshots become free (proto.Marshal); schema lives in one place.
+type State = <aggregate>v1.<Aggregate>
 
 // Error sentinels for rejected commands.
 var (
@@ -144,13 +143,15 @@ var (
     // ...
 )
 
-var Decider = es.Decider[State, <aggregate>v1.Command, <aggregate>v1.Event]{
-    Initial: func() State { return State{} },
+var Decider = es.Decider[*State, <aggregate>v1.Command, <aggregate>v1.Event]{
+    Initial: func() *State { return &State{} },
 
-    Decide: func(s State, c <aggregate>v1.Command) ([]<aggregate>v1.Event, []es.ConstraintOp, error) {
+    Decide: func(s *State, c <aggregate>v1.Command) ([]<aggregate>v1.Event, []es.ConstraintOp, error) {
         switch cmd := c.(type) {
         case *<aggregate>v1.<CommandName1>:
-            // 1. Validate against current state.
+            // 1. Validate against current state — use generated
+            //    Get*() accessors (s.GetField()) for nil-safety on
+            //    nested messages.
             // 2. Return events to append.
             // 3. Optionally return constraint operations (Claim/Release).
             return []<aggregate>v1.Event{
@@ -162,16 +163,21 @@ var Decider = es.Decider[State, <aggregate>v1.Command, <aggregate>v1.Event]{
         }
     },
 
-    Evolve: func(s State, e <aggregate>v1.Event) State {
+    Evolve: func(s *State, e <aggregate>v1.Event) *State {
         switch evt := e.(type) {
         case *<aggregate>v1.<EventName1>:
-            // Mutate the state in response to this event.
-            // Keep this function pure: no clocks, no I/O, no randomness.
+            // Mutate the proto pointer in place. The "pure function"
+            // requirement (no clocks, no I/O, no randomness) still
+            // holds — pointer mutation is just how proto-Go represents
+            // state transformation.
+            s.<Field> = evt.Get<Field>()
         }
         return s
     },
 }
 ```
+
+**Alternative — hand-written Go struct.** Defensible when the state has derived/computed fields, requires specialized data structures (e.g., a map for O(1) lookup), or is much smaller than the wire representation. The framework's `Runtime[S, C, E]` is generic over the state type. The toy Counter at `adapters/storage/sqlite/aggregate_test.go` uses this pattern; the Party example at `examples/party/` uses the recommended proto-state pattern.
 
 Critical reminders to surface to the user:
 - **Decide may not have side effects.** It returns events; the runtime commits them.
