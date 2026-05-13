@@ -162,6 +162,19 @@ func emitSumType(out *protogen.GeneratedFile, st *sumType) {
 	}
 	out.P()
 
+	// ----- Action() string ----------------------------------------------
+	// Stable per-variant identifier — the variant's full proto type
+	// name (e.g., "myapp.party.v1.Approve"). Useful for authz wrappers,
+	// metrics labels, trace span names, audit log enrichment, and
+	// anywhere else a stable per-command-type identifier is needed.
+	// Emitted for events too; semantically it's the event's type name.
+	out.P("// Stable per-variant identifiers — full proto type names.")
+	out.P("// Useful for authz, metrics, tracing, and audit annotation.")
+	for _, v := range st.variants {
+		out.P("func (*", v.GoIdent.GoName, ") Action() string { return \"", v.Desc.FullName(), "\" }")
+	}
+	out.P()
+
 	// ----- Codec --------------------------------------------------------
 	codec := iface + "Codec"
 	encodedEvent := out.QualifiedGoIdent(aggregatePkg.Ident("EncodedEvent"))

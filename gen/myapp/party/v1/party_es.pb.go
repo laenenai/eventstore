@@ -28,6 +28,21 @@ func (*Suspend) isCommand()            {}
 func (*Reactivate) isCommand()         {}
 func (*Close) isCommand()              {}
 
+// Stable per-variant identifiers — full proto type names.
+// Useful for authz, metrics, tracing, and audit annotation.
+func (*Register) Action() string           { return "myapp.party.v1.Register" }
+func (*ProposeName) Action() string        { return "myapp.party.v1.ProposeName" }
+func (*ProposeEmail) Action() string       { return "myapp.party.v1.ProposeEmail" }
+func (*ProposeDateOfBirth) Action() string { return "myapp.party.v1.ProposeDateOfBirth" }
+func (*Approve) Action() string            { return "myapp.party.v1.Approve" }
+func (*Reject) Action() string             { return "myapp.party.v1.Reject" }
+func (*Withdraw) Action() string           { return "myapp.party.v1.Withdraw" }
+func (*UpdatePhone) Action() string        { return "myapp.party.v1.UpdatePhone" }
+func (*UpdateAddress) Action() string      { return "myapp.party.v1.UpdateAddress" }
+func (*Suspend) Action() string            { return "myapp.party.v1.Suspend" }
+func (*Reactivate) Action() string         { return "myapp.party.v1.Reactivate" }
+func (*Close) Action() string              { return "myapp.party.v1.Close" }
+
 // CommandCodec encodes and decodes Command variants on the wire.
 // Implements aggregate.Codec[Command].
 type CommandCodec struct{}
@@ -264,6 +279,23 @@ func (*AddressUpdated) isEvent()            {}
 func (*Suspended) isEvent()                 {}
 func (*Reactivated) isEvent()               {}
 func (*Closed) isEvent()                    {}
+
+// Stable per-variant identifiers — full proto type names.
+// Useful for authz, metrics, tracing, and audit annotation.
+func (*Registered) Action() string                { return "myapp.party.v1.Registered" }
+func (*NameChangeProposed) Action() string        { return "myapp.party.v1.NameChangeProposed" }
+func (*NameChangeApplied) Action() string         { return "myapp.party.v1.NameChangeApplied" }
+func (*EmailChangeProposed) Action() string       { return "myapp.party.v1.EmailChangeProposed" }
+func (*EmailChangeApplied) Action() string        { return "myapp.party.v1.EmailChangeApplied" }
+func (*DateOfBirthChangeProposed) Action() string { return "myapp.party.v1.DateOfBirthChangeProposed" }
+func (*DateOfBirthChangeApplied) Action() string  { return "myapp.party.v1.DateOfBirthChangeApplied" }
+func (*ChangeRejected) Action() string            { return "myapp.party.v1.ChangeRejected" }
+func (*ChangeWithdrawn) Action() string           { return "myapp.party.v1.ChangeWithdrawn" }
+func (*PhoneUpdated) Action() string              { return "myapp.party.v1.PhoneUpdated" }
+func (*AddressUpdated) Action() string            { return "myapp.party.v1.AddressUpdated" }
+func (*Suspended) Action() string                 { return "myapp.party.v1.Suspended" }
+func (*Reactivated) Action() string               { return "myapp.party.v1.Reactivated" }
+func (*Closed) Action() string                    { return "myapp.party.v1.Closed" }
 
 // EventCodec encodes and decodes Event variants on the wire.
 // Implements aggregate.Codec[Event].

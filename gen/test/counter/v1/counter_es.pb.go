@@ -19,6 +19,12 @@ func (*Init) isCommand()      {}
 func (*Increment) isCommand() {}
 func (*Decrement) isCommand() {}
 
+// Stable per-variant identifiers — full proto type names.
+// Useful for authz, metrics, tracing, and audit annotation.
+func (*Init) Action() string      { return "test.counter.v1.Init" }
+func (*Increment) Action() string { return "test.counter.v1.Increment" }
+func (*Decrement) Action() string { return "test.counter.v1.Decrement" }
+
 // CommandCodec encodes and decodes Command variants on the wire.
 // Implements aggregate.Codec[Command].
 type CommandCodec struct{}
@@ -100,6 +106,12 @@ type Event interface {
 func (*Initialized) isEvent() {}
 func (*Incremented) isEvent() {}
 func (*Decremented) isEvent() {}
+
+// Stable per-variant identifiers — full proto type names.
+// Useful for authz, metrics, tracing, and audit annotation.
+func (*Initialized) Action() string { return "test.counter.v1.Initialized" }
+func (*Incremented) Action() string { return "test.counter.v1.Incremented" }
+func (*Decremented) Action() string { return "test.counter.v1.Decremented" }
 
 // EventCodec encodes and decodes Event variants on the wire.
 // Implements aggregate.Codec[Event].
