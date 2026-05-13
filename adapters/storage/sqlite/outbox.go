@@ -3,15 +3,22 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/laenenai/eventstore/adapters/storage/sqlite/internal/db"
 	"github.com/laenenai/eventstore/es"
 )
 
-// PendingOutbox implements es.OutboxStore.
-func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int) ([]es.OutboxRow, error) {
-	rows, err := a.queries.PendingOutboxWithEnvelope(ctx, int64(limit))
+// PendingOutbox implements es.OutboxStore. Filters by retry-eligibility
+// and DLQ threshold before joining with events.
+func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int, maxAttempts int32) ([]es.OutboxRow, error) {
+	now := formatTime(time.Now().UTC())
+	rows, err := a.queries.PendingOutboxWithEnvelope(ctx, db.PendingOutboxWithEnvelopeParams{
+		NextAttemptAt: &now,
+		Attempts:      int64(safeMaxAttempts(maxAttempts)),
+		Limit:         int64(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -31,6 +38,34 @@ func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int)
 	return out, nil
 }
 
+// QuarantinedStreams implements es.OutboxStore.
+func (a *Adapter) QuarantinedStreams(ctx context.Context, tenantID string, maxAttempts int32) ([]es.StreamRef, error) {
+	maxA := int64(safeMaxAttempts(maxAttempts))
+	if tenantID == "" {
+		rows, err := a.queries.QuarantinedStreamsAllTenants(ctx, maxA)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]es.StreamRef, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
+		}
+		return out, nil
+	}
+	rows, err := a.queries.QuarantinedStreams(ctx, db.QuarantinedStreamsParams{
+		Attempts: maxA,
+		TenantID: tenantID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]es.StreamRef, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
+	}
+	return out, nil
+}
+
 // MarkOutboxPublished implements es.OutboxStore.
 func (a *Adapter) MarkOutboxPublished(ctx context.Context, tenantID string, globalPosition uint64) error {
 	return a.queries.MarkOutboxPublished(ctx, db.MarkOutboxPublishedParams{
@@ -40,13 +75,15 @@ func (a *Adapter) MarkOutboxPublished(ctx context.Context, tenantID string, glob
 }
 
 // MarkOutboxFailed implements es.OutboxStore.
-func (a *Adapter) MarkOutboxFailed(ctx context.Context, tenantID string, globalPosition uint64, errMsg string) error {
+func (a *Adapter) MarkOutboxFailed(ctx context.Context, tenantID string, globalPosition uint64, errMsg string, nextAttemptAt time.Time) error {
 	truncated := errMsg
 	if len(truncated) > 2048 {
 		truncated = truncated[:2048]
 	}
+	nextStr := formatTime(nextAttemptAt)
 	return a.queries.MarkOutboxFailed(ctx, db.MarkOutboxFailedParams{
 		LastError:      &truncated,
+		NextAttemptAt:  &nextStr,
 		TenantID:       tenantID,
 		GlobalPosition: int64(globalPosition),
 	})
@@ -54,8 +91,6 @@ func (a *Adapter) MarkOutboxFailed(ctx context.Context, tenantID string, globalP
 
 // CleanupPublishedOutbox implements es.OutboxStore.
 func (a *Adapter) CleanupPublishedOutbox(ctx context.Context, tenantID string, olderThan time.Time) (int, error) {
-	// SQLite stores TIMESTAMPTZ as TEXT; the generated CleanupPublished
-	// expects the cutoff as a *string in the canonical timeLayout.
 	cutoff := formatTime(olderThan)
 	if err := a.queries.CleanupPublished(ctx, db.CleanupPublishedParams{
 		TenantID:    tenantID,
@@ -63,14 +98,22 @@ func (a *Adapter) CleanupPublishedOutbox(ctx context.Context, tenantID string, o
 	}); err != nil {
 		return 0, err
 	}
-	// CleanupPublished is :exec so we don't get the affected-row count.
-	// Return -1 to signal "deleted, count unknown".
 	return -1, nil
 }
 
-// rowToEnvelopeOutbox converts a PendingOutboxWithEnvelopeRow into an
-// es.Envelope. The PendingOutboxWithEnvelopeRow shape isn't the same
-// as db.Event (it's a JOIN result), so we can't reuse rowToEnvelope.
+// safeMaxAttempts converts a user-supplied maxAttempts (0 = unbounded)
+// into a SQL-friendly value. We pass int64 max for "no limit" to keep
+// the SQL filter simple.
+func safeMaxAttempts(n int32) int64 {
+	if n <= 0 {
+		return math.MaxInt32
+	}
+	return int64(n)
+}
+
+// rowToEnvelopeOutbox converts a PendingOutboxWithEnvelopeRow into
+// an es.Envelope. The shape differs from db.Event (it's a JOIN
+// result), so we can't reuse rowToEnvelope.
 func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error) {
 	sid, err := es.ParseCanonical(r.TenantID, r.StreamID)
 	if err != nil {
@@ -88,7 +131,6 @@ func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error)
 	if err != nil {
 		return es.Envelope{}, fmt.Errorf("recorded_at: %w", err)
 	}
-
 	env := es.Envelope{
 		EventID:        r.EventID,
 		TenantID:       r.TenantID,
@@ -111,5 +153,8 @@ func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error)
 	return env, nil
 }
 
-// Compile-time check that Adapter implements OutboxStore.
-var _ es.OutboxStore = (*Adapter)(nil)
+// Compile-time check that Adapter implements both interfaces.
+var (
+	_ es.OutboxStore = (*Adapter)(nil)
+	_ es.OutboxAdmin = (*Adapter)(nil)
+)

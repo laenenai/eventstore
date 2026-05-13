@@ -1,43 +1,49 @@
 // Package outbox hosts the outbox-drain helper.
 //
-// See ADR 0014 for the outbox semantics and ADR 0012 for how the
-// drain fits into the Profile B (scale-to-zero) delivery model:
-// the writer commits events + outbox rows atomically; a scheduled
-// drain wakes the DB on a cadence, pulls pending rows, hands each
-// to the configured EventPublisher, marks rows published.
+// See ADR 0014 for the outbox semantics, ADR 0012 for the delivery
+// model, and cookbook recipe 06 for the deployment patterns and
+// DLQ operator story.
 package outbox
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/publisher"
 )
 
-// Drain is the outbox drain runtime. Holds a reference to an
-// OutboxStore (a storage adapter implementing the outbox queries) and
-// a Publisher (the configured EventPublisher).
+// Drain is the outbox drain runtime.
+//
+// Delivery contract (with default config):
+//
+//   - At-least-once delivery to the publisher.
+//   - Per-stream order preserved: if event with version N in stream X
+//     fails to publish, no event with version > N in stream X is
+//     delivered until either N succeeds or N enters DLQ.
+//   - Cross-stream interleaving is allowed — stream Y's events don't
+//     wait for stream X's failures.
+//   - When a row's attempts reach MaxAttempts (DLQ threshold), the
+//     entire stream is quarantined: no further events from that
+//     stream are delivered until operator action (replay or abandon
+//     via the OutboxAdmin interface). This is the default; set
+//     AutoResumeAfterDLQ=true to opt into "skip DLQ'd events and
+//     continue the stream with a gap."
 type Drain struct {
-	// Store provides the outbox queries. Implemented by storage
-	// adapters (adapters/storage/sqlite, adapters/storage/postgres).
+	// Store provides the outbox queries.
 	Store es.OutboxStore
 
-	// Publisher hands events to subscribers. Pluggable per ADR 0012:
-	// inproc for tests; restate / nats / sns / pubsub / cfqueues for
-	// production.
+	// Publisher hands events to subscribers.
 	Publisher publisher.Publisher
 
 	// Tenant scopes the drain to a single tenant. Empty string means
-	// cross-tenant (a shared scheduled drain across all tenants in
-	// the database).
+	// cross-tenant.
 	Tenant string
 
-	// BatchSize is the number of rows pulled per Run iteration.
-	// Default 100. Larger batches amortize wake-up overhead;
-	// smaller batches reduce blast radius on a stuck publisher.
+	// BatchSize is the number of rows pulled per batch. Default 100.
 	BatchSize int
 
 	// CleanupRetention sets how long published rows are kept before
@@ -45,35 +51,51 @@ type Drain struct {
 	// Set to 0 to disable cleanup.
 	CleanupRetention time.Duration
 
-	// LockKey, if non-empty, enables concurrent-drain safety via the
-	// store's es.DrainLocker interface. When set:
-	//   - Run / RunOnce call TryAcquireDrainLock(LockKey) at start.
-	//   - If acquired, the drain proceeds and releases at end.
-	//   - If another instance holds the lock, Run / RunOnce return
-	//     (0, 0, nil) immediately ("skipped this turn").
-	//   - If the Store does not implement DrainLocker, LockKey is
-	//     ignored (SQLite is naturally single-writer; Postgres
-	//     implements it via pg_try_advisory_lock).
-	//
-	// Recommended values:
-	//   "outbox-drain"           — global, single concurrent drainer
-	//   "outbox-drain:"+Tenant   — per-tenant concurrent drainers
-	//
-	// See cookbook recipe 06 for the deployment patterns.
+	// LockKey enables concurrent-drain safety via es.DrainLocker.
+	// See cookbook recipe 06.
 	LockKey string
 
-	// Shard / TotalShards enable sharded draining. When TotalShards
-	// > 0, this drain processes only rows where
-	// (global_position % TotalShards) == Shard. Multiple drain
-	// replicas can run concurrently on disjoint subsets without any
-	// coordination — each replica is configured with its own Shard
-	// value. Defaults (0, 0) mean "no sharding".
-	//
-	// Sharding is independent of LockKey. They can be combined
-	// (LockKey = "outbox-drain:shard-N") if you want exactly-one
-	// drainer per shard.
+	// Shard / TotalShards enable sharded draining. Sharding is by
+	// FNV-1a hash of (tenant_id, stream_id), so all events of a given
+	// stream are always handled by the same shard — strict per-stream
+	// ordering is preserved. See cookbook recipe 06.
 	Shard       int
 	TotalShards int
+
+	// MaxAttempts caps retry count. After this many failed publish
+	// attempts, the row enters DLQ state and the drain stops
+	// retrying. Default 0 = unbounded retries.
+	MaxAttempts int32
+
+	// BackoffBase + BackoffMax control retry timing. After a failed
+	// publish, next_attempt_at is set to:
+	//
+	//   now + min(BackoffMax, BackoffBase * 2^(attempts-1))
+	//
+	// Default (0, 0) = retry every drain cycle.
+	// Recommended: BackoffBase = 1s, BackoffMax = 5m.
+	BackoffBase time.Duration
+	BackoffMax  time.Duration
+
+	// AutoResumeAfterDLQ controls behavior when a stream has a row in
+	// DLQ state.
+	//
+	// Default (false) — quarantine mode: the stream stays paused
+	// until operator action releases the DLQ'd row. Subscribers
+	// never see a gap; the system fails loud rather than silently
+	// dropping events.
+	//
+	// True — skip mode: DLQ'd rows are skipped (the drain's
+	// PendingOutbox query already excludes them via attempts <
+	// MaxAttempts). Subsequent events in the same stream proceed,
+	// leaving a gap that the subscriber's gap-fill must recover.
+	AutoResumeAfterDLQ bool
+
+	// OnDLQ is an optional callback fired when the drain observes
+	// a row crossing into DLQ state. Use to wire alerts, metrics,
+	// or audit events. Called from the drain goroutine; should not
+	// block.
+	OnDLQ func(row es.OutboxRow)
 }
 
 const (
@@ -81,18 +103,8 @@ const (
 	defaultCleanupRetention = 7 * 24 * time.Hour
 )
 
-// Run pulls all currently-pending rows in batches, publishes each via
-// the configured Publisher, marks published rows, and runs the
-// cleanup pass. Returns when the pending set is empty (caught up) or
-// ctx is cancelled.
-//
-// Run is the entrypoint for a scheduled drain job. Typical deployment
-// invokes Run from a cron, Lambda, Cloudflare Worker scheduled
-// trigger, or similar.
-//
-// If LockKey is set and the Store implements es.DrainLocker, Run
-// acquires the lock first. If another instance holds it, Run returns
-// (0, 0, nil) immediately.
+// Run drains pending rows in batches until empty, then runs the
+// cleanup pass. See cookbook recipe 06 for the deployment patterns.
 //
 // Returns the count of rows published and the count cleaned up.
 func (d *Drain) Run(ctx context.Context) (published int, cleaned int, err error) {
@@ -111,22 +123,37 @@ func (d *Drain) Run(ctx context.Context) (published int, cleaned int, err error)
 		defer func() { _ = locker.ReleaseDrainLock(ctx, d.LockKey) }()
 	}
 
-	// Drain pending rows in batches until the pending set is empty.
+	// halted = streams paused for this Run due to a transient failure
+	// or quarantine. Persists across batches so per-stream order is
+	// preserved across the entire drain run.
+	halted := map[string]bool{}
+	quarantined := map[string]bool{}
+	if !d.AutoResumeAfterDLQ && d.MaxAttempts > 0 {
+		qs, qerr := d.Store.QuarantinedStreams(ctx, d.Tenant, d.MaxAttempts)
+		if qerr != nil {
+			return published, cleaned, fmt.Errorf("outbox: read quarantined: %w", qerr)
+		}
+		for _, s := range qs {
+			k := quarantineKey(s.TenantID, s.StreamID)
+			quarantined[k] = true
+			halted[k] = true
+		}
+	}
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return published, cleaned, nil
 		}
-		n, err := d.runBatch(ctx)
+		n, anyProcessed, err := d.runBatch(ctx, halted, quarantined)
 		if err != nil {
 			return published, cleaned, err
 		}
-		if n == 0 {
+		published += n
+		if !anyProcessed {
 			break
 		}
-		published += n
 	}
 
-	// Cleanup pass.
 	if d.CleanupRetention > 0 {
 		cutoff := time.Now().UTC().Add(-d.cleanupRetention())
 		if c, err := d.Store.CleanupPublishedOutbox(ctx, d.Tenant, cutoff); err != nil {
@@ -135,23 +162,10 @@ func (d *Drain) Run(ctx context.Context) (published int, cleaned int, err error)
 			cleaned = c
 		}
 	}
-
 	return published, cleaned, nil
 }
 
-// RunOnce processes one batch of pending rows. Returns the count
-// successfully published. A zero return means the pending set is
-// empty OR every row in the batch failed.
-//
-// Useful for callers that want fine-grained control over the drain
-// cadence (e.g., wrap with custom backoff between batches, integrate
-// with rate-limited downstream publishers). Run is the standard
-// scheduled-drain entrypoint that calls RunOnce in a loop until
-// drained.
-//
-// If LockKey is set, RunOnce acquires/releases the lock the same way
-// Run does. A drainer that wants the lock to span multiple RunOnce
-// calls should acquire it manually via the store's DrainLocker.
+// RunOnce processes one batch of pending rows.
 func (d *Drain) RunOnce(ctx context.Context) (int, error) {
 	if err := d.validate(); err != nil {
 		return 0, err
@@ -166,59 +180,141 @@ func (d *Drain) RunOnce(ctx context.Context) (int, error) {
 	if locked {
 		defer func() { _ = locker.ReleaseDrainLock(ctx, d.LockKey) }()
 	}
-	return d.runBatch(ctx)
+	halted := map[string]bool{}
+	quarantined := map[string]bool{}
+	if !d.AutoResumeAfterDLQ && d.MaxAttempts > 0 {
+		qs, qerr := d.Store.QuarantinedStreams(ctx, d.Tenant, d.MaxAttempts)
+		if qerr != nil {
+			return 0, fmt.Errorf("outbox: read quarantined: %w", qerr)
+		}
+		for _, s := range qs {
+			k := quarantineKey(s.TenantID, s.StreamID)
+			quarantined[k] = true
+			halted[k] = true
+		}
+	}
+	n, _, err := d.runBatch(ctx, halted, quarantined)
+	return n, err
 }
 
-// runBatch is the unlocked single-batch primitive used by both Run
-// and RunOnce. Callers are responsible for any locking.
-func (d *Drain) runBatch(ctx context.Context) (int, error) {
-	rows, err := d.Store.PendingOutbox(ctx, d.Tenant, d.batchSize())
+// runBatch reads one page of pending rows and processes each in order.
+// halted carries Run-scoped per-stream halt state (preserves ordering
+// across batches). quarantined carries the DLQ'd-streams set (only
+// populated when AutoResumeAfterDLQ=false). Both maps are mutated as
+// failures occur. anyProcessed is true if any row was published or
+// marked-failed — the caller uses it to decide whether more progress
+// is possible.
+func (d *Drain) runBatch(ctx context.Context, halted, quarantined map[string]bool) (int, bool, error) {
+	rows, err := d.Store.PendingOutbox(ctx, d.Tenant, d.batchSize(), d.MaxAttempts)
 	if err != nil {
-		return 0, fmt.Errorf("outbox: read pending: %w", err)
+		return 0, false, fmt.Errorf("outbox: read pending: %w", err)
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return 0, false, nil
 	}
 
-	var published int
+	var (
+		published    int
+		anyProcessed bool
+	)
 	for _, row := range rows {
-		// Client-side shard filter — keeps the framework agnostic to
-		// store-side sharding support. Postgres adapters could push
-		// this down to the WHERE clause in a future commit; for now
-		// the simple filter works on any adapter.
+		key := quarantineKey(row.Envelope.TenantID, row.Envelope.StreamID.Canonical())
 		if d.TotalShards > 0 {
-			if int(row.Envelope.GlobalPosition%uint64(d.TotalShards)) != d.Shard {
+			if int(streamShard(key, d.TotalShards)) != d.Shard {
 				continue
 			}
 		}
+		if quarantined[key] || halted[key] {
+			continue
+		}
 
 		if err := d.Publisher.Publish(ctx, row.Envelope); err != nil {
-			// Mark as failed; the next drain run will retry.
+			nextAttempts := row.Attempts + 1
+			nextAt := d.computeNextAttemptAt(nextAttempts)
 			if markErr := d.Store.MarkOutboxFailed(ctx, row.Envelope.TenantID,
-				row.Envelope.GlobalPosition, err.Error()); markErr != nil {
-				return published, fmt.Errorf("outbox: mark failed: %w", markErr)
+				row.Envelope.GlobalPosition, err.Error(), nextAt); markErr != nil {
+				return published, anyProcessed, fmt.Errorf("outbox: mark failed: %w", markErr)
+			}
+			anyProcessed = true
+
+			crossedDLQ := d.MaxAttempts > 0 && nextAttempts >= d.MaxAttempts
+			if crossedDLQ {
+				if d.OnDLQ != nil {
+					row.Attempts = nextAttempts
+					d.OnDLQ(row)
+				}
+				if !d.AutoResumeAfterDLQ {
+					halted[key] = true
+					quarantined[key] = true
+				}
+				// AutoResumeAfterDLQ=true: don't halt. The DLQ'd row
+				// is excluded from future PendingOutbox queries
+				// (attempts >= MaxAttempts), so subsequent rows of
+				// this stream proceed in the same run.
+			} else {
+				// Transient failure: halt this stream for the rest
+				// of this Run. With backoff>0 the row's next_attempt_at
+				// is also in the future, so future Runs honor the delay.
+				halted[key] = true
 			}
 			continue
 		}
 		if err := d.Store.MarkOutboxPublished(ctx, row.Envelope.TenantID,
 			row.Envelope.GlobalPosition); err != nil {
-			return published, fmt.Errorf("outbox: mark published: %w", err)
+			return published, anyProcessed, fmt.Errorf("outbox: mark published: %w", err)
 		}
 		published++
+		anyProcessed = true
 	}
-	return published, nil
+	return published, anyProcessed, nil
 }
 
-// acquireLock returns (locker, locked, err). locker is non-nil iff
-// the Store implements DrainLocker AND LockKey is set; locked is
-// whether we successfully acquired.
+// quarantineKey is the map key for per-stream quarantine state and
+// also the input to streamShard — same key, same shard.
+func quarantineKey(tenantID, streamID string) string {
+	return tenantID + "|" + streamID
+}
+
+// streamShard returns which shard a stream belongs to. We shard by
+// stream (FNV-1a hash of the canonical key) rather than by
+// global_position so that all events of a given stream go to one
+// drain — strict per-stream ordering would otherwise be impossible
+// to preserve across shards.
+func streamShard(streamKey string, totalShards int) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(streamKey))
+	return h.Sum32() % uint32(totalShards)
+}
+
+// computeNextAttemptAt returns the next-retry-eligible time for a
+// row that just failed. attemptsAfter is the value of attempts AFTER
+// this failure is recorded.
+func (d *Drain) computeNextAttemptAt(attemptsAfter int32) time.Time {
+	if d.BackoffBase <= 0 {
+		return time.Time{} // zero time = eligible immediately
+	}
+	// Exponential: base * 2^(attempts-1)
+	delay := d.BackoffBase
+	for i := int32(1); i < attemptsAfter; i++ {
+		next := delay * 2
+		if d.BackoffMax > 0 && next > d.BackoffMax {
+			delay = d.BackoffMax
+			break
+		}
+		delay = next
+	}
+	if d.BackoffMax > 0 && delay > d.BackoffMax {
+		delay = d.BackoffMax
+	}
+	return time.Now().UTC().Add(delay)
+}
+
 func (d *Drain) acquireLock(ctx context.Context) (es.DrainLocker, bool, error) {
 	if d.LockKey == "" {
 		return nil, false, nil
 	}
 	locker, ok := d.Store.(es.DrainLocker)
 	if !ok {
-		// Store doesn't support locking — SQLite is naturally serial.
 		return nil, false, nil
 	}
 	acquired, err := locker.TryAcquireDrainLock(ctx, d.LockKey)

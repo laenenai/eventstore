@@ -9,10 +9,14 @@ import (
 )
 
 type Querier interface {
+	AbandonDLQ(ctx context.Context, arg AbandonDLQParams) error
 	// Uniqueness primitives (ADR 0010). Identical semantics to Postgres;
 	// SQLite UNIQUE PK gives the same fail-fast guarantee.
 	ClaimUnique(ctx context.Context, arg ClaimUniqueParams) error
 	CleanupPublished(ctx context.Context, arg CleanupPublishedParams) error
+	CountDLQ(ctx context.Context, arg CountDLQParams) (int64, error)
+	CountFailing(ctx context.Context, arg CountFailingParams) (int64, error)
+	CountPending(ctx context.Context, tenantID string) (int64, error)
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (interface{}, error)
 	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
@@ -38,19 +42,37 @@ type Querier interface {
 	//     as a safety net for queries that omit it.
 	InsertEvent(ctx context.Context, arg InsertEventParams) (int64, error)
 	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
+	// ===========================================================================
+	// Admin / dashboard queries
+	// ===========================================================================
+	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) error
+	OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (interface{}, error)
 	// Outbox queries (ADR 0014).
 	PendingOutboxRows(ctx context.Context, arg PendingOutboxRowsParams) ([]Outbox, error)
 	PendingOutboxRowsAllTenants(ctx context.Context, limit int64) ([]Outbox, error)
-	PendingOutboxWithEnvelope(ctx context.Context, limit int64) ([]PendingOutboxWithEnvelopeRow, error)
+	// Drain hot path. Filters by retry-readiness, max-attempts (DLQ
+	// threshold), and the per-stream "head" rule. The head-versions CTE
+	// computes the lowest unpublished, not-yet-DLQ'd version per stream;
+	// the outer SELECT then only emits rows that ARE the head. This
+	// preserves per-stream order across leader handoffs even when backoff
+	// puts the head in cooldown. DLQ'd rows (attempts >= max_attempts)
+	// don't appear in the head-versions CTE, so AutoResumeAfterDLQ=true
+	// can step past them. AutoResumeAfterDLQ=false uses QuarantinedStreams
+	// in the drain runtime for the "DLQ also blocks" semantic.
+	PendingOutboxWithEnvelope(ctx context.Context, arg PendingOutboxWithEnvelopeParams) ([]PendingOutboxWithEnvelopeRow, error)
+	QuarantinedStreams(ctx context.Context, arg QuarantinedStreamsParams) ([]QuarantinedStreamsRow, error)
+	QuarantinedStreamsAllTenants(ctx context.Context, attempts int64) ([]QuarantinedStreamsAllTenantsRow, error)
 	ReadAllFromPosition(ctx context.Context, arg ReadAllFromPositionParams) ([]Event, error)
 	ReadAllFromPositionTenant(ctx context.Context, arg ReadAllFromPositionTenantParams) ([]Event, error)
 	// Read-path queries.
 	ReadStream(ctx context.Context, arg ReadStreamParams) ([]Event, error)
 	ReadStreamFromVersion(ctx context.Context, arg ReadStreamFromVersionParams) ([]Event, error)
 	ReleaseUnique(ctx context.Context, arg ReleaseUniqueParams) error
+	ReplayAllDLQ(ctx context.Context, arg ReplayAllDLQParams) (int64, error)
+	ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error
 	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
 	UpsertSubjectKey(ctx context.Context, arg UpsertSubjectKeyParams) error
 }

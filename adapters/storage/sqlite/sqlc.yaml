@@ -4,6 +4,7 @@ sql:
   - engine: sqlite
     schema:
       - migrations/00001_initial_schema.sql
+      - migrations/00002_outbox_next_attempt_at.sql
     queries: queries/
     gen:
       go:

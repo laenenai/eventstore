@@ -36,6 +36,7 @@ type Outbox struct {
 	PublishedAt    *string
 	Attempts       int64
 	LastError      *string
+	NextAttemptAt  *string
 }
 
 type Snapshot struct {

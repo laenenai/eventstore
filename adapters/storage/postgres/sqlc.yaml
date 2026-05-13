@@ -2,11 +2,12 @@ version: "2"
 
 sql:
   - engine: postgresql
-    # sqlc reads ONLY the parent-table migration. Partition children
-    # (00002) are skipped to avoid redundant per-partition type structs.
-    # Goose runs both migrations.
+    # sqlc reads the parent-table migration + subsequent ALTERs.
+    # Partition children (00002) are skipped to avoid redundant
+    # per-partition type structs. Goose runs everything.
     schema:
       - migrations/00001_initial_schema.sql
+      - migrations/00003_outbox_next_attempt_at.sql
     queries: queries/
     gen:
       go:

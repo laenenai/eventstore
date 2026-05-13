@@ -11,6 +11,25 @@ import (
 	"github.com/google/uuid"
 )
 
+const abandonDLQ = `-- name: AbandonDLQ :exec
+UPDATE outbox
+SET published_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    last_error   = COALESCE(last_error, '') || ' [abandoned]'
+WHERE tenant_id       = ?
+  AND global_position = ?
+  AND published_at   IS NULL
+`
+
+type AbandonDLQParams struct {
+	TenantID       string
+	GlobalPosition int64
+}
+
+func (q *Queries) AbandonDLQ(ctx context.Context, arg AbandonDLQParams) error {
+	_, err := q.db.ExecContext(ctx, abandonDLQ, arg.TenantID, arg.GlobalPosition)
+	return err
+}
+
 const cleanupPublished = `-- name: CleanupPublished :exec
 DELETE FROM outbox
 WHERE tenant_id = ?
@@ -28,22 +47,177 @@ func (q *Queries) CleanupPublished(ctx context.Context, arg CleanupPublishedPara
 	return err
 }
 
+const countDLQ = `-- name: CountDLQ :one
+SELECT COUNT(*) FROM outbox
+WHERE tenant_id    = ?
+  AND published_at IS NULL
+  AND attempts    >= ?
+`
+
+type CountDLQParams struct {
+	TenantID string
+	Attempts int64
+}
+
+func (q *Queries) CountDLQ(ctx context.Context, arg CountDLQParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countDLQ, arg.TenantID, arg.Attempts)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countFailing = `-- name: CountFailing :one
+SELECT COUNT(*) FROM outbox
+WHERE tenant_id    = ?
+  AND published_at IS NULL
+  AND attempts     > 0
+  AND attempts     < ?
+`
+
+type CountFailingParams struct {
+	TenantID string
+	Attempts int64
+}
+
+func (q *Queries) CountFailing(ctx context.Context, arg CountFailingParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countFailing, arg.TenantID, arg.Attempts)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPending = `-- name: CountPending :one
+SELECT COUNT(*) FROM outbox
+WHERE tenant_id    = ?
+  AND published_at IS NULL
+`
+
+func (q *Queries) CountPending(ctx context.Context, tenantID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPending, tenantID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const listDLQ = `-- name: ListDLQ :many
+
+SELECT
+    o.tenant_id,
+    o.global_position,
+    o.event_id,
+    o.enqueued_at,
+    o.attempts,
+    o.last_error,
+    o.next_attempt_at,
+    e.stream_id,
+    e.type_url,
+    e.correlation_id,
+    e.causation_id,
+    e.command_id,
+    e.actor_principal
+FROM outbox o
+JOIN events e
+  ON e.tenant_id = o.tenant_id
+ AND e.event_id  = o.event_id
+WHERE o.tenant_id       = ?
+  AND o.published_at   IS NULL
+  AND o.attempts       >= ?
+  AND o.global_position > ?
+ORDER BY o.global_position
+LIMIT ?
+`
+
+type ListDLQParams struct {
+	TenantID       string
+	Attempts       int64
+	GlobalPosition int64
+	Limit          int64
+}
+
+type ListDLQRow struct {
+	TenantID       string
+	GlobalPosition int64
+	EventID        uuid.UUID
+	EnqueuedAt     string
+	Attempts       int64
+	LastError      *string
+	NextAttemptAt  *string
+	StreamID       string
+	TypeUrl        string
+	CorrelationID  uuid.UUID
+	CausationID    uuid.UUID
+	CommandID      uuid.UUID
+	ActorPrincipal string
+}
+
+// ===========================================================================
+// Admin / dashboard queries
+// ===========================================================================
+func (q *Queries) ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDLQ,
+		arg.TenantID,
+		arg.Attempts,
+		arg.GlobalPosition,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDLQRow
+	for rows.Next() {
+		var i ListDLQRow
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.GlobalPosition,
+			&i.EventID,
+			&i.EnqueuedAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.NextAttemptAt,
+			&i.StreamID,
+			&i.TypeUrl,
+			&i.CorrelationID,
+			&i.CausationID,
+			&i.CommandID,
+			&i.ActorPrincipal,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markOutboxFailed = `-- name: MarkOutboxFailed :exec
 UPDATE outbox
-SET attempts   = attempts + 1,
-    last_error = ?
-WHERE tenant_id = ?
+SET attempts        = attempts + 1,
+    last_error      = ?,
+    next_attempt_at = ?
+WHERE tenant_id      = ?
   AND global_position = ?
 `
 
 type MarkOutboxFailedParams struct {
 	LastError      *string
+	NextAttemptAt  *string
 	TenantID       string
 	GlobalPosition int64
 }
 
 func (q *Queries) MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error {
-	_, err := q.db.ExecContext(ctx, markOutboxFailed, arg.LastError, arg.TenantID, arg.GlobalPosition)
+	_, err := q.db.ExecContext(ctx, markOutboxFailed,
+		arg.LastError,
+		arg.NextAttemptAt,
+		arg.TenantID,
+		arg.GlobalPosition,
+	)
 	return err
 }
 
@@ -64,9 +238,22 @@ func (q *Queries) MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublish
 	return err
 }
 
+const oldestPendingEnqueuedAt = `-- name: OldestPendingEnqueuedAt :one
+SELECT MIN(enqueued_at) FROM outbox
+WHERE tenant_id    = ?
+  AND published_at IS NULL
+`
+
+func (q *Queries) OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (interface{}, error) {
+	row := q.db.QueryRowContext(ctx, oldestPendingEnqueuedAt, tenantID)
+	var min interface{}
+	err := row.Scan(&min)
+	return min, err
+}
+
 const pendingOutboxRows = `-- name: PendingOutboxRows :many
 
-SELECT tenant_id, global_position, event_id, enqueued_at, published_at, attempts, last_error
+SELECT tenant_id, global_position, event_id, enqueued_at, published_at, attempts, last_error, next_attempt_at
 FROM outbox
 WHERE tenant_id = ?
   AND published_at IS NULL
@@ -97,6 +284,7 @@ func (q *Queries) PendingOutboxRows(ctx context.Context, arg PendingOutboxRowsPa
 			&i.PublishedAt,
 			&i.Attempts,
 			&i.LastError,
+			&i.NextAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -112,7 +300,7 @@ func (q *Queries) PendingOutboxRows(ctx context.Context, arg PendingOutboxRowsPa
 }
 
 const pendingOutboxRowsAllTenants = `-- name: PendingOutboxRowsAllTenants :many
-SELECT tenant_id, global_position, event_id, enqueued_at, published_at, attempts, last_error
+SELECT tenant_id, global_position, event_id, enqueued_at, published_at, attempts, last_error, next_attempt_at
 FROM outbox
 WHERE published_at IS NULL
 ORDER BY global_position
@@ -136,6 +324,7 @@ func (q *Queries) PendingOutboxRowsAllTenants(ctx context.Context, limit int64) 
 			&i.PublishedAt,
 			&i.Attempts,
 			&i.LastError,
+			&i.NextAttemptAt,
 		); err != nil {
 			return nil, err
 		}
@@ -151,6 +340,16 @@ func (q *Queries) PendingOutboxRowsAllTenants(ctx context.Context, limit int64) 
 }
 
 const pendingOutboxWithEnvelope = `-- name: PendingOutboxWithEnvelope :many
+WITH head_versions AS (
+    SELECT e2.tenant_id, e2.stream_id, MIN(e2.version) AS head_version
+    FROM outbox o2
+    JOIN events e2
+      ON e2.tenant_id = o2.tenant_id
+     AND e2.event_id  = o2.event_id
+    WHERE o2.published_at IS NULL
+      AND o2.attempts < ?2
+    GROUP BY e2.tenant_id, e2.stream_id
+)
 SELECT
     o.tenant_id,
     o.global_position,
@@ -173,10 +372,22 @@ FROM outbox o
 JOIN events e
   ON e.tenant_id = o.tenant_id
  AND e.event_id  = o.event_id
+JOIN head_versions hv
+  ON hv.tenant_id   = e.tenant_id
+ AND hv.stream_id   = e.stream_id
+ AND hv.head_version = e.version
 WHERE o.published_at IS NULL
+  AND (o.next_attempt_at IS NULL OR o.next_attempt_at <= ?1)
+  AND o.attempts < ?2
 ORDER BY o.global_position
-LIMIT ?
+LIMIT ?3
 `
+
+type PendingOutboxWithEnvelopeParams struct {
+	NextAttemptAt *string
+	Attempts      int64
+	Limit         int64
+}
 
 type PendingOutboxWithEnvelopeRow struct {
 	TenantID          string
@@ -198,8 +409,17 @@ type PendingOutboxWithEnvelopeRow struct {
 	EncryptionKeyRefs *string
 }
 
-func (q *Queries) PendingOutboxWithEnvelope(ctx context.Context, limit int64) ([]PendingOutboxWithEnvelopeRow, error) {
-	rows, err := q.db.QueryContext(ctx, pendingOutboxWithEnvelope, limit)
+// Drain hot path. Filters by retry-readiness, max-attempts (DLQ
+// threshold), and the per-stream "head" rule. The head-versions CTE
+// computes the lowest unpublished, not-yet-DLQ'd version per stream;
+// the outer SELECT then only emits rows that ARE the head. This
+// preserves per-stream order across leader handoffs even when backoff
+// puts the head in cooldown. DLQ'd rows (attempts >= max_attempts)
+// don't appear in the head-versions CTE, so AutoResumeAfterDLQ=true
+// can step past them. AutoResumeAfterDLQ=false uses QuarantinedStreams
+// in the drain runtime for the "DLQ also blocks" semantic.
+func (q *Queries) PendingOutboxWithEnvelope(ctx context.Context, arg PendingOutboxWithEnvelopeParams) ([]PendingOutboxWithEnvelopeRow, error) {
+	rows, err := q.db.QueryContext(ctx, pendingOutboxWithEnvelope, arg.NextAttemptAt, arg.Attempts, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -237,4 +457,128 @@ func (q *Queries) PendingOutboxWithEnvelope(ctx context.Context, limit int64) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const quarantinedStreams = `-- name: QuarantinedStreams :many
+SELECT DISTINCT o.tenant_id, e.stream_id
+FROM outbox o
+JOIN events e
+  ON e.tenant_id = o.tenant_id
+ AND e.event_id  = o.event_id
+WHERE o.published_at IS NULL
+  AND o.attempts >= ?
+  AND o.tenant_id = ?
+`
+
+type QuarantinedStreamsParams struct {
+	Attempts int64
+	TenantID string
+}
+
+type QuarantinedStreamsRow struct {
+	TenantID string
+	StreamID string
+}
+
+func (q *Queries) QuarantinedStreams(ctx context.Context, arg QuarantinedStreamsParams) ([]QuarantinedStreamsRow, error) {
+	rows, err := q.db.QueryContext(ctx, quarantinedStreams, arg.Attempts, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []QuarantinedStreamsRow
+	for rows.Next() {
+		var i QuarantinedStreamsRow
+		if err := rows.Scan(&i.TenantID, &i.StreamID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const quarantinedStreamsAllTenants = `-- name: QuarantinedStreamsAllTenants :many
+SELECT DISTINCT o.tenant_id, e.stream_id
+FROM outbox o
+JOIN events e
+  ON e.tenant_id = o.tenant_id
+ AND e.event_id  = o.event_id
+WHERE o.published_at IS NULL
+  AND o.attempts >= ?
+`
+
+type QuarantinedStreamsAllTenantsRow struct {
+	TenantID string
+	StreamID string
+}
+
+func (q *Queries) QuarantinedStreamsAllTenants(ctx context.Context, attempts int64) ([]QuarantinedStreamsAllTenantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, quarantinedStreamsAllTenants, attempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []QuarantinedStreamsAllTenantsRow
+	for rows.Next() {
+		var i QuarantinedStreamsAllTenantsRow
+		if err := rows.Scan(&i.TenantID, &i.StreamID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const replayAllDLQ = `-- name: ReplayAllDLQ :execrows
+UPDATE outbox
+SET attempts        = 0,
+    next_attempt_at = NULL,
+    last_error      = NULL
+WHERE tenant_id    = ?
+  AND published_at IS NULL
+  AND attempts    >= ?
+`
+
+type ReplayAllDLQParams struct {
+	TenantID string
+	Attempts int64
+}
+
+func (q *Queries) ReplayAllDLQ(ctx context.Context, arg ReplayAllDLQParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replayAllDLQ, arg.TenantID, arg.Attempts)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const replayDLQ = `-- name: ReplayDLQ :exec
+UPDATE outbox
+SET attempts        = 0,
+    next_attempt_at = NULL,
+    last_error      = NULL
+WHERE tenant_id       = ?
+  AND global_position = ?
+`
+
+type ReplayDLQParams struct {
+	TenantID       string
+	GlobalPosition int64
+}
+
+func (q *Queries) ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error {
+	_, err := q.db.ExecContext(ctx, replayDLQ, arg.TenantID, arg.GlobalPosition)
+	return err
 }

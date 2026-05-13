@@ -6,9 +6,15 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 type Querier interface {
+	// Mark a DLQ'd row as published (set published_at = now) without
+	// actually publishing. Use when an event is genuinely garbage. The
+	// event itself stays in the events table (ADR 0005); only the
+	// outbox row is closed.
+	AbandonDLQ(ctx context.Context, arg AbandonDLQParams) error
 	// Append-path queries. Used inside a single transaction in the
 	// following sequence (see ADR 0009):
 	//
@@ -34,9 +40,17 @@ type Querier interface {
 	// Cross-tenant uniqueness uses tenant_id = '__global__' explicitly; the
 	// framework refuses to set this implicitly.
 	ClaimUnique(ctx context.Context, arg ClaimUniqueParams) error
-	// Retention pruning. Deletes rows that have been published longer than
-	// @older_than. Runs in the same scheduled wake-up as the publish drain.
+	// Retention pruning. Deletes rows that have been published longer
+	// than @older_than. Runs in the same scheduled wake-up as the
+	// publish drain.
 	CleanupPublished(ctx context.Context, arg CleanupPublishedParams) error
+	// Count of rows in DLQ state. Gauge metric.
+	CountDLQ(ctx context.Context, arg CountDLQParams) (int64, error)
+	// Rows that have failed at least once but not yet hit DLQ.
+	// Worth watching but not alarming.
+	CountFailing(ctx context.Context, arg CountFailingParams) (int64, error)
+	// Total pending (unpublished) rows. Gauge metric.
+	CountPending(ctx context.Context, tenantID string) (int64, error)
 	// Returns the current version of a stream, or 0 if the stream is empty.
 	// Used for optimistic-concurrency hints; not for primary correctness
 	// (that comes from the PK conflict at append time).
@@ -67,13 +81,25 @@ type Querier interface {
 	// Insert the outbox row for an event. The drain process polls
 	// outbox_pending_idx and hands rows to the configured EventPublisher.
 	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
+	// ===========================================================================
+	// Admin / dashboard queries
+	// ===========================================================================
+	// Paginated listing of rows in DLQ state (attempts >= @max_attempts
+	// AND not yet published). Pass the global_position of the last row
+	// in the previous page as @after_position to fetch the next page;
+	// start with @after_position = 0.
+	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
 	// Audit query: enumerate subjects that have been crypto-shredded for a
 	// tenant. Useful for compliance reports.
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
-	// Increment attempts and record the error. The next drain run retries;
-	// exponential backoff is the publisher's concern, not the outbox's.
+	// Increment attempts, record the last error, and set the next
+	// retry-eligible time. The Drain computes next_attempt_at via its
+	// backoff function and passes it in.
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) error
+	// Returns the earliest enqueued_at among pending rows, or NULL if
+	// the pending set is empty. Compute lag = now() - this in app code.
+	OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (time.Time, error)
 	// Outbox queries (ADR 0014).
 	//
 	// The drain process wakes the database on a schedule, pulls pending
@@ -85,9 +111,24 @@ type Querier interface {
 	// Cross-tenant pending rows. Used by the shared scheduled drain that
 	// handles all tenants in one wake-up.
 	PendingOutboxRowsAllTenants(ctx context.Context, maxRows int32) ([]Outbox, error)
-	// Drain hot path: pending rows joined to their envelope+payload, ready
-	// to hand to the publisher.
-	PendingOutboxWithEnvelope(ctx context.Context, maxRows int32) ([]PendingOutboxWithEnvelopeRow, error)
+	// Drain hot path: pending rows joined to their envelope+payload,
+	// filtered by retry-readiness, max-attempts (DLQ threshold), and the
+	// per-stream "head" rule. The head rule (NOT EXISTS subquery) blocks
+	// any row whose stream has a lower-version unpublished, not-yet-DLQ'd
+	// row — preserving per-stream order even across leader handoffs when
+	// backoff puts the head in cooldown. DLQ'd rows (attempts >=
+	// @max_attempts) don't block, so the AutoResumeAfterDLQ=true path can
+	// step past them. The DLQ-quarantines-stream semantic
+	// (AutoResumeAfterDLQ=false) is layered on by the drain via
+	// QuarantinedStreams, not by this query.
+	PendingOutboxWithEnvelope(ctx context.Context, arg PendingOutboxWithEnvelopeParams) ([]PendingOutboxWithEnvelopeRow, error)
+	// Returns the distinct (tenant_id, stream_id) pairs that have at
+	// least one outbox row in DLQ state (attempts >= max_attempts AND
+	// published_at IS NULL). The drain uses this to skip ALL rows of a
+	// stream once any row enters DLQ, preserving per-stream order
+	// (no gap delivery without operator intervention).
+	QuarantinedStreams(ctx context.Context, arg QuarantinedStreamsParams) ([]QuarantinedStreamsRow, error)
+	QuarantinedStreamsAllTenants(ctx context.Context, maxAttempts int32) ([]QuarantinedStreamsAllTenantsRow, error)
 	// Cross-tenant catch-up read. Used by gap-fill in subscribers and by
 	// admin-scope projections (billing, compliance).
 	ReadAllFromPosition(ctx context.Context, arg ReadAllFromPositionParams) ([]Event, error)
@@ -105,6 +146,12 @@ type Querier interface {
 	// snapshot exists at @after_version).
 	ReadStreamFromVersion(ctx context.Context, arg ReadStreamFromVersionParams) ([]Event, error)
 	ReleaseUnique(ctx context.Context, arg ReleaseUniqueParams) error
+	// Bulk-replay every DLQ'd row for a tenant. Useful after a
+	// publisher outage recovery. Returns the number of rows reset.
+	ReplayAllDLQ(ctx context.Context, arg ReplayAllDLQParams) (int64, error)
+	// Reset a single row's attempts/backoff so the next drain run picks
+	// it up. Used by operators after fixing root cause.
+	ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error
 	// Write or replace the snapshot for a stream. state_schema_version is
 	// the decider state's shape version; mismatches at read time are
 	// silently discarded with full-replay fallback.

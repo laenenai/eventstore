@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/laenenai/eventstore/adapters/storage/postgres/internal/db"
@@ -10,8 +11,13 @@ import (
 )
 
 // PendingOutbox implements es.OutboxStore.
-func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int) ([]es.OutboxRow, error) {
-	rows, err := a.queries.PendingOutboxWithEnvelope(ctx, int32(limit))
+func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int, maxAttempts int32) ([]es.OutboxRow, error) {
+	now := time.Now().UTC()
+	rows, err := a.queries.PendingOutboxWithEnvelope(ctx, db.PendingOutboxWithEnvelopeParams{
+		Now:         &now,
+		MaxAttempts: safeMaxAttempts(maxAttempts),
+		MaxRows:     int32(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -31,6 +37,34 @@ func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int)
 	return out, nil
 }
 
+// QuarantinedStreams implements es.OutboxStore.
+func (a *Adapter) QuarantinedStreams(ctx context.Context, tenantID string, maxAttempts int32) ([]es.StreamRef, error) {
+	maxA := safeMaxAttempts(maxAttempts)
+	if tenantID == "" {
+		rows, err := a.queries.QuarantinedStreamsAllTenants(ctx, maxA)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]es.StreamRef, 0, len(rows))
+		for _, r := range rows {
+			out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
+		}
+		return out, nil
+	}
+	rows, err := a.queries.QuarantinedStreams(ctx, db.QuarantinedStreamsParams{
+		MaxAttempts: maxA,
+		TenantID:    tenantID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]es.StreamRef, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
+	}
+	return out, nil
+}
+
 // MarkOutboxPublished implements es.OutboxStore.
 func (a *Adapter) MarkOutboxPublished(ctx context.Context, tenantID string, globalPosition uint64) error {
 	return a.queries.MarkOutboxPublished(ctx, db.MarkOutboxPublishedParams{
@@ -40,13 +74,15 @@ func (a *Adapter) MarkOutboxPublished(ctx context.Context, tenantID string, glob
 }
 
 // MarkOutboxFailed implements es.OutboxStore.
-func (a *Adapter) MarkOutboxFailed(ctx context.Context, tenantID string, globalPosition uint64, errMsg string) error {
+func (a *Adapter) MarkOutboxFailed(ctx context.Context, tenantID string, globalPosition uint64, errMsg string, nextAttemptAt time.Time) error {
 	truncated := errMsg
 	if len(truncated) > 2048 {
 		truncated = truncated[:2048]
 	}
+	nextAt := nextAttemptAt.UTC()
 	return a.queries.MarkOutboxFailed(ctx, db.MarkOutboxFailedParams{
 		LastError:      &truncated,
+		NextAttemptAt:  &nextAt,
 		TenantID:       tenantID,
 		GlobalPosition: int64(globalPosition),
 	})
@@ -61,13 +97,20 @@ func (a *Adapter) CleanupPublishedOutbox(ctx context.Context, tenantID string, o
 	}); err != nil {
 		return 0, err
 	}
-	// CleanupPublished is :exec so we don't get the affected-row count.
 	return -1, nil
 }
 
+// safeMaxAttempts converts a user-supplied maxAttempts (0 = unbounded)
+// into a SQL-friendly value.
+func safeMaxAttempts(n int32) int32 {
+	if n <= 0 {
+		return math.MaxInt32
+	}
+	return n
+}
+
 // rowToEnvelopeOutbox converts a PendingOutboxWithEnvelopeRow into
-// an es.Envelope. The PendingOutboxWithEnvelope row is a JOIN result
-// distinct from db.Event, so it has its own conversion path.
+// an es.Envelope.
 func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error) {
 	sid, err := es.ParseCanonical(r.TenantID, r.StreamID)
 	if err != nil {
@@ -96,5 +139,8 @@ func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error)
 	}, nil
 }
 
-// Compile-time check.
-var _ es.OutboxStore = (*Adapter)(nil)
+// Compile-time checks.
+var (
+	_ es.OutboxStore = (*Adapter)(nil)
+	_ es.OutboxAdmin = (*Adapter)(nil)
+)

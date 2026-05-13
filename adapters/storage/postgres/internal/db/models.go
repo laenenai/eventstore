@@ -39,6 +39,7 @@ type Outbox struct {
 	PublishedAt    *time.Time
 	Attempts       int32
 	LastError      *string
+	NextAttemptAt  *time.Time
 }
 
 type Snapshot struct {
