@@ -5,6 +5,7 @@
 package db
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,7 @@ type Event struct {
 	CorrelationID     uuid.UUID
 	CausationID       uuid.UUID
 	CommandID         uuid.UUID
-	Actor             []byte
+	Actor             json.RawMessage
 	ActorPrincipal    string
 	Payload           []byte
 	PayloadJson       []byte

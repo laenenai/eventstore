@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -86,7 +87,7 @@ type InsertEventParams struct {
 	CorrelationID     uuid.UUID
 	CausationID       uuid.UUID
 	CommandID         uuid.UUID
-	Actor             []byte
+	Actor             json.RawMessage
 	ActorPrincipal    string
 	Payload           []byte
 	PayloadJson       []byte

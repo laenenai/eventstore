@@ -47,7 +47,7 @@ CREATE TABLE events (
     correlation_id      UUID         NOT NULL,
     causation_id        UUID         NOT NULL,
     command_id          UUID         NOT NULL,
-    actor               BYTEA        NOT NULL,
+    actor               JSONB        NOT NULL,
     actor_principal     TEXT         NOT NULL,
     payload             BYTEA        NOT NULL,
     payload_json        JSONB,

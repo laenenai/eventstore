@@ -2,7 +2,7 @@
 # Run `mise install` (or `mise i`) on a fresh checkout to install everything.
 
 [tools]
-go    = "1.25.6"
+go    = "1.25.10"
 buf   = "latest"
 sqlc  = "latest"
 task  = "latest"
