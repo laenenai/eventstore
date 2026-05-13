@@ -39,6 +39,13 @@ type Outbox struct {
 	NextAttemptAt  *string
 }
 
+type ProjectionCheckpoint struct {
+	Name      string
+	TenantID  string
+	Cursor    int64
+	UpdatedAt string
+}
+
 type Snapshot struct {
 	TenantID           string
 	StreamID           string

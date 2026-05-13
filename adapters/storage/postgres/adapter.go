@@ -21,6 +21,10 @@ type Adapter struct {
 	// advisory locks (es.DrainLocker contract). Populated lazily on
 	// first TryAcquireDrainLock; survives until Close.
 	drainLocks drainLockerState
+
+	// projectionLocks is the analogous state for es.ProjectionLocker.
+	// Separate namespace from drainLocks via projectionLockKey.
+	projectionLocks drainLockerState
 }
 
 // Option configures an Adapter.

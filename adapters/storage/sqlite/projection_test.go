@@ -176,7 +176,8 @@ func TestProjection_RunOnce_TenantScoped(t *testing.T) {
 }
 
 // TestProjection_RunOnce_HandlerErrorStops verifies that a handler
-// error halts the projection without advancing the checkpoint.
+// error halts the projection but the checkpoint advances to the
+// last successful event (ADR 0020 decision 3d).
 func TestProjection_RunOnce_HandlerErrorStops(t *testing.T) {
 	store, agg := newStoreAndCounter(t)
 	seedEvents(t, agg, []string{"t-err"}, 5)
@@ -195,18 +196,24 @@ func TestProjection_RunOnce_HandlerErrorStops(t *testing.T) {
 			return nil
 		},
 	}
-	_, err := rt.RunOnce(context.Background())
+	processedFirst, err := rt.RunOnce(context.Background())
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
-
-	// Checkpoint should NOT have advanced past the failure.
-	pos, _ := cp.Load(context.Background(), "test-err")
-	if pos != 0 {
-		t.Errorf("checkpoint advanced despite error: got %d want 0", pos)
+	// 2 events succeeded before the failure on the 3rd.
+	if processedFirst != 2 {
+		t.Errorf("first run successes: got %d want 2", processedFirst)
 	}
 
-	// A successful re-run should re-process from the start.
+	// Checkpoint should have advanced past the last success but not
+	// past the failing event.
+	pos, _ := cp.Load(context.Background(), "test-err", "")
+	if pos == 0 {
+		t.Errorf("checkpoint did not advance to last success")
+	}
+
+	// A successful re-run should only re-process events 3-5 (the
+	// failing event + the rest), not the already-handled 1-2.
 	seen.Store(0)
 	rt.Handler = func(ctx context.Context, env es.Envelope) error {
 		seen.Add(1)
@@ -216,8 +223,8 @@ func TestProjection_RunOnce_HandlerErrorStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-run: %v", err)
 	}
-	if processed != 5 {
-		t.Errorf("re-run processed: got %d want 5", processed)
+	if processed != 3 {
+		t.Errorf("re-run processed: got %d want 3 (events 3,4,5 — 1+2 already done)", processed)
 	}
 }
 

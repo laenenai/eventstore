@@ -57,6 +57,19 @@ type Runtime struct {
 	// scale-to-zero deployments where you'd rather use the scheduled
 	// drain path; set lower for low-latency interactive projections.
 	IdleSleep time.Duration
+
+	// LockKey enables single-runner safety across replicas (ADR 0020
+	// decision 3f). When set and the Store implements
+	// es.ProjectionLocker, RunOnce attempts a non-blocking acquisition
+	// at start and exits cleanly with (0, nil) if another instance
+	// holds the lock. SQLite does not implement the interface — file-
+	// level write locking already serializes; the same code works on
+	// both adapters.
+	//
+	// Recommended key: a stable string per projection purpose, e.g.,
+	// "user-by-email" or "user-by-email:" + tenantID for per-tenant
+	// shards.
+	LockKey string
 }
 
 const (
@@ -98,7 +111,18 @@ func (r *Runtime) RunOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	cursor, err := r.Checkpoint.Load(ctx, r.Name)
+	locker, acquired, err := r.acquireLock(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if r.LockKey != "" && locker != nil && !acquired {
+		return 0, nil
+	}
+	if acquired {
+		defer func() { _ = locker.ReleaseProjectionLock(ctx, r.LockKey) }()
+	}
+
+	cursor, err := r.Checkpoint.Load(ctx, r.Name, r.Tenant)
 	if err != nil {
 		return 0, fmt.Errorf("projection %s: load checkpoint: %w", r.Name, err)
 	}
@@ -116,19 +140,51 @@ func (r *Runtime) RunOnce(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
-	var last uint64
+	// Per ADR 0020 decision 3d: fail-stop with last-success
+	// checkpoint advance. On handler error mid-batch, persist the
+	// cursor up to the last successfully-handled event, then return
+	// the error. The next RunOnce resumes at the failing event.
+	var (
+		last       uint64
+		successes  int
+		handlerErr error
+	)
 	for _, env := range events {
 		if err := r.Handler(ctx, env); err != nil {
-			return 0, fmt.Errorf("projection %s: handle event %s: %w",
+			handlerErr = fmt.Errorf("projection %s: handle event %s: %w",
 				r.Name, env.EventID, err)
+			break
 		}
 		last = env.GlobalPosition
+		successes++
 	}
 
-	if err := r.Checkpoint.Save(ctx, r.Name, last); err != nil {
-		return 0, fmt.Errorf("projection %s: save checkpoint: %w", r.Name, err)
+	if last > 0 {
+		if err := r.Checkpoint.Save(ctx, r.Name, r.Tenant, last); err != nil {
+			return successes, fmt.Errorf("projection %s: save checkpoint: %w", r.Name, err)
+		}
 	}
-	return len(events), nil
+	return successes, handlerErr
+}
+
+// acquireLock probes whether the Store implements es.ProjectionLocker
+// and, when LockKey is set, attempts a non-blocking acquisition. The
+// returned locker is non-nil only when LockKey is set and the store
+// implements the interface; callers must release exactly when
+// acquired is true.
+func (r *Runtime) acquireLock(ctx context.Context) (es.ProjectionLocker, bool, error) {
+	if r.LockKey == "" {
+		return nil, false, nil
+	}
+	locker, ok := r.Store.(es.ProjectionLocker)
+	if !ok {
+		return nil, false, nil
+	}
+	acquired, err := locker.TryAcquireProjectionLock(ctx, r.LockKey)
+	if err != nil {
+		return locker, false, fmt.Errorf("projection %s: acquire lock %q: %w", r.Name, r.LockKey, err)
+	}
+	return locker, acquired, nil
 }
 
 func (r *Runtime) validate() error {

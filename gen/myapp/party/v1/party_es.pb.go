@@ -4,8 +4,11 @@
 package partyv1
 
 import (
+	context "context"
 	fmt "fmt"
 	aggregate "github.com/laenenai/eventstore/aggregate"
+	es "github.com/laenenai/eventstore/es"
+	projection "github.com/laenenai/eventstore/projection"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -543,4 +546,118 @@ func (EventCodec) Decode(typeURL string, _ uint32, payload []byte) (Event, error
 		return x, nil
 	}
 	return nil, fmt.Errorf("EventCodec.Decode: unknown type_url %q", typeURL)
+}
+
+// Projection is the typed handler interface for the events in
+// this package. Implementations must provide a method for every
+// variant — adding a new event will break implementations at
+// compile time until they decide how to handle it (return nil
+// is fine for variants the projection deliberately ignores).
+// See ADR 0020 decisions 3a + 3b.
+type Projection interface {
+	OnRegistered(ctx context.Context, env es.Envelope, e *Registered) error
+	OnNameChangeProposed(ctx context.Context, env es.Envelope, e *NameChangeProposed) error
+	OnNameChangeApplied(ctx context.Context, env es.Envelope, e *NameChangeApplied) error
+	OnEmailChangeProposed(ctx context.Context, env es.Envelope, e *EmailChangeProposed) error
+	OnEmailChangeApplied(ctx context.Context, env es.Envelope, e *EmailChangeApplied) error
+	OnDateOfBirthChangeProposed(ctx context.Context, env es.Envelope, e *DateOfBirthChangeProposed) error
+	OnDateOfBirthChangeApplied(ctx context.Context, env es.Envelope, e *DateOfBirthChangeApplied) error
+	OnChangeRejected(ctx context.Context, env es.Envelope, e *ChangeRejected) error
+	OnChangeWithdrawn(ctx context.Context, env es.Envelope, e *ChangeWithdrawn) error
+	OnPhoneUpdated(ctx context.Context, env es.Envelope, e *PhoneUpdated) error
+	OnAddressUpdated(ctx context.Context, env es.Envelope, e *AddressUpdated) error
+	OnSuspended(ctx context.Context, env es.Envelope, e *Suspended) error
+	OnReactivated(ctx context.Context, env es.Envelope, e *Reactivated) error
+	OnClosed(ctx context.Context, env es.Envelope, e *Closed) error
+}
+
+// NewProjectionDispatcher returns a projection.Handler that decodes
+// envelopes carrying this package's events and dispatches to the
+// typed Projection interface. By default an event whose TypeURL is
+// outside this aggregate's event set causes a non-nil error; use
+// projection.IgnoreUnknown() when composing across aggregates via
+// projection.Chain.
+func NewProjectionDispatcher(p Projection, opts ...projection.DispatcherOption) projection.Handler {
+	cfg := projection.ApplyOptions(opts)
+	var codec EventCodec
+	return func(ctx context.Context, env es.Envelope) error {
+		if !isOurType(env.TypeURL) {
+			if cfg.IgnoreUnknown {
+				return nil
+			}
+			return fmt.Errorf("projection: unknown TypeURL %q for package myapp.party.v1", env.TypeURL)
+		}
+		evt, err := codec.Decode(env.TypeURL, env.SchemaVersion, env.Payload)
+		if err != nil {
+			return fmt.Errorf("projection: decode %s: %w", env.TypeURL, err)
+		}
+		switch e := evt.(type) {
+		case *Registered:
+			return p.OnRegistered(ctx, env, e)
+		case *NameChangeProposed:
+			return p.OnNameChangeProposed(ctx, env, e)
+		case *NameChangeApplied:
+			return p.OnNameChangeApplied(ctx, env, e)
+		case *EmailChangeProposed:
+			return p.OnEmailChangeProposed(ctx, env, e)
+		case *EmailChangeApplied:
+			return p.OnEmailChangeApplied(ctx, env, e)
+		case *DateOfBirthChangeProposed:
+			return p.OnDateOfBirthChangeProposed(ctx, env, e)
+		case *DateOfBirthChangeApplied:
+			return p.OnDateOfBirthChangeApplied(ctx, env, e)
+		case *ChangeRejected:
+			return p.OnChangeRejected(ctx, env, e)
+		case *ChangeWithdrawn:
+			return p.OnChangeWithdrawn(ctx, env, e)
+		case *PhoneUpdated:
+			return p.OnPhoneUpdated(ctx, env, e)
+		case *AddressUpdated:
+			return p.OnAddressUpdated(ctx, env, e)
+		case *Suspended:
+			return p.OnSuspended(ctx, env, e)
+		case *Reactivated:
+			return p.OnReactivated(ctx, env, e)
+		case *Closed:
+			return p.OnClosed(ctx, env, e)
+		}
+		return fmt.Errorf("projection: unreachable variant %T", evt)
+	}
+}
+
+// isOurType reports whether the given TypeURL is one of this
+// package's event variants. Used by the dispatcher to decide
+// between dispatch and (skip|error) for unknown events.
+func isOurType(typeURL string) bool {
+	switch typeURL {
+	case "myapp.party.v1.Registered":
+		return true
+	case "myapp.party.v1.NameChangeProposed":
+		return true
+	case "myapp.party.v1.NameChangeApplied":
+		return true
+	case "myapp.party.v1.EmailChangeProposed":
+		return true
+	case "myapp.party.v1.EmailChangeApplied":
+		return true
+	case "myapp.party.v1.DateOfBirthChangeProposed":
+		return true
+	case "myapp.party.v1.DateOfBirthChangeApplied":
+		return true
+	case "myapp.party.v1.ChangeRejected":
+		return true
+	case "myapp.party.v1.ChangeWithdrawn":
+		return true
+	case "myapp.party.v1.PhoneUpdated":
+		return true
+	case "myapp.party.v1.AddressUpdated":
+		return true
+	case "myapp.party.v1.Suspended":
+		return true
+	case "myapp.party.v1.Reactivated":
+		return true
+	case "myapp.party.v1.Closed":
+		return true
+	}
+	return false
 }

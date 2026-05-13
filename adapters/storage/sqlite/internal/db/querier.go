@@ -23,6 +23,7 @@ type Querier interface {
 	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
 	GetEventByID(ctx context.Context, arg GetEventByIDParams) (Event, error)
+	GetProjectionStatus(ctx context.Context, arg GetProjectionStatusParams) (ProjectionCheckpoint, error)
 	// Snapshot queries (ADR 0011).
 	GetSnapshot(ctx context.Context, arg GetSnapshotParams) (Snapshot, error)
 	GetState(ctx context.Context, arg GetStateParams) (GetStateRow, error)
@@ -49,9 +50,13 @@ type Querier interface {
 	// Admin / dashboard queries
 	// ===========================================================================
 	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
+	ListProjectionCheckpoints(ctx context.Context) ([]ProjectionCheckpoint, error)
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
 	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
 	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
+	// projection_checkpoint queries for SQLite (ADR 0020 Tier 3).
+	// See the Postgres sibling for the canonical doc comments.
+	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) error
 	OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (interface{}, error)
@@ -78,6 +83,9 @@ type Querier interface {
 	ReleaseUnique(ctx context.Context, arg ReleaseUniqueParams) error
 	ReplayAllDLQ(ctx context.Context, arg ReplayAllDLQParams) (int64, error)
 	ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error
+	ResetProjectionCheckpoint(ctx context.Context, arg ResetProjectionCheckpointParams) error
+	SaveProjectionCheckpoint(ctx context.Context, arg SaveProjectionCheckpointParams) error
+	SetProjectionCheckpoint(ctx context.Context, arg SetProjectionCheckpointParams) error
 	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
 	// state_cache queries for SQLite (ADR 0020 Tier 1).
 	// See the Postgres sibling for the canonical doc comments.

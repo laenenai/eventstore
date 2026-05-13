@@ -4,8 +4,11 @@
 package counterv1
 
 import (
+	context "context"
 	fmt "fmt"
 	aggregate "github.com/laenenai/eventstore/aggregate"
+	es "github.com/laenenai/eventstore/es"
+	projection "github.com/laenenai/eventstore/projection"
 	proto "google.golang.org/protobuf/proto"
 )
 
@@ -183,4 +186,63 @@ func (EventCodec) Decode(typeURL string, _ uint32, payload []byte) (Event, error
 		return x, nil
 	}
 	return nil, fmt.Errorf("EventCodec.Decode: unknown type_url %q", typeURL)
+}
+
+// Projection is the typed handler interface for the events in
+// this package. Implementations must provide a method for every
+// variant — adding a new event will break implementations at
+// compile time until they decide how to handle it (return nil
+// is fine for variants the projection deliberately ignores).
+// See ADR 0020 decisions 3a + 3b.
+type Projection interface {
+	OnInitialized(ctx context.Context, env es.Envelope, e *Initialized) error
+	OnIncremented(ctx context.Context, env es.Envelope, e *Incremented) error
+	OnDecremented(ctx context.Context, env es.Envelope, e *Decremented) error
+}
+
+// NewProjectionDispatcher returns a projection.Handler that decodes
+// envelopes carrying this package's events and dispatches to the
+// typed Projection interface. By default an event whose TypeURL is
+// outside this aggregate's event set causes a non-nil error; use
+// projection.IgnoreUnknown() when composing across aggregates via
+// projection.Chain.
+func NewProjectionDispatcher(p Projection, opts ...projection.DispatcherOption) projection.Handler {
+	cfg := projection.ApplyOptions(opts)
+	var codec EventCodec
+	return func(ctx context.Context, env es.Envelope) error {
+		if !isOurType(env.TypeURL) {
+			if cfg.IgnoreUnknown {
+				return nil
+			}
+			return fmt.Errorf("projection: unknown TypeURL %q for package test.counter.v1", env.TypeURL)
+		}
+		evt, err := codec.Decode(env.TypeURL, env.SchemaVersion, env.Payload)
+		if err != nil {
+			return fmt.Errorf("projection: decode %s: %w", env.TypeURL, err)
+		}
+		switch e := evt.(type) {
+		case *Initialized:
+			return p.OnInitialized(ctx, env, e)
+		case *Incremented:
+			return p.OnIncremented(ctx, env, e)
+		case *Decremented:
+			return p.OnDecremented(ctx, env, e)
+		}
+		return fmt.Errorf("projection: unreachable variant %T", evt)
+	}
+}
+
+// isOurType reports whether the given TypeURL is one of this
+// package's event variants. Used by the dispatcher to decide
+// between dispatch and (skip|error) for unknown events.
+func isOurType(typeURL string) bool {
+	switch typeURL {
+	case "test.counter.v1.Initialized":
+		return true
+	case "test.counter.v1.Incremented":
+		return true
+	case "test.counter.v1.Decremented":
+		return true
+	}
+	return false
 }

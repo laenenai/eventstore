@@ -24,6 +24,8 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 04 | [Time-based triggers](./04-time-based-triggers.md)              | "Cancel order after 24h with no payment" — in a scale-to-zero deployment.        |
 | 05 | [Layered authorization](./05-layered-authz.md)                  | Wrap `aggregate.Runtime` with a Policy check (Cedar / OPA / RBAC); deliberately not a framework feature. |
 | 06 | [Running the outbox drain](./06-running-the-drain.md)           | Five deployment patterns, plus failure handling: backoff, retries, DLQ semantics (quarantine vs auto-resume), `OutboxAdmin` for dashboards and operator replay/abandon. |
+| 07 | [Read models via materialized views](./07-read-models-via-materialized-views.md) | Filtered/joined/aggregated read shapes over Tier 1 `state_cache` via Postgres MVs + scheduled REFRESH; SQLite alternatives. |
+| 08 | [Rebuilding projections](./08-rebuilding-projections.md)        | Truncate-and-replay, versioned parallel rebuild for zero-downtime, and the Tier-1 `state_cache` rebuild helper. |
 
 ## Conventions used in these recipes
 

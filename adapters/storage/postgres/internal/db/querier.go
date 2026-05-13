@@ -67,6 +67,8 @@ type Querier interface {
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
 	// Single-event lookup, typically for idempotency or dedup audits.
 	GetEventByID(ctx context.Context, arg GetEventByIDParams) (Event, error)
+	// Single-projector status row (for the admin Status method).
+	GetProjectionStatus(ctx context.Context, arg GetProjectionStatusParams) (ProjectionCheckpoint, error)
 	// Snapshot queries (ADR 0011).
 	//
 	// Lazy snapshots: written on read after N events since the last
@@ -97,6 +99,8 @@ type Querier interface {
 	// in the previous page as @after_position to fetch the next page;
 	// start with @after_position = 0.
 	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
+	// Enumerate all known projectors for an ops dashboard.
+	ListProjectionCheckpoints(ctx context.Context) ([]ProjectionCheckpoint, error)
 	// Audit query: enumerate subjects that have been crypto-shredded for a
 	// tenant. Useful for compliance reports.
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
@@ -106,6 +110,9 @@ type Querier interface {
 	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
 	// Cross-tenant variant. Admin/operator-scope use only.
 	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
+	// projection_checkpoint queries (ADR 0020 Tier 3, decision 3e).
+	// Returns the cursor for a projector. NULL row → 0 (never run).
+	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
 	// Increment attempts, record the last error, and set the next
 	// retry-eligible time. The Drain computes next_attempt_at via its
 	// backoff function and passes it in.
@@ -166,6 +173,15 @@ type Querier interface {
 	// Reset a single row's attempts/backoff so the next drain run picks
 	// it up. Used by operators after fixing root cause.
 	ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error
+	// Operator action: set cursor to 0 (or remove the row, equivalent).
+	// Used as step (3) of the truncate-and-replay rebuild workflow.
+	ResetProjectionCheckpoint(ctx context.Context, arg ResetProjectionCheckpointParams) error
+	// Upsert the cursor. Called after each batch (or each successful
+	// partial-batch, per the fail-stop-with-last-success rule).
+	SaveProjectionCheckpoint(ctx context.Context, arg SaveProjectionCheckpointParams) error
+	// Operator action: set cursor to a specific position (for partial
+	// replay from a known-good point).
+	SetProjectionCheckpoint(ctx context.Context, arg SetProjectionCheckpointParams) error
 	// Write or replace the snapshot for a stream. state_schema_version is
 	// the decider state's shape version; mismatches at read time are
 	// silently discarded with full-replay fallback.

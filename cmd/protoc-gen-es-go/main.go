@@ -18,9 +18,12 @@ import (
 
 // Import paths the generated code refers to.
 var (
-	aggregatePkg = protogen.GoImportPath("github.com/laenenai/eventstore/aggregate")
-	protoPkg     = protogen.GoImportPath("google.golang.org/protobuf/proto")
-	fmtPkg       = protogen.GoImportPath("fmt")
+	aggregatePkg  = protogen.GoImportPath("github.com/laenenai/eventstore/aggregate")
+	protoPkg      = protogen.GoImportPath("google.golang.org/protobuf/proto")
+	fmtPkg        = protogen.GoImportPath("fmt")
+	contextPkg    = protogen.GoImportPath("context")
+	esPkg         = protogen.GoImportPath("github.com/laenenai/eventstore/es")
+	projectionPkg = protogen.GoImportPath("github.com/laenenai/eventstore/projection")
 )
 
 func main() {
@@ -73,6 +76,12 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File) error {
 
 	for _, st := range sumTypes {
 		emitSumType(out, st)
+		// Per ADR 0020 decision 3a: emit a Projection interface and
+		// dispatcher only for the Event sum type. The Command sum
+		// type isn't a projection target.
+		if st.interfaceName == "Event" {
+			emitProjection(out, st)
+		}
 	}
 	return nil
 }
@@ -229,6 +238,80 @@ func emitSumType(out *protogen.GeneratedFile, st *sumType) {
 	}
 	out.P("\t}")
 	out.P("\treturn nil, ", fmtErrorf, "(\"", iface, "Codec.Decode: unknown type_url %q\", typeURL)")
+	out.P("}")
+	out.P()
+}
+
+// emitProjection writes the Projection interface and dispatcher for an
+// Event sum type. See ADR 0020 decision 3a (exhaustive typed interface)
+// and 3b (default-error, IgnoreUnknown opt-in).
+func emitProjection(out *protogen.GeneratedFile, st *sumType) {
+	contextType := out.QualifiedGoIdent(contextPkg.Ident("Context"))
+	envelope := out.QualifiedGoIdent(esPkg.Ident("Envelope"))
+	handler := out.QualifiedGoIdent(projectionPkg.Ident("Handler"))
+	dispOption := out.QualifiedGoIdent(projectionPkg.Ident("DispatcherOption"))
+	applyOptions := out.QualifiedGoIdent(projectionPkg.Ident("ApplyOptions"))
+	fmtErrorf := out.QualifiedGoIdent(fmtPkg.Ident("Errorf"))
+	codec := st.interfaceName + "Codec"
+
+	out.P("// Projection is the typed handler interface for the events in")
+	out.P("// this package. Implementations must provide a method for every")
+	out.P("// variant — adding a new event will break implementations at")
+	out.P("// compile time until they decide how to handle it (return nil")
+	out.P("// is fine for variants the projection deliberately ignores).")
+	out.P("// See ADR 0020 decisions 3a + 3b.")
+	out.P("type Projection interface {")
+	for _, v := range st.variants {
+		out.P("\tOn", v.GoIdent.GoName, "(ctx ", contextType, ", env ", envelope, ", e *", v.GoIdent.GoName, ") error")
+	}
+	out.P("}")
+	out.P()
+
+	out.P("// NewProjectionDispatcher returns a projection.Handler that decodes")
+	out.P("// envelopes carrying this package's events and dispatches to the")
+	out.P("// typed Projection interface. By default an event whose TypeURL is")
+	out.P("// outside this aggregate's event set causes a non-nil error; use")
+	out.P("// projection.IgnoreUnknown() when composing across aggregates via")
+	out.P("// projection.Chain.")
+	out.P("func NewProjectionDispatcher(p Projection, opts ...", dispOption, ") ", handler, " {")
+	out.P("\tcfg := ", applyOptions, "(opts)")
+	out.P("\tvar codec ", codec)
+	out.P("\treturn func(ctx ", contextType, ", env ", envelope, ") error {")
+	out.P("\t\tif !isOurType(env.TypeURL) {")
+	out.P("\t\t\tif cfg.IgnoreUnknown {")
+	out.P("\t\t\t\treturn nil")
+	out.P("\t\t\t}")
+	out.P("\t\t\treturn ", fmtErrorf, "(\"projection: unknown TypeURL %q for package ", st.container.Desc.ParentFile().Package(), "\", env.TypeURL)")
+	out.P("\t\t}")
+	out.P("\t\tevt, err := codec.Decode(env.TypeURL, env.SchemaVersion, env.Payload)")
+	out.P("\t\tif err != nil {")
+	out.P("\t\t\treturn ", fmtErrorf, "(\"projection: decode %s: %w\", env.TypeURL, err)")
+	out.P("\t\t}")
+	out.P("\t\tswitch e := evt.(type) {")
+	for _, v := range st.variants {
+		out.P("\t\tcase *", v.GoIdent.GoName, ":")
+		out.P("\t\t\treturn p.On", v.GoIdent.GoName, "(ctx, env, e)")
+	}
+	out.P("\t\t}")
+	out.P("\t\treturn ", fmtErrorf, "(\"projection: unreachable variant %T\", evt)")
+	out.P("\t}")
+	out.P("}")
+	out.P()
+
+	// isOurType — package-level helper used by the dispatcher to
+	// recognize TypeURLs belonging to this aggregate. Emitted as a
+	// switch over the known variants.
+	out.P("// isOurType reports whether the given TypeURL is one of this")
+	out.P("// package's event variants. Used by the dispatcher to decide")
+	out.P("// between dispatch and (skip|error) for unknown events.")
+	out.P("func isOurType(typeURL string) bool {")
+	out.P("\tswitch typeURL {")
+	for _, v := range st.variants {
+		out.P("\tcase \"", v.Desc.FullName(), "\":")
+		out.P("\t\treturn true")
+	}
+	out.P("\t}")
+	out.P("\treturn false")
 	out.P("}")
 	out.P()
 }
