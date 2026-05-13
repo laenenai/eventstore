@@ -245,6 +245,55 @@ func TestAggregate_NoOpCommand(t *testing.T) {
 	}
 }
 
+// TestAggregate_IsTerminalRejectsCommands verifies that once a stream
+// is in a terminal state per Decider.IsTerminal, Handle returns
+// ErrTerminal without invoking Decide.
+func TestAggregate_IsTerminalRejectsCommands(t *testing.T) {
+	decideCalls := 0
+	terminalDecider := es.Decider[counterState, counterv1.Command, counterv1.Event]{
+		Initial: counterDecider.Initial,
+		Decide: func(s counterState, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
+			decideCalls++
+			return counterDecider.Decide(s, c)
+		},
+		Evolve: counterDecider.Evolve,
+		// Terminal as soon as the counter is initialized — keeps the
+		// test small.
+		IsTerminal: func(s counterState) bool { return s.Initialized },
+	}
+	db, _ := sql.Open("sqlite", ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	a := sqliteadapter.New(db)
+	if err := a.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	rt := &aggregate.Runtime[counterState, counterv1.Command, counterv1.Event]{
+		Store: a, Decider: terminalDecider, Codec: counterv1.EventCodec{},
+	}
+
+	sid := estest.MustStream(t, "t-term", "counter", "1")
+	ctx := context.Background()
+
+	// First Init succeeds (state was not terminal yet — IsTerminal
+	// checks the LOADED state, not the post-decision state).
+	if _, err := rt.Handle(ctx, sid, &counterv1.Init{Min: 0, Max: 10, Initial: 0}); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if decideCalls != 1 {
+		t.Fatalf("expected Decide invoked once for the Init, got %d", decideCalls)
+	}
+
+	// Second command must be rejected with ErrTerminal — and Decide
+	// must NOT be invoked.
+	_, err := rt.Handle(ctx, sid, &counterv1.Increment{By: 1})
+	if !errors.Is(err, es.ErrTerminal) {
+		t.Errorf("expected ErrTerminal, got %v", err)
+	}
+	if decideCalls != 1 {
+		t.Errorf("Decide invoked again on terminal stream: %d calls", decideCalls)
+	}
+}
+
 func TestAggregate_HandleReloads(t *testing.T) {
 	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-reload", "counter", "1")

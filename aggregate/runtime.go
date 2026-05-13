@@ -82,6 +82,8 @@ func (r *Runtime[S, C, E]) Load(ctx context.Context, sid es.StreamID) (S, uint64
 // Handle is Load + Decide + Append in one transactionally-coherent
 // call. Returns the AppendResult from the store, or:
 //   - any error from Load (read path),
+//   - es.ErrTerminal if Decider.IsTerminal reports the stream is
+//     closed (no further commands accepted),
 //   - any error from Decider.Decide (business rule failure),
 //   - es.ErrConflict on an optimistic-concurrency miss (someone else
 //     wrote to the stream between Load and Append — caller may retry),
@@ -103,6 +105,10 @@ func (r *Runtime[S, C, E]) Handle(
 	state, version, err := r.Load(ctx, sid)
 	if err != nil {
 		return es.AppendResult{}, err
+	}
+
+	if r.Decider.IsTerminal != nil && r.Decider.IsTerminal(state) {
+		return es.AppendResult{}, es.ErrTerminal
 	}
 
 	events, constraints, err := r.Decider.Decide(state, cmd)

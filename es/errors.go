@@ -45,4 +45,10 @@ var (
 	// ErrKMSUnavailable reports that the KMS adapter could not resolve
 	// a KEK and no cached DEK is available.
 	ErrKMSUnavailable = errors.New("eventstore: KMS unavailable")
+
+	// ErrTerminal reports that a command was issued against a stream
+	// whose Decider.IsTerminal returned true. The stream is closed —
+	// no further events may be appended. Callers can match via
+	// errors.Is(err, es.ErrTerminal).
+	ErrTerminal = errors.New("eventstore: stream is terminal")
 )
