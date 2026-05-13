@@ -30,6 +30,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0017 | [Module and Package Layout](./0017-module-and-package-layout.md)                        | Accepted   |
 | 0018 | [Schema Migrations and Query Generation](./0018-migrations-and-queries.md)              | Accepted   |
 | 0019 | [SQLite Driver Strategy](./0019-sqlite-driver-strategy.md)                              | Accepted (amends 0017, 0018) |
+| 0020 | [Projections and Read Models](./0020-projections-and-read-models.md)                    | Accepted   |
 
 ## Conventions
 
