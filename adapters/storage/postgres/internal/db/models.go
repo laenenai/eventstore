@@ -51,6 +51,16 @@ type Snapshot struct {
 	CreatedAt          time.Time
 }
 
+type StateCache struct {
+	TenantID  string
+	StreamID  string
+	TypeUrl   string
+	State     json.RawMessage
+	Version   int64
+	Terminal  bool
+	UpdatedAt time.Time
+}
+
 type SubjectKey struct {
 	TenantID   string
 	Subject    string

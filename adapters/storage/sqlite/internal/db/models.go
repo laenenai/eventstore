@@ -48,6 +48,16 @@ type Snapshot struct {
 	CreatedAt          string
 }
 
+type StateCache struct {
+	TenantID  string
+	StreamID  string
+	TypeUrl   string
+	State     string
+	Version   int64
+	Terminal  int64
+	UpdatedAt string
+}
+
 type SubjectKey struct {
 	TenantID   string
 	Subject    string

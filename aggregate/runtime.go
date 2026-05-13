@@ -52,6 +52,13 @@ type Runtime[S, C, E any] struct {
 	Store   es.Store
 	Decider es.Decider[S, C, E]
 	Codec   Codec[E]
+
+	// StateCodec is optional. When set, every successful Handle call
+	// folds the produced events into a post-decide state via Evolve,
+	// marshals via StateCodec, and writes the result to the Tier-1
+	// state_cache in the same transaction as the events. Leave nil
+	// to disable the cache for this aggregate. See ADR 0020.
+	StateCodec StateCodec[S]
 }
 
 // Load reads the stream, folds it via Decider.Evolve, and returns the
@@ -138,12 +145,34 @@ func (r *Runtime[S, C, E]) Handle(
 		}
 	}
 
-	return r.Store.Append(ctx, es.AppendParams{
+	params := es.AppendParams{
 		StreamID:        sid,
 		ExpectedVersion: version,
 		Events:          toAppend,
 		Constraints:     constraints,
-	})
+	}
+
+	// Tier-1 state cache (ADR 0020). When the caller wired a
+	// StateCodec, fold the new events through Evolve to produce the
+	// post-decide state, marshal it, and ship the bytes alongside
+	// the events so the adapter writes the cache row in-tx.
+	if r.StateCodec != nil {
+		newState := state
+		for _, evt := range events {
+			newState = r.Decider.Evolve(newState, evt)
+		}
+		stateBytes, typeURL, err := r.StateCodec.Encode(newState)
+		if err != nil {
+			return es.AppendResult{}, fmt.Errorf("aggregate: encode state: %w", err)
+		}
+		params.NewStateBytes = stateBytes
+		params.StateTypeURL = typeURL
+		if r.Decider.IsTerminal != nil {
+			params.Terminal = r.Decider.IsTerminal(newState)
+		}
+	}
+
+	return r.Store.Append(ctx, params)
 }
 
 // handleConfig holds optional fields populated by HandleOption funcs.

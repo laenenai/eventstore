@@ -19,10 +19,13 @@ type Querier interface {
 	CountPending(ctx context.Context, tenantID string) (int64, error)
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (interface{}, error)
 	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
+	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
+	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
 	GetEventByID(ctx context.Context, arg GetEventByIDParams) (Event, error)
 	// Snapshot queries (ADR 0011).
 	GetSnapshot(ctx context.Context, arg GetSnapshotParams) (Snapshot, error)
+	GetState(ctx context.Context, arg GetStateParams) (GetStateRow, error)
 	// Crypto-shredding subject-key queries (ADR 0010).
 	GetSubjectKey(ctx context.Context, arg GetSubjectKeyParams) (SubjectKey, error)
 	GetUniqueClaim(ctx context.Context, arg GetUniqueClaimParams) (UniqueClaim, error)
@@ -47,6 +50,8 @@ type Querier interface {
 	// ===========================================================================
 	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
+	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
+	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) error
 	OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (interface{}, error)
@@ -74,6 +79,9 @@ type Querier interface {
 	ReplayAllDLQ(ctx context.Context, arg ReplayAllDLQParams) (int64, error)
 	ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error
 	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
+	// state_cache queries for SQLite (ADR 0020 Tier 1).
+	// See the Postgres sibling for the canonical doc comments.
+	UpsertStateCache(ctx context.Context, arg UpsertStateCacheParams) error
 	UpsertSubjectKey(ctx context.Context, arg UpsertSubjectKeyParams) error
 }
 

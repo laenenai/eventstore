@@ -121,6 +121,26 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 			}
 		}
 
+		// Tier-1 state_cache row (optional). Written in the same tx so
+		// reads after Append see the post-decide state. See ADR 0020.
+		if p.NewStateBytes != nil {
+			terminal := int64(0)
+			if p.Terminal {
+				terminal = 1
+			}
+			if err := q.UpsertStateCache(ctx, db.UpsertStateCacheParams{
+				TenantID:  p.StreamID.Tenant,
+				StreamID:  canonical,
+				TypeUrl:   p.StateTypeURL,
+				State:     string(p.NewStateBytes),
+				Version:   int64(p.ExpectedVersion) + int64(len(p.Events)),
+				Terminal:  terminal,
+				UpdatedAt: recordedAt,
+			}); err != nil {
+				return fmt.Errorf("upsert state_cache: %w", err)
+			}
+		}
+
 		result = es.AppendResult{
 			StartVersion:        p.ExpectedVersion + 1,
 			EndVersion:          p.ExpectedVersion + uint64(len(p.Events)),

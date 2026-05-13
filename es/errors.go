@@ -51,4 +51,11 @@ var (
 	// no further events may be appended. Callers can match via
 	// errors.Is(err, es.ErrTerminal).
 	ErrTerminal = errors.New("eventstore: stream is terminal")
+
+	// ErrStateNotFound reports that GetState found no cached state
+	// for the given (tenant_id, stream_id). The stream may exist in
+	// the events table but the aggregate is not opted into the
+	// state cache (or the cache hasn't been backfilled for older
+	// streams yet — see aggregate.RebuildStateCache).
+	ErrStateNotFound = errors.New("eventstore: state not found")
 )

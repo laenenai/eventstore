@@ -57,6 +57,11 @@ type Querier interface {
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (int64, error)
 	// Operational tool: force a full-replay on next read.
 	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
+	// Wipe state_cache rows for a given type before a rebuild. Returns the
+	// number of rows deleted.
+	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
+	// Cross-tenant variant for full rebuild.
+	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
 	// Crypto-shred a subject. Sets the wrapped DEK to empty bytes and marks
 	// the shred timestamp. The row is retained for compliance audit.
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
@@ -67,6 +72,9 @@ type Querier interface {
 	// Lazy snapshots: written on read after N events since the last
 	// snapshot. Latest wins per stream.
 	GetSnapshot(ctx context.Context, arg GetSnapshotParams) (Snapshot, error)
+	// Tier 1 point lookup. Returns nothing if the stream has no cached
+	// state (either never written or the aggregate is not opted in).
+	GetState(ctx context.Context, arg GetStateParams) (GetStateRow, error)
 	// Crypto-shredding subject-key queries (ADR 0010).
 	//
 	// DEKs are stored wrapped by the tenant's KEK (held in the configured
@@ -92,6 +100,12 @@ type Querier interface {
 	// Audit query: enumerate subjects that have been crypto-shredded for a
 	// tenant. Useful for compliance reports.
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
+	// Paged listing of cached states for a given type_url. Pass the
+	// stream_id of the last row in the previous page as @after_stream_id
+	// to fetch the next page; start with @after_stream_id = ''.
+	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
+	// Cross-tenant variant. Admin/operator-scope use only.
+	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
 	// Increment attempts, record the last error, and set the next
 	// retry-eligible time. The Drain computes next_attempt_at via its
 	// backoff function and passes it in.
@@ -156,6 +170,14 @@ type Querier interface {
 	// the decider state's shape version; mismatches at read time are
 	// silently discarded with full-replay fallback.
 	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
+	// state_cache queries (ADR 0020 Tier 1).
+	//
+	// One row per (tenant_id, stream_id). Written transactionally with
+	// events via UpsertStateCache (called from Append). Read via GetState /
+	// ListStates / ListStatesAll.
+	// Atomic upsert: insert on first append, update on subsequent. Called
+	// from within the events-append transaction.
+	UpsertStateCache(ctx context.Context, arg UpsertStateCacheParams) error
 	// Used at first encryption for a subject (create the DEK) and during
 	// KEK rotation (re-wrap the existing DEK under the new KEK version).
 	UpsertSubjectKey(ctx context.Context, arg UpsertSubjectKeyParams) error

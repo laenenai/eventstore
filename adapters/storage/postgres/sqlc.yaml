@@ -8,6 +8,7 @@ sql:
     schema:
       - migrations/00001_initial_schema.sql
       - migrations/00003_outbox_next_attempt_at.sql
+      - migrations/00004_state_cache.sql
     queries: queries/
     gen:
       go:

@@ -14,6 +14,7 @@ require (
 	github.com/pressly/goose/v3 v3.27.1
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
