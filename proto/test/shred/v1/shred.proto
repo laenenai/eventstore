@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package test.shred.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/shred/v1;shredv1";
+
+// Test-only aggregate exercising the codegen-emitted crypto-shredding
+// hooks (ADR 0010). The Person state is a stand-in for any aggregate
+// where a stream's identifier doubles as the encryption subject.
+
+message Person {
+  option (es.v1.aggregate) = "person";
+
+  string person_id = 1 [(es.v1.subject_field) = true];
+  bytes  display_name = 2; // PII (default): encrypted per-person
+}
+
+// ---- Commands ------------------------------------------------------------
+
+message Register {
+  string person_id    = 1;
+  bytes  display_name = 2;
+  bytes  email        = 3;
+}
+
+message UpdateName {
+  bytes new_display_name = 1;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    Register   register    = 1;
+    UpdateName update_name = 2;
+  }
+}
+
+// ---- Events --------------------------------------------------------------
+
+message Registered {
+  // Subject for this event's PII fields. Same value as Person.person_id.
+  string person_id    = 1 [(es.v1.subject_field) = true];
+  bytes  display_name = 2; // PII (default): encrypted under person_id's DEK
+  bytes  email        = 3; // PII (default): encrypted under person_id's DEK
+  string referrer_id  = 4 [(es.v1.non_pii) = true]; // public field, kept plaintext
+}
+
+message NameChanged {
+  string person_id        = 1 [(es.v1.subject_field) = true];
+  bytes  new_display_name = 2;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    Registered  registered   = 1;
+    NameChanged name_changed = 2;
+  }
+}

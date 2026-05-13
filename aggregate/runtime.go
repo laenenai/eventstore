@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/laenenai/eventstore/es"
+	"github.com/laenenai/eventstore/shred"
 )
 
 // EncodedEvent is what the Codec produces when serializing one event.
@@ -77,6 +79,29 @@ type Runtime[S, C, E any] struct {
 	// adapters do) and StateCodec to be set (snapshots need to
 	// serialize/deserialize the folded state).
 	SnapshotEvery int
+
+	// Shredder enables crypto-shredding for event PII fields
+	// (ADR 0010). When set, the runtime calls EncryptPII on each
+	// event before Codec.Encode (in Handle) and DecryptPII on each
+	// decoded event after Codec.Decode (in Load) — but only for
+	// events whose generated code implements shred.PIIEncoder.
+	// Events without PII fields pass through unchanged.
+	//
+	// The framework derives the encryption subject from the event's
+	// Subject() method when set, falling back to the StreamID's
+	// identifier component. Per-field subject overrides
+	// (es.v1.subject = "other_field") are honored by the
+	// codegen-emitted EncryptPII/DecryptPII bodies.
+	Shredder *shred.Shredder
+
+	// OnRedacted is an optional hook invoked when Load encounters
+	// PII fields that could not be decrypted (subject shredded,
+	// KMS unavailable, etc.). The handler is called once per Load
+	// with the aggregate's loaded state and the accumulated
+	// redactions across all replayed events. Use to surface a UI
+	// warning or audit log entry. Other errors (tag mismatch,
+	// real KMS failures) abort Load before this callback runs.
+	OnRedacted func(redacted shred.RedactedFields)
 }
 
 // Load reads the stream, folds it via Decider.Evolve, and returns the
@@ -120,14 +145,39 @@ func (r *Runtime[S, C, E]) Load(ctx context.Context, sid es.StreamID) (S, uint64
 		return state, 0, fmt.Errorf("aggregate: load: %w", err)
 	}
 	version := fromVersion
+	var allRedacted shred.RedactedFields
 	for _, env := range envs {
 		evt, err := r.Codec.Decode(env.TypeURL, env.SchemaVersion, env.Payload)
 		if err != nil {
 			return state, 0, fmt.Errorf("aggregate: decode event %s v%d: %w",
 				env.TypeURL, env.SchemaVersion, err)
 		}
+
+		// ADR 0010: if the runtime has a Shredder and the decoded
+		// event implements PIIEncoder, decrypt PII fields in place
+		// before Evolve sees them.
+		if r.Shredder != nil {
+			if pii, ok := any(evt).(shred.PIIEncoder); ok {
+				subject := pii.Subject()
+				if subject == "" {
+					subject = sid.ID
+				}
+				redacted, derr := pii.DecryptPII(ctx, r.Shredder, sid.Tenant, subject)
+				if derr != nil {
+					return state, 0, fmt.Errorf("aggregate: decrypt %s v%d: %w",
+						env.TypeURL, env.SchemaVersion, derr)
+				}
+				if len(redacted) > 0 {
+					allRedacted = append(allRedacted, redacted...)
+				}
+			}
+		}
+
 		state = r.Decider.Evolve(state, evt)
 		version = env.Version
+	}
+	if r.OnRedacted != nil && len(allRedacted) > 0 {
+		r.OnRedacted(allRedacted)
 	}
 
 	// Lazy snapshot write: if enough events have accumulated since
@@ -162,6 +212,26 @@ func (r *Runtime[S, C, E]) stateSchemaVersion() uint32 {
 		return 1
 	}
 	return r.StateSchemaVersion
+}
+
+// cloneProtoEvent makes a deep copy of an event so Handle can encrypt
+// PII fields without mutating the caller's typed event. The type
+// constraint E is `any`, so we round-trip through proto.Clone which
+// requires the runtime type to be a proto.Message — which it always
+// is for events that satisfy PIIEncoder (since codegen only emits
+// the PII methods on proto-generated structs).
+func cloneProtoEvent[E any](e E) (E, error) {
+	pm, ok := any(e).(proto.Message)
+	if !ok {
+		var zero E
+		return zero, fmt.Errorf("aggregate: event %T does not implement proto.Message (required for crypto-shredding)", e)
+	}
+	cloned, ok := proto.Clone(pm).(E)
+	if !ok {
+		var zero E
+		return zero, fmt.Errorf("aggregate: proto.Clone(%T) returned %T", e, proto.Clone(pm))
+	}
+	return cloned, nil
 }
 
 // writeSnapshot encodes the current state and upserts the snapshot row.
@@ -221,7 +291,32 @@ func (r *Runtime[S, C, E]) Handle(
 
 	toAppend := make([]es.EventToAppend, len(events))
 	for i, evt := range events {
-		enc, err := r.Codec.Encode(evt)
+		// ADR 0010: when a Shredder is configured and this event
+		// implements PIIEncoder, clone the event and encrypt PII
+		// fields before Codec.Encode. Cloning is mandatory — the
+		// caller still holds the typed event with plaintext bytes
+		// after Handle returns; we mustn't mutate it.
+		toEncode := evt
+		if r.Shredder != nil {
+			if pii, ok := any(evt).(shred.PIIEncoder); ok {
+				cloned, err := cloneProtoEvent(evt)
+				if err != nil {
+					return es.AppendResult{}, fmt.Errorf("aggregate: clone event %d for encryption: %w", i, err)
+				}
+				clonedPII := any(cloned).(shred.PIIEncoder)
+				_ = pii // keep variable referenced
+				subject := clonedPII.Subject()
+				if subject == "" {
+					subject = sid.ID
+				}
+				if err := clonedPII.EncryptPII(ctx, r.Shredder, sid.Tenant, subject); err != nil {
+					return es.AppendResult{}, fmt.Errorf("aggregate: encrypt event %d: %w", i, err)
+				}
+				toEncode = cloned
+			}
+		}
+
+		enc, err := r.Codec.Encode(toEncode)
 		if err != nil {
 			return es.AppendResult{}, fmt.Errorf("aggregate: encode event %d: %w", i, err)
 		}

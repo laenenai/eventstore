@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 
 	esv1 "github.com/laenenai/eventstore/gen/es/v1"
@@ -111,6 +112,14 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 		// type isn't a projection target.
 		if st.interfaceName == "Event" {
 			emitProjection(out, st)
+			// ADR 0010: crypto-shredding only applies to events
+			// (state stays plaintext — readable for "current state"
+			// even after shred).
+			for _, v := range st.variants {
+				if err := emitPIIMethods(out, v); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	for _, ps := range projectionSpecs {
@@ -479,4 +488,215 @@ func emitProjectionSpec(out *protogen.GeneratedFile, ps *projectionSpec) {
 	out.P("\t}")
 	out.P("}")
 	out.P()
+}
+
+// piiField captures the codegen analysis of one field on an event
+// variant as it relates to crypto-shredding (ADR 0010).
+type piiField struct {
+	goName        string // Go struct field name (e.g. "Email")
+	protoName     string // proto field name (e.g. "email")
+	isSubject     bool   // marked (es.v1.subject_field) = true
+	isNonPII      bool   // marked (es.v1.non_pii) = true (or implicitly: it's the subject field)
+	piiIntentional bool  // marked (es.v1.pii_intentional) = true
+	subjectField  string // (es.v1.subject) = "other_field" override; default ""
+}
+
+// classifyFields walks an event variant message and classifies each
+// field per ADR 0010's rules. The boolean result reports whether the
+// variant carries any PII at all — when false, codegen omits the
+// EncryptPII/DecryptPII methods entirely.
+func classifyFields(v *protogen.Message) ([]piiField, bool, error) {
+	var (
+		fields []piiField
+		hasPII bool
+	)
+	for _, f := range v.Fields {
+		pf := piiField{
+			goName:    f.GoName,
+			protoName: f.Desc.TextName(),
+		}
+		if opts, ok := f.Desc.Options().(*descriptorpb.FieldOptions); ok && opts != nil {
+			if proto.HasExtension(opts, esv1.E_SubjectField) {
+				if val, _ := proto.GetExtension(opts, esv1.E_SubjectField).(bool); val {
+					pf.isSubject = true
+				}
+			}
+			if proto.HasExtension(opts, esv1.E_NonPii) {
+				if val, _ := proto.GetExtension(opts, esv1.E_NonPii).(bool); val {
+					pf.isNonPII = true
+				}
+			}
+			if proto.HasExtension(opts, esv1.E_PiiIntentional) {
+				if val, _ := proto.GetExtension(opts, esv1.E_PiiIntentional).(bool); val {
+					pf.piiIntentional = true
+				}
+			}
+			if proto.HasExtension(opts, esv1.E_Subject) {
+				if val, _ := proto.GetExtension(opts, esv1.E_Subject).(string); val != "" {
+					pf.subjectField = val
+				}
+			}
+		}
+		// Subject fields are always non-PII per ADR 0010
+		// ("you would need the key to find the key").
+		if pf.isSubject {
+			pf.isNonPII = true
+		}
+		// Non-bytes fields are implicitly non-PII regardless of the
+		// (es.v1.non_pii) annotation — the wire format
+		// (version|iv|ct|tag) requires the on-wire field to be bytes.
+		// ADR 0010 calls this out as a build-time advisory rather than
+		// a hard error; we treat the type itself as authoritative.
+		kind := f.Desc.Kind()
+		if kind != protoreflect.BytesKind {
+			pf.isNonPII = true
+		}
+		fields = append(fields, pf)
+		if !pf.isNonPII {
+			hasPII = true
+		}
+	}
+	return fields, hasPII, nil
+}
+
+// emitPIIMethods writes PIIFields/Subject/EncryptPII/DecryptPII on one
+// event variant. No-op for variants without PII fields.
+func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
+	fields, hasPII, err := classifyFields(v)
+	if err != nil {
+		return err
+	}
+	if !hasPII {
+		return nil
+	}
+
+	shredPkg := protogen.GoImportPath("github.com/laenenai/eventstore/shred")
+	contextType := out.QualifiedGoIdent(contextPkg.Ident("Context"))
+	shredderType := out.QualifiedGoIdent(shredPkg.Ident("Shredder"))
+	redactedType := out.QualifiedGoIdent(shredPkg.Ident("RedactedFields"))
+	redactedField := out.QualifiedGoIdent(shredPkg.Ident("RedactedField"))
+	errShredded := out.QualifiedGoIdent(shredPkg.Ident("ErrShredded"))
+	errorsIs := out.QualifiedGoIdent(protogen.GoImportPath("errors").Ident("Is"))
+	fmtErrorf := out.QualifiedGoIdent(fmtPkg.Ident("Errorf"))
+
+	vName := v.GoIdent.GoName
+
+	// Collect just the PII fields.
+	var piiFields []piiField
+	for _, f := range fields {
+		if !f.isNonPII {
+			piiFields = append(piiFields, f)
+		}
+	}
+	// Subject field, if any.
+	var subjectGoName, subjectProtoName string
+	for _, f := range fields {
+		if f.isSubject {
+			subjectGoName = f.goName
+			subjectProtoName = f.protoName
+			break
+		}
+	}
+
+	out.P()
+	out.P("// ---- Crypto-shredding for ", vName, " (ADR 0010) ----")
+	out.P()
+
+	// PIIFields()
+	out.P("// PIIFields returns the proto field names of ", vName, "'s")
+	out.P("// encrypted fields. Stable across regenerations.")
+	out.P("func (*", vName, ") PIIFields() []string {")
+	out.P("\treturn []string{")
+	for _, pf := range piiFields {
+		out.P("\t\t\"", pf.protoName, "\",")
+	}
+	out.P("\t}")
+	out.P("}")
+	out.P()
+
+	// Subject()
+	out.P("// Subject returns the default subject id used to key the DEK")
+	out.P("// for this event's PII fields. Empty when the variant has no")
+	out.P("// (es.v1.subject_field) — caller falls back to the StreamID.")
+	out.P("func (e *", vName, ") Subject() string {")
+	_ = subjectProtoName // tracked but not emitted to avoid unreachable-code error
+	if subjectGoName != "" {
+		out.P("\treturn e.Get", subjectGoName, "()")
+	} else {
+		out.P("\treturn \"\"")
+	}
+	out.P("}")
+	out.P()
+
+	// EncryptPII
+	out.P("// EncryptPII encrypts every PII field in place using s. Called")
+	out.P("// by aggregate.Runtime before Codec.Encode when Runtime.Shredder")
+	out.P("// is configured. The framework passes the resolved subject id;")
+	out.P("// per-field (es.v1.subject) overrides are honored below.")
+	out.P("func (e *", vName, ") EncryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) error {")
+	for _, pf := range piiFields {
+		subjExpr := "subject"
+		if pf.subjectField != "" {
+			subjExpr = `e.Get` + upperGoFieldName(pf.subjectField) + `()`
+		}
+		out.P("\tif len(e.", pf.goName, ") > 0 {")
+		out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
+		out.P("\t\tif err != nil {")
+		out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
+		out.P("\t\t}")
+		out.P("\t\te.", pf.goName, " = sealed")
+		out.P("\t}")
+	}
+	out.P("\treturn nil")
+	out.P("}")
+	out.P()
+
+	// DecryptPII
+	out.P("// DecryptPII reverses EncryptPII. Per-field shred → RedactedField;")
+	out.P("// other errors abort.")
+	out.P("func (e *", vName, ") DecryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) (", redactedType, ", error) {")
+	out.P("\tvar redacted ", redactedType)
+	for _, pf := range piiFields {
+		subjExpr := "subject"
+		if pf.subjectField != "" {
+			subjExpr = `e.Get` + upperGoFieldName(pf.subjectField) + `()`
+		}
+		out.P("\tif len(e.", pf.goName, ") > 0 {")
+		out.P("\t\tpt, err := s.DecryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
+		out.P("\t\tswitch {")
+		out.P("\t\tcase err == nil:")
+		out.P("\t\t\te.", pf.goName, " = pt")
+		out.P("\t\tcase ", errorsIs, "(err, ", errShredded, "):")
+		out.P("\t\t\te.", pf.goName, " = nil")
+		out.P("\t\t\tredacted = append(redacted, ", redactedField, "{Name: \"", pf.protoName, "\", Subject: ", subjExpr, ", Reason: \"shredded\"})")
+		out.P("\t\tdefault:")
+		out.P("\t\t\treturn redacted, ", fmtErrorf, "(\"", vName, ".DecryptPII ", pf.protoName, ": %w\", err)")
+		out.P("\t\t}")
+		out.P("\t}")
+	}
+	out.P("\treturn redacted, nil")
+	out.P("}")
+	out.P()
+	return nil
+}
+
+// upperGoFieldName converts a proto field name (snake_case) to its
+// Go struct field name (UpperCamelCase). Matches the convention
+// protoc-gen-go uses for accessor names.
+func upperGoFieldName(protoName string) string {
+	out := make([]byte, 0, len(protoName))
+	upper := true
+	for i := 0; i < len(protoName); i++ {
+		c := protoName[i]
+		if c == '_' {
+			upper = true
+			continue
+		}
+		if upper && c >= 'a' && c <= 'z' {
+			c -= 32
+		}
+		out = append(out, c)
+		upper = false
+	}
+	return string(out)
 }

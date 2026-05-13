@@ -178,9 +178,63 @@ func (s *Shredder) ClearCache() { s.cache = newDEKCache() }
 
 // ErrShredded signals that the subject has been crypto-shredded; the
 // ciphertext is computationally inaccessible. Returned by
-// DecryptField. Callers substitute a typed RedactedValue at the call
-// site per ADR 0010.
+// DecryptField. Codegen-emitted DecryptPII methods convert this into
+// a RedactedField entry rather than failing the whole decode.
 var ErrShredded = errors.New("shred: subject has been shredded")
+
+// PIIEncoder is implemented by codegen-emitted event types that carry
+// at least one PII field (anything not marked (es.v1.non_pii) on a
+// non-subject field). aggregate.Runtime auto-detects this interface
+// and calls EncryptPII/DecryptPII when Runtime.Shredder is configured.
+// See ADR 0010.
+type PIIEncoder interface {
+	// PIIFields returns the field names this event carries under
+	// encryption — the ones EncryptPII/DecryptPII walk. Stable
+	// across versions of the codegen output; used for audit
+	// reporting and tests.
+	PIIFields() []string
+
+	// Subject returns the default subject id used to key the DEK
+	// for this event's fields. Sourced from the field marked
+	// (es.v1.subject_field) on the variant; empty when not set —
+	// the framework falls back to the StreamID's identifier.
+	Subject() string
+
+	// EncryptPII encrypts every PII field in place using the
+	// supplied Shredder. Already-empty fields are skipped. Called
+	// by the framework before Codec.Encode.
+	EncryptPII(ctx context.Context, s *Shredder, tenantID, subject string) error
+
+	// DecryptPII reverses EncryptPII. When the subject has been
+	// shredded, the affected field is zeroed and a RedactedField
+	// entry is added rather than failing the whole decode; other
+	// errors (KMS unavailable, tag mismatch) abort.
+	DecryptPII(ctx context.Context, s *Shredder, tenantID, subject string) (RedactedFields, error)
+}
+
+// RedactedField records one encrypted field that could not be
+// decrypted for an event read. The field's bytes have been zeroed
+// by DecryptPII; consumers branch on Reason to decide UX (typically
+// "shredded" means GDPR-deletion has run and the value is gone).
+type RedactedField struct {
+	Name    string
+	Subject string
+	Reason  string // "shredded", "missing_key", "kms_unavailable"
+}
+
+// RedactedFields is the per-event list of redactions. nil/empty means
+// every PII field decrypted successfully (the common path).
+type RedactedFields []RedactedField
+
+// Has reports whether any field in the slice matches name.
+func (rs RedactedFields) Has(name string) bool {
+	for _, r := range rs {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
 
 // Wire format version byte values.
 const (
