@@ -1,30 +1,35 @@
-package aggregate_test
+package sqlite_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
+	_ "modernc.org/sqlite"
+
+	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/aggregate"
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/estest"
 )
 
-// Tests use an inline toy "Counter" domain to exercise the aggregate
-// runtime end-to-end without depending on a real storage adapter.
+// These tests verify the aggregate.Runtime against a real SQLite store
+// using ":memory:" mode. The Counter domain is inlined here as a
+// hand-written illustration of what codegen will eventually emit
+// (sealed interfaces + variants + codec). For consumer tests of their
+// own deciders, the same pattern applies: open sql.Open("sqlite", ":memory:"),
+// migrate, wire the runtime.
 
-// ----- Counter domain ------------------------------------------------------
+// ----- Counter domain (hand-written stand-in for codegen output) ----------
 
 type counterState struct {
 	Initialized bool
 	Count       int64
 	Min, Max    int64
 }
-
-// Sealed sum-type interfaces. Real domains use codegen (ADR 0004) to
-// emit these; we write them by hand here since codegen is Phase 3.
 
 type counterCmd interface{ isCounterCmd() }
 type initCmd struct{ Min, Max, Initial int64 }
@@ -97,8 +102,6 @@ var counterDecider = es.Decider[counterState, counterCmd, counterEvt]{
 	},
 }
 
-// counterCodec is a hand-written codec for the Counter domain. Real
-// domains get this from codegen.
 type counterCodec struct{}
 
 func (counterCodec) Encode(e counterEvt) (aggregate.EncodedEvent, error) {
@@ -117,49 +120,52 @@ func (counterCodec) Encode(e counterEvt) (aggregate.EncodedEvent, error) {
 	default:
 		return aggregate.EncodedEvent{}, fmt.Errorf("unknown event type %T", e)
 	}
-	return aggregate.EncodedEvent{
-		Payload:       payload,
-		TypeURL:       typeURL,
-		SchemaVersion: 1,
-	}, nil
+	return aggregate.EncodedEvent{Payload: payload, TypeURL: typeURL, SchemaVersion: 1}, nil
 }
 
-func (counterCodec) Decode(typeURL string, schemaVersion uint32, payload []byte) (counterEvt, error) {
+func (counterCodec) Decode(typeURL string, _ uint32, payload []byte) (counterEvt, error) {
 	switch typeURL {
 	case "counter.v1.Initialized":
 		var e initialized
-		if err := json.Unmarshal(payload, &e); err != nil {
-			return nil, err
-		}
-		return e, nil
+		return e, json.Unmarshal(payload, &e)
 	case "counter.v1.Incremented":
 		var e incremented
-		if err := json.Unmarshal(payload, &e); err != nil {
-			return nil, err
-		}
-		return e, nil
+		return e, json.Unmarshal(payload, &e)
 	case "counter.v1.Decremented":
 		var e decremented
-		if err := json.Unmarshal(payload, &e); err != nil {
-			return nil, err
-		}
-		return e, nil
+		return e, json.Unmarshal(payload, &e)
 	}
 	return nil, fmt.Errorf("unknown type_url %q", typeURL)
 }
 
-// ----- Tests ---------------------------------------------------------------
+// ----- Test fixtures ------------------------------------------------------
 
-func newCounterRuntime() *aggregate.Runtime[counterState, counterCmd, counterEvt] {
+// newRuntime opens an in-memory SQLite DB, migrates the framework
+// schema, and wires the Counter runtime against it. Returns the
+// runtime; cleanup is via t.Cleanup.
+func newRuntime(t *testing.T) *aggregate.Runtime[counterState, counterCmd, counterEvt] {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open(:memory:): %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	a := sqliteadapter.New(db)
+	if err := a.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	return &aggregate.Runtime[counterState, counterCmd, counterEvt]{
-		Store:   estest.NewInMemoryStore(),
+		Store:   a,
 		Decider: counterDecider,
 		Codec:   counterCodec{},
 	}
 }
 
-func TestRuntime_LoadEmptyStream(t *testing.T) {
-	rt := newCounterRuntime()
+// ----- Aggregate runtime tests --------------------------------------------
+
+func TestAggregate_LoadEmptyStream(t *testing.T) {
+	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-empty", "counter", "1")
 
 	state, version, err := rt.Load(context.Background(), sid)
@@ -174,8 +180,8 @@ func TestRuntime_LoadEmptyStream(t *testing.T) {
 	}
 }
 
-func TestRuntime_HandleSingleCommand(t *testing.T) {
-	rt := newCounterRuntime()
+func TestAggregate_HandleSingleCommand(t *testing.T) {
+	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-single", "counter", "1")
 
 	result, err := rt.Handle(context.Background(), sid, initCmd{Min: 0, Max: 100, Initial: 5})
@@ -198,8 +204,8 @@ func TestRuntime_HandleSingleCommand(t *testing.T) {
 	}
 }
 
-func TestRuntime_HandleMultipleCommands(t *testing.T) {
-	rt := newCounterRuntime()
+func TestAggregate_HandleMultipleCommands(t *testing.T) {
+	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-multi", "counter", "1")
 	ctx := context.Background()
 
@@ -220,7 +226,7 @@ func TestRuntime_HandleMultipleCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if state.Count != 16 { // 10 + 5 + 3 - 2
+	if state.Count != 16 {
 		t.Errorf("Count: got %d want 16", state.Count)
 	}
 	if version != 4 {
@@ -228,23 +234,20 @@ func TestRuntime_HandleMultipleCommands(t *testing.T) {
 	}
 }
 
-func TestRuntime_DecideError(t *testing.T) {
-	rt := newCounterRuntime()
+func TestAggregate_DecideError(t *testing.T) {
+	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-err", "counter", "1")
 	ctx := context.Background()
 
-	// Init first.
 	if _, err := rt.Handle(ctx, sid, initCmd{Min: 0, Max: 10, Initial: 5}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
-	// Try to exceed max.
 	_, err := rt.Handle(ctx, sid, incCmd{By: 100})
 	if !errors.Is(err, errExceedMax) {
 		t.Fatalf("expected errExceedMax, got %v", err)
 	}
 
-	// Stream must remain at version 1 (the init).
 	v, err := rt.Store.CurrentStreamVersion(ctx, sid)
 	if err != nil {
 		t.Fatalf("CurrentStreamVersion: %v", err)
@@ -254,20 +257,22 @@ func TestRuntime_DecideError(t *testing.T) {
 	}
 }
 
-func TestRuntime_NoOpCommand(t *testing.T) {
-	// A decider that returns no events for a particular command (a
-	// "no-op") should not produce an append.
+func TestAggregate_NoOpCommand(t *testing.T) {
 	noopDecider := es.Decider[counterState, counterCmd, counterEvt]{
 		Initial: counterDecider.Initial,
-		Decide: func(s counterState, c counterCmd) ([]counterEvt, []es.ConstraintOp, error) {
+		Decide: func(_ counterState, _ counterCmd) ([]counterEvt, []es.ConstraintOp, error) {
 			return nil, nil, nil
 		},
 		Evolve: counterDecider.Evolve,
 	}
+	db, _ := sql.Open("sqlite", ":memory:")
+	t.Cleanup(func() { _ = db.Close() })
+	a := sqliteadapter.New(db)
+	if err := a.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
 	rt := &aggregate.Runtime[counterState, counterCmd, counterEvt]{
-		Store:   estest.NewInMemoryStore(),
-		Decider: noopDecider,
-		Codec:   counterCodec{},
+		Store: a, Decider: noopDecider, Codec: counterCodec{},
 	}
 
 	sid := estest.MustStream(t, "t-noop", "counter", "1")
@@ -276,7 +281,7 @@ func TestRuntime_NoOpCommand(t *testing.T) {
 		t.Fatalf("noop Handle: %v", err)
 	}
 	if result.StartVersion != 0 || result.EndVersion != 0 {
-		t.Errorf("expected zero-value AppendResult, got %+v", result)
+		t.Errorf("expected zero AppendResult, got %+v", result)
 	}
 
 	v, _ := rt.Store.CurrentStreamVersion(context.Background(), sid)
@@ -285,41 +290,25 @@ func TestRuntime_NoOpCommand(t *testing.T) {
 	}
 }
 
-func TestRuntime_OptimisticConcurrency(t *testing.T) {
-	rt := newCounterRuntime()
-	sid := estest.MustStream(t, "t-oc", "counter", "1")
+func TestAggregate_HandleReloads(t *testing.T) {
+	// Two successive Handles each Load fresh state, so two increments
+	// after init produce final count == start + by + by.
+	rt := newRuntime(t)
+	sid := estest.MustStream(t, "t-reload", "counter", "1")
 	ctx := context.Background()
 
 	if _, err := rt.Handle(ctx, sid, initCmd{Min: 0, Max: 100, Initial: 0}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-
-	// Simulate two concurrent handlers: both load at version 1, then
-	// both try to append at version 2. The second should retry by
-	// loading again and proceeding from the new version.
-	state1, v1, _ := rt.Load(ctx, sid)
-	state2, v2, _ := rt.Load(ctx, sid)
-	if v1 != v2 || v1 != 1 {
-		t.Fatalf("expected both loads at v=1, got %d / %d", v1, v2)
-	}
-
-	// First call commits.
 	if _, err := rt.Handle(ctx, sid, incCmd{By: 1}); err != nil {
 		t.Fatalf("first inc: %v", err)
 	}
-
-	// Second call uses stale state; the runtime's Load will fetch the
-	// current state inside Handle, so it actually re-loads and
-	// proceeds correctly.
-	_, err := rt.Handle(ctx, sid, incCmd{By: 1})
-	if err != nil {
+	if _, err := rt.Handle(ctx, sid, incCmd{By: 1}); err != nil {
 		t.Fatalf("second inc: %v", err)
 	}
 
-	// Both increments should have applied.
 	final, _, _ := rt.Load(ctx, sid)
 	if final.Count != 2 {
-		t.Errorf("expected count=2 after two increments, got %d (state1=%+v state2=%+v)",
-			final.Count, state1, state2)
+		t.Errorf("expected count=2, got %d", final.Count)
 	}
 }
