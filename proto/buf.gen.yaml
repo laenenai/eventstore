@@ -15,9 +15,10 @@ plugins:
   # sealed-interface sum types, Codecs, typed StreamID wrappers, and
   # decider stubs (ADRs 0004, 0008, 0013, 0016).
   #
-  # The plugin must be on $PATH — `task generate` invokes `go install`
-  # on it first. For local dev: `go install ./cmd/protoc-gen-es-go`.
-  - local: protoc-gen-es-go
+  # Invoked via `go run` so no separate `go install` step is needed —
+  # the workspace (go.work) resolves the cmd/protoc-gen-es-go package
+  # to its local source. Go's build cache handles incremental compiles.
+  - local: ["go", "run", "../cmd/protoc-gen-es-go"]
     out: ../gen
     opt:
       - paths=source_relative
