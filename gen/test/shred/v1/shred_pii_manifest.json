@@ -1,0 +1,22 @@
+{
+  "source": "test/shred/v1/shred.proto",
+  "package": "test.shred.v1",
+  "events": [
+    {
+      "name": "test.shred.v1.Registered",
+      "fields": [
+        {"name": "person_id", "classification": "subject_field"},
+        {"name": "display_name", "classification": "pii"},
+        {"name": "email", "classification": "pii"},
+        {"name": "referrer_id", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "test.shred.v1.NameChanged",
+      "fields": [
+        {"name": "person_id", "classification": "subject_field"},
+        {"name": "new_display_name", "classification": "pii"}
+      ]
+    }
+  ]
+}

@@ -27,3 +27,12 @@ WHERE tenant_id = ?
   AND shredded_at IS NOT NULL
 ORDER BY shredded_at DESC
 LIMIT ?;
+
+-- name: ListStaleSubjectKeys :many
+SELECT tenant_id, subject, dek_wrapped, kek_version, created_at, shredded_at
+FROM subject_keys
+WHERE tenant_id    = sqlc.arg(tenant_id)
+  AND kek_version  < sqlc.arg(current_kek_version)
+  AND shredded_at IS NULL
+ORDER BY subject
+LIMIT sqlc.arg(max_rows);

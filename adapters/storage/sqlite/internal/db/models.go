@@ -76,7 +76,7 @@ type StateCache struct {
 	TenantID  string
 	StreamID  string
 	TypeUrl   string
-	State     string
+	State     []byte
 	Version   int64
 	Terminal  int64
 	UpdatedAt string

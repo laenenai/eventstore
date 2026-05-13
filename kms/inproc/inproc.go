@@ -44,6 +44,22 @@ func (k *KeyStore) SetKEK(tenantID string, kek []byte) error {
 	return nil
 }
 
+// RotateKEK generates a new random KEK and appends it as the next
+// version for the tenant. Implements kms.KEKRotator. Subsequent
+// WrapDEK calls use the new KEK; old wrappings still unwrap under
+// their stored kek_version. Use shred.RewrapDEKs to migrate
+// historical DEKs after rotation.
+func (k *KeyStore) RotateKEK(_ context.Context, tenantID string) (uint32, error) {
+	kek := make([]byte, 32)
+	if _, err := rand.Read(kek); err != nil {
+		return 0, fmt.Errorf("inproc kms: rotate KEK: %w", err)
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.keks[tenantID] = append(k.keks[tenantID], kek)
+	return uint32(len(k.keks[tenantID])), nil
+}
+
 // CurrentKEKVersion implements kms.KeyStore.
 func (k *KeyStore) CurrentKEKVersion(_ context.Context, tenantID string) (uint32, error) {
 	k.mu.RLock()
@@ -142,4 +158,7 @@ func aesGCMOpen(key, sealed []byte) ([]byte, error) {
 }
 
 // Compile-time check.
-var _ kms.KeyStore = (*KeyStore)(nil)
+var (
+	_ kms.KeyStore   = (*KeyStore)(nil)
+	_ kms.KEKRotator = (*KeyStore)(nil)
+)

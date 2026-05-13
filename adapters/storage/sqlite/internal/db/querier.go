@@ -30,6 +30,9 @@ type Querier interface {
 	GetProjectionStatus(ctx context.Context, arg GetProjectionStatusParams) (ProjectionCheckpoint, error)
 	// Snapshot queries (ADR 0011).
 	GetSnapshot(ctx context.Context, arg GetSnapshotParams) (Snapshot, error)
+	// json(state) converts the BLOB JSONB back to text bytes so the Go
+	// side can unmarshal via protojson without knowing about the binary
+	// form. The framework's StateCacheReader returns these bytes as []byte.
 	GetState(ctx context.Context, arg GetStateParams) (GetStateRow, error)
 	// Crypto-shredding subject-key queries (ADR 0010).
 	GetSubjectKey(ctx context.Context, arg GetSubjectKeyParams) (SubjectKey, error)
@@ -61,8 +64,9 @@ type Querier interface {
 	ListProjectionCheckpoints(ctx context.Context) ([]ProjectionCheckpoint, error)
 	ListProjectionDLQ(ctx context.Context, arg ListProjectionDLQParams) ([]ProjectionDlq, error)
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
-	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
-	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
+	ListStaleSubjectKeys(ctx context.Context, arg ListStaleSubjectKeysParams) ([]SubjectKey, error)
+	ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error)
+	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error)
 	// projection_checkpoint queries for SQLite (ADR 0020 Tier 3).
 	// See the Postgres sibling for the canonical doc comments.
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
@@ -99,6 +103,9 @@ type Querier interface {
 	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
 	// state_cache queries for SQLite (ADR 0020 Tier 1).
 	// See the Postgres sibling for the canonical doc comments.
+	// The protojson bytes come in as a TEXT param; jsonb() converts them
+	// to binary on insert (ADR 0021). Reads return the BLOB; protojson
+	// on the Go side decodes either form interchangeably.
 	UpsertStateCache(ctx context.Context, arg UpsertStateCacheParams) error
 	UpsertSubjectKey(ctx context.Context, arg UpsertSubjectKeyParams) error
 }

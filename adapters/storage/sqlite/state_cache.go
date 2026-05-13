@@ -30,11 +30,26 @@ func (a *Adapter) GetState(ctx context.Context, tenantID, streamID string) (es.S
 		TenantID:  tenantID,
 		StreamID:  streamID,
 		TypeURL:   row.TypeUrl,
-		State:     []byte(row.State),
+		State:     stateBytes(row.State),
 		Version:   uint64(row.Version),
 		Terminal:  row.Terminal != 0,
 		UpdatedAt: updated,
 	}, nil
+}
+
+// stateBytes coerces the sqlc-typed interface{} (json(state) returns
+// TEXT but the column is BLOB JSONB — the driver may scan either
+// string or []byte depending on the version) into a stable []byte.
+func stateBytes(v interface{}) []byte {
+	switch s := v.(type) {
+	case []byte:
+		return s
+	case string:
+		return []byte(s)
+	case nil:
+		return nil
+	}
+	return nil
 }
 
 // ListStates implements es.StateCacheReader.
@@ -61,7 +76,7 @@ func (a *Adapter) ListStates(ctx context.Context, tenantID, typeURL, afterStream
 			TenantID:  r.TenantID,
 			StreamID:  r.StreamID,
 			TypeURL:   r.TypeUrl,
-			State:     []byte(r.State),
+			State:     stateBytes(r.State),
 			Version:   uint64(r.Version),
 			Terminal:  r.Terminal != 0,
 			UpdatedAt: updated,

@@ -31,8 +31,8 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0018 | [Schema Migrations and Query Generation](./0018-migrations-and-queries.md)              | Accepted   |
 | 0019 | [SQLite Driver Strategy](./0019-sqlite-driver-strategy.md)                              | Accepted (amends 0017, 0018) |
 | 0020 | [Projections and Read Models](./0020-projections-and-read-models.md)                    | Accepted   |
-| 0021 | [JSONB Storage on SQLite (3.45+)](./0021-sqlite-jsonb-storage.md)                       | Proposed   |
-| 0022 | [Linked Projections (Tier 3.5)](./0022-linked-projections.md)                           | Proposed   |
+| 0021 | [JSONB Storage on SQLite (3.45+)](./0021-sqlite-jsonb-storage.md)                       | Accepted   |
+| 0022 | [Linked Projections (Tier 3.5)](./0022-linked-projections.md)                           | Accepted (runtime; codegen deferred) |
 
 ## Conventions
 

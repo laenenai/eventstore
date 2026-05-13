@@ -105,6 +105,7 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 	out.P("package ", file.GoPackageName)
 	out.P()
 
+	var eventVariants []*protogen.Message
 	for _, st := range sumTypes {
 		emitSumType(out, st)
 		// Per ADR 0020 decision 3a: emit a Projection interface and
@@ -120,10 +121,20 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 					return err
 				}
 			}
+			eventVariants = append(eventVariants, st.variants...)
 		}
 	}
 	for _, ps := range projectionSpecs {
 		emitProjectionSpec(out, ps)
+	}
+
+	// ADR 0010: emit pii_manifest.json — the audit artifact listing
+	// every event's PII classification. Diff-reviewed; acts as the
+	// proof of "what's encrypted vs what's not" for privacy review.
+	if len(eventVariants) > 0 {
+		if err := emitPIIManifest(plugin, file, eventVariants); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -699,4 +710,62 @@ func upperGoFieldName(protoName string) string {
 		upper = false
 	}
 	return string(out)
+}
+
+// emitPIIManifest writes pii_manifest.json next to the generated Go
+// code: one entry per event variant, each field classified per ADR
+// 0010 (subject_field / non_pii / pii_intentional / pii). The
+// document is JSON for ergonomic diff review and machine consumption
+// by privacy-audit tooling.
+func emitPIIManifest(plugin *protogen.Plugin, file *protogen.File, variants []*protogen.Message) error {
+	out := plugin.NewGeneratedFile(
+		file.GeneratedFilenamePrefix+"_pii_manifest.json",
+		file.GoImportPath,
+	)
+
+	// Hand-rolled JSON so the output is deterministic (key order)
+	// without pulling encoding/json into the plugin. Two-space
+	// indent, stable variant order (proto declaration order).
+	out.P("{")
+	out.P(`  "source": "`, file.Desc.Path(), `",`)
+	out.P(`  "package": "`, file.Desc.Package(), `",`)
+	out.P(`  "events": [`)
+	for i, v := range variants {
+		fields, _, err := classifyFields(v)
+		if err != nil {
+			return err
+		}
+		comma := ","
+		if i == len(variants)-1 {
+			comma = ""
+		}
+		out.P(`    {`)
+		out.P(`      "name": "`, v.Desc.FullName(), `",`)
+		out.P(`      "fields": [`)
+		for j, pf := range fields {
+			class := "pii"
+			switch {
+			case pf.isSubject:
+				class = "subject_field"
+			case pf.isNonPII && pf.piiIntentional:
+				class = "pii_intentional"
+			case pf.isNonPII:
+				class = "non_pii"
+			}
+			fcomma := ","
+			if j == len(fields)-1 {
+				fcomma = ""
+			}
+			subjectAttr := ""
+			if pf.subjectField != "" {
+				subjectAttr = `, "subject_field_override": "` + pf.subjectField + `"`
+			}
+			out.P(`        {"name": "`, pf.protoName, `", "classification": "`, class, `"`, subjectAttr, `}`, fcomma)
+		}
+		out.P(`      ]`)
+		out.P(`    }`, comma)
+	}
+	out.P(`  ]`)
+	out.P("}")
+	return nil
 }

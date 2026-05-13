@@ -31,6 +31,13 @@ type SubjectStore interface {
 	// and setting shredded_at. The row is retained for compliance
 	// audit.
 	ForgetSubject(ctx context.Context, tenantID, subject string) error
+
+	// ListStaleSubjectKeys returns up to limit non-shredded
+	// subject_keys rows for tenantID that were wrapped under an
+	// older KEK version. Used by Shredder.RewrapDEKs to migrate
+	// historical DEKs after a KEK rotation. Rows are ordered by
+	// subject for stable pagination.
+	ListStaleSubjectKeys(ctx context.Context, tenantID string, currentKEKVersion uint32, limit int) ([]SubjectKey, error)
 }
 
 // SubjectKey is one row of the subject_keys table — the wrapped DEK
@@ -175,6 +182,60 @@ func (s *Shredder) ForgetSubject(ctx context.Context, tenantID, subject string) 
 // ClearCache empties the in-memory DEK cache. Called after KEK rotation
 // (so new wrappings stick) or for tests.
 func (s *Shredder) ClearCache() { s.cache = newDEKCache() }
+
+// RewrapDEKs migrates every non-shredded subject_keys row for tenantID
+// from its current kek_version to the KeyStore's current version. ADR
+// 0010: KEK rotation produces a new key version; existing DEKs keep
+// working under their stored version, but it's an operator's job to
+// re-wrap them so an old KEK can eventually be retired.
+//
+// The function paginates through stale rows in batches of pageSize,
+// unwraps each DEK under its existing version, re-wraps under the new
+// current version, and upserts. Returns the total number of rows
+// rewrapped. Safe to interrupt and resume — partial progress survives.
+//
+// pageSize ≤ 0 defaults to 100.
+func (s *Shredder) RewrapDEKs(ctx context.Context, tenantID string, pageSize int) (int, error) {
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	current, err := s.KMS.CurrentKEKVersion(ctx, tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("shred: read current KEK version: %w", err)
+	}
+	if current == 0 {
+		return 0, nil // no KEK yet — nothing to rotate
+	}
+
+	total := 0
+	for {
+		stale, err := s.Store.ListStaleSubjectKeys(ctx, tenantID, current, pageSize)
+		if err != nil {
+			return total, fmt.Errorf("shred: list stale subject keys: %w", err)
+		}
+		if len(stale) == 0 {
+			return total, nil
+		}
+		for _, row := range stale {
+			dek, err := s.KMS.UnwrapDEK(ctx, tenantID, row.DEKWrapped, row.KEKVersion)
+			if err != nil {
+				return total, fmt.Errorf("shred: unwrap DEK for %s: %w", row.Subject, err)
+			}
+			wrapped, version, err := s.KMS.WrapDEK(ctx, tenantID, dek)
+			if err != nil {
+				return total, fmt.Errorf("shred: re-wrap DEK for %s: %w", row.Subject, err)
+			}
+			if err := s.Store.UpsertSubjectKey(ctx, tenantID, row.Subject, wrapped, version); err != nil {
+				return total, fmt.Errorf("shred: upsert re-wrapped DEK for %s: %w", row.Subject, err)
+			}
+			total++
+		}
+		// If we read fewer rows than pageSize the next iteration
+		// will see no stale rows and exit. We could break here to
+		// save one query; we don't, to keep the termination
+		// condition unambiguous.
+	}
+}
 
 // ErrShredded signals that the subject has been crypto-shredded; the
 // ciphertext is computationally inaccessible. Returned by

@@ -1,0 +1,119 @@
+{
+  "source": "myapp/party/v1/party.proto",
+  "package": "myapp.party.v1",
+  "events": [
+    {
+      "name": "myapp.party.v1.Registered",
+      "fields": [
+        {"name": "name", "classification": "non_pii"},
+        {"name": "email", "classification": "non_pii"},
+        {"name": "phone", "classification": "non_pii"},
+        {"name": "address", "classification": "non_pii"},
+        {"name": "date_of_birth", "classification": "non_pii"},
+        {"name": "actor_id", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.NameChangeProposed",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "proposed", "classification": "non_pii"},
+        {"name": "proposed_by", "classification": "non_pii"},
+        {"name": "reason", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.NameChangeApplied",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "approved_by", "classification": "non_pii"},
+        {"name": "new_name", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.EmailChangeProposed",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "proposed", "classification": "non_pii"},
+        {"name": "proposed_by", "classification": "non_pii"},
+        {"name": "reason", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.EmailChangeApplied",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "approved_by", "classification": "non_pii"},
+        {"name": "old_email", "classification": "non_pii"},
+        {"name": "new_email", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.DateOfBirthChangeProposed",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "proposed", "classification": "non_pii"},
+        {"name": "proposed_by", "classification": "non_pii"},
+        {"name": "reason", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.DateOfBirthChangeApplied",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "approved_by", "classification": "non_pii"},
+        {"name": "new_date_of_birth", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.ChangeRejected",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "rejected_by", "classification": "non_pii"},
+        {"name": "reason", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.ChangeWithdrawn",
+      "fields": [
+        {"name": "change_id", "classification": "non_pii"},
+        {"name": "withdrawn_by", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.PhoneUpdated",
+      "fields": [
+        {"name": "new_phone", "classification": "non_pii"},
+        {"name": "actor_id", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.AddressUpdated",
+      "fields": [
+        {"name": "new_address", "classification": "non_pii"},
+        {"name": "actor_id", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.Suspended",
+      "fields": [
+        {"name": "actor_id", "classification": "non_pii"},
+        {"name": "reason", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.Reactivated",
+      "fields": [
+        {"name": "actor_id", "classification": "non_pii"},
+        {"name": "comment", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.party.v1.Closed",
+      "fields": [
+        {"name": "actor_id", "classification": "non_pii"},
+        {"name": "reason", "classification": "non_pii"}
+      ]
+    }
+  ]
+}

@@ -42,7 +42,7 @@ func (q *Queries) DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl
 }
 
 const getState = `-- name: GetState :one
-SELECT type_url, state, version, terminal, updated_at
+SELECT type_url, json(state) AS state, version, terminal, updated_at
 FROM state_cache
 WHERE tenant_id = ?
   AND stream_id = ?
@@ -55,12 +55,15 @@ type GetStateParams struct {
 
 type GetStateRow struct {
 	TypeUrl   string
-	State     string
+	State     interface{}
 	Version   int64
 	Terminal  int64
 	UpdatedAt string
 }
 
+// json(state) converts the BLOB JSONB back to text bytes so the Go
+// side can unmarshal via protojson without knowing about the binary
+// form. The framework's StateCacheReader returns these bytes as []byte.
 func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (GetStateRow, error) {
 	row := q.db.QueryRowContext(ctx, getState, arg.TenantID, arg.StreamID)
 	var i GetStateRow
@@ -75,7 +78,7 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (GetStateRow
 }
 
 const listStates = `-- name: ListStates :many
-SELECT tenant_id, stream_id, type_url, state, version, terminal, updated_at
+SELECT tenant_id, stream_id, type_url, json(state) AS state, version, terminal, updated_at
 FROM state_cache
 WHERE tenant_id      = ?1
   AND type_url       = ?2
@@ -91,7 +94,17 @@ type ListStatesParams struct {
 	MaxRows       int64
 }
 
-func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error) {
+type ListStatesRow struct {
+	TenantID  string
+	StreamID  string
+	TypeUrl   string
+	State     interface{}
+	Version   int64
+	Terminal  int64
+	UpdatedAt string
+}
+
+func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStates,
 		arg.TenantID,
 		arg.TypeUrl,
@@ -102,9 +115,9 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]State
 		return nil, err
 	}
 	defer rows.Close()
-	var items []StateCache
+	var items []ListStatesRow
 	for rows.Next() {
-		var i StateCache
+		var i ListStatesRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.StreamID,
@@ -128,7 +141,7 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]State
 }
 
 const listStatesAll = `-- name: ListStatesAll :many
-SELECT tenant_id, stream_id, type_url, state, version, terminal, updated_at
+SELECT tenant_id, stream_id, type_url, json(state) AS state, version, terminal, updated_at
 FROM state_cache
 WHERE type_url    = ?1
   AND (tenant_id > ?2
@@ -144,7 +157,17 @@ type ListStatesAllParams struct {
 	MaxRows       int64
 }
 
-func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error) {
+type ListStatesAllRow struct {
+	TenantID  string
+	StreamID  string
+	TypeUrl   string
+	State     interface{}
+	Version   int64
+	Terminal  int64
+	UpdatedAt string
+}
+
+func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error) {
 	rows, err := q.db.QueryContext(ctx, listStatesAll,
 		arg.TypeUrl,
 		arg.AfterTenantID,
@@ -155,9 +178,9 @@ func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([
 		return nil, err
 	}
 	defer rows.Close()
-	var items []StateCache
+	var items []ListStatesAllRow
 	for rows.Next() {
-		var i StateCache
+		var i ListStatesAllRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.StreamID,
@@ -185,7 +208,13 @@ const upsertStateCache = `-- name: UpsertStateCache :exec
 INSERT INTO state_cache (
     tenant_id, stream_id, type_url, state, version, terminal, updated_at
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?
+    ?1,
+    ?2,
+    ?3,
+    jsonb(?4),
+    ?5,
+    ?6,
+    ?7
 )
 ON CONFLICT (tenant_id, stream_id) DO UPDATE SET
     type_url   = excluded.type_url,
@@ -199,7 +228,7 @@ type UpsertStateCacheParams struct {
 	TenantID  string
 	StreamID  string
 	TypeUrl   string
-	State     string
+	State     interface{}
 	Version   int64
 	Terminal  int64
 	UpdatedAt string
@@ -207,6 +236,9 @@ type UpsertStateCacheParams struct {
 
 // state_cache queries for SQLite (ADR 0020 Tier 1).
 // See the Postgres sibling for the canonical doc comments.
+// The protojson bytes come in as a TEXT param; jsonb() converts them
+// to binary on insert (ADR 0021). Reads return the BLOB; protojson
+// on the Go side decodes either form interchangeably.
 func (q *Queries) UpsertStateCache(ctx context.Context, arg UpsertStateCacheParams) error {
 	_, err := q.db.ExecContext(ctx, upsertStateCache,
 		arg.TenantID,

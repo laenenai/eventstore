@@ -1,0 +1,26 @@
+{
+  "source": "test/counter/v1/counter.proto",
+  "package": "test.counter.v1",
+  "events": [
+    {
+      "name": "test.counter.v1.Initialized",
+      "fields": [
+        {"name": "min", "classification": "non_pii"},
+        {"name": "max", "classification": "non_pii"},
+        {"name": "value", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "test.counter.v1.Incremented",
+      "fields": [
+        {"name": "by", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "test.counter.v1.Decremented",
+      "fields": [
+        {"name": "by", "classification": "non_pii"}
+      ]
+    }
+  ]
+}

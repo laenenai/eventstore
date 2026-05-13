@@ -37,3 +37,16 @@ WHERE tenant_id = @tenant_id
   AND shredded_at IS NOT NULL
 ORDER BY shredded_at DESC
 LIMIT @max_rows;
+
+-- name: ListStaleSubjectKeys :many
+-- Returns subject_keys rows wrapped under an older KEK version. Used
+-- by shred.RewrapDEKs to migrate historical DEKs after a KEK rotation
+-- (ADR 0010). Shredded rows are skipped — their DEKs are deliberately
+-- inaccessible.
+SELECT tenant_id, subject, dek_wrapped, kek_version, created_at, shredded_at
+FROM subject_keys
+WHERE tenant_id    = @tenant_id
+  AND kek_version  < @current_kek_version
+  AND shredded_at IS NULL
+ORDER BY subject
+LIMIT @max_rows;

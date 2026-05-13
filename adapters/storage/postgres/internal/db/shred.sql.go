@@ -103,6 +103,53 @@ func (q *Queries) ListShreddedSubjects(ctx context.Context, arg ListShreddedSubj
 	return items, nil
 }
 
+const listStaleSubjectKeys = `-- name: ListStaleSubjectKeys :many
+SELECT tenant_id, subject, dek_wrapped, kek_version, created_at, shredded_at
+FROM subject_keys
+WHERE tenant_id    = $1
+  AND kek_version  < $2
+  AND shredded_at IS NULL
+ORDER BY subject
+LIMIT $3
+`
+
+type ListStaleSubjectKeysParams struct {
+	TenantID          string
+	CurrentKekVersion int32
+	MaxRows           int32
+}
+
+// Returns subject_keys rows wrapped under an older KEK version. Used
+// by shred.RewrapDEKs to migrate historical DEKs after a KEK rotation
+// (ADR 0010). Shredded rows are skipped — their DEKs are deliberately
+// inaccessible.
+func (q *Queries) ListStaleSubjectKeys(ctx context.Context, arg ListStaleSubjectKeysParams) ([]SubjectKey, error) {
+	rows, err := q.db.Query(ctx, listStaleSubjectKeys, arg.TenantID, arg.CurrentKekVersion, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubjectKey
+	for rows.Next() {
+		var i SubjectKey
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.Subject,
+			&i.DekWrapped,
+			&i.KekVersion,
+			&i.CreatedAt,
+			&i.ShreddedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertSubjectKey = `-- name: UpsertSubjectKey :exec
 INSERT INTO subject_keys (tenant_id, subject, dek_wrapped, kek_version)
 VALUES ($1, $2, $3, $4)

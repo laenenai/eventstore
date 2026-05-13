@@ -9,6 +9,7 @@ sql:
       - migrations/00004_projection_checkpoint.sql
       - migrations/00005_projection_dlq.sql
       - migrations/00006_processed_events.sql
+      - migrations/00007_state_cache_jsonb.sql
     queries: queries/
     gen:
       go:

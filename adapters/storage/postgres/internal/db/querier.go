@@ -128,6 +128,11 @@ type Querier interface {
 	// Audit query: enumerate subjects that have been crypto-shredded for a
 	// tenant. Useful for compliance reports.
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
+	// Returns subject_keys rows wrapped under an older KEK version. Used
+	// by shred.RewrapDEKs to migrate historical DEKs after a KEK rotation
+	// (ADR 0010). Shredded rows are skipped — their DEKs are deliberately
+	// inaccessible.
+	ListStaleSubjectKeys(ctx context.Context, arg ListStaleSubjectKeysParams) ([]SubjectKey, error)
 	// Paged listing of cached states for a given type_url. Pass the
 	// stream_id of the last row in the previous page as @after_stream_id
 	// to fetch the next page; start with @after_stream_id = ''.

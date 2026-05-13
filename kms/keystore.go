@@ -29,3 +29,17 @@ type KeyStore interface {
 	// target. Bumped when KEK rotates.
 	CurrentKEKVersion(ctx context.Context, tenantID string) (uint32, error)
 }
+
+// KEKRotator is implemented by KeyStores that support an in-process
+// rotation API (creating a new KEK version usable for subsequent
+// WrapDEK calls). External KMS adapters (AWS KMS, GCP KMS) typically
+// rotate out-of-band via the KMS provider's own controls and won't
+// implement this; the inproc implementation does, primarily for
+// tests and single-binary deployments.
+type KEKRotator interface {
+	// RotateKEK creates a new KEK version for the tenant. Returns
+	// the new version number. Existing wrapped DEKs continue to
+	// decrypt under their stored kek_version; shred.RewrapDEKs
+	// migrates them to the new version on demand.
+	RotateKEK(ctx context.Context, tenantID string) (uint32, error)
+}
