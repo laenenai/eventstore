@@ -5,13 +5,19 @@ managed:
 
 plugins:
   # Standard Go protobuf codegen. Produces the wire-format types used
-  # by adapter code and by consumers.
+  # by adapter code, codecs, and consumers.
   - remote: buf.build/protocolbuffers/go
     out: ../gen
     opt:
       - paths=source_relative
 
-  # The framework-specific codegen plugin (protoc-gen-es-go) is added
-  # here in Phase 2 once it exists. For Phase 1 (storage spike) the
-  # standard protobuf-go output is sufficient — we only need the
-  # Envelope and Actor wire types.
+  # Framework-specific codegen. Reads es.v1.* proto options and emits
+  # sealed-interface sum types, Codecs, typed StreamID wrappers, and
+  # decider stubs (ADRs 0004, 0008, 0013, 0016).
+  #
+  # The plugin must be on $PATH — `task generate` invokes `go install`
+  # on it first. For local dev: `go install ./cmd/protoc-gen-es-go`.
+  - local: protoc-gen-es-go
+    out: ../gen
+    opt:
+      - paths=source_relative

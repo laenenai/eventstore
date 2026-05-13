@@ -39,6 +39,16 @@ extend google.protobuf.MessageOptions {
   // detect. Codegen scaffolds upcaster registration stubs when a
   // bump is observed.
   uint32 schema_version = 50001;
+
+  // Marks this message as a sum-type container holding exactly one
+  // oneof field whose variants form a sealed Go interface. The value
+  // is the name of the generated interface — typically "Command" or
+  // "Event" for a domain. Codegen emits the interface, marker
+  // methods on each variant, and a Codec implementation that proto-
+  // marshals each variant under its full proto type URL.
+  //
+  // See ADR 0004.
+  string sum_type = 50002;
 }
 
 // ---- Field-level options -------------------------------------------------

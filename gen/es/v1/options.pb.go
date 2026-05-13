@@ -39,6 +39,14 @@ var file_es_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 		Filename:      "es/v1/options.proto",
 	},
 	{
+		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
+		ExtensionType: (*string)(nil),
+		Field:         50002,
+		Name:          "es.v1.sum_type",
+		Tag:           "bytes,50002,opt,name=sum_type",
+		Filename:      "es/v1/options.proto",
+	},
+	{
 		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 		ExtensionType: (*bool)(nil),
 		Field:         50000,
@@ -90,6 +98,17 @@ var (
 	//
 	// optional uint32 schema_version = 50001;
 	E_SchemaVersion = &file_es_v1_options_proto_extTypes[1]
+	// Marks this message as a sum-type container holding exactly one
+	// oneof field whose variants form a sealed Go interface. The value
+	// is the name of the generated interface — typically "Command" or
+	// "Event" for a domain. Codegen emits the interface, marker
+	// methods on each variant, and a Codec implementation that proto-
+	// marshals each variant under its full proto type URL.
+	//
+	// See ADR 0004.
+	//
+	// optional string sum_type = 50002;
+	E_SumType = &file_es_v1_options_proto_extTypes[2]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
@@ -101,21 +120,21 @@ var (
 	// See ADR 0010.
 	//
 	// optional bool subject_field = 50000;
-	E_SubjectField = &file_es_v1_options_proto_extTypes[2]
+	E_SubjectField = &file_es_v1_options_proto_extTypes[3]
 	// Opts the field OUT of crypto-shredding. By default every field is
 	// encrypted (the "deny by default" posture from ADR 0010); mark
 	// known-safe fields with this option to keep them readable
 	// post-shredding.
 	//
 	// optional bool non_pii = 50001;
-	E_NonPii = &file_es_v1_options_proto_extTypes[3]
+	E_NonPii = &file_es_v1_options_proto_extTypes[4]
 	// Suppresses the codegen lint advisory that fires when a primitive
 	// type (int*, bool, enum, Timestamp) is left default-encrypted.
 	// Use when the primitive really IS PII — e.g., a salary integer or
 	// a blood-pressure reading.
 	//
 	// optional bool pii_intentional = 50002;
-	E_PiiIntentional = &file_es_v1_options_proto_extTypes[4]
+	E_PiiIntentional = &file_es_v1_options_proto_extTypes[5]
 	// Per-field subject reference for multi-subject events (transfers,
 	// shared resources). Value is a field path within the same message
 	// pointing at the subject identifier for this particular field.
@@ -123,7 +142,7 @@ var (
 	// (es.v1.subject_field) = true.
 	//
 	// optional string subject = 50003;
-	E_Subject = &file_es_v1_options_proto_extTypes[5]
+	E_Subject = &file_es_v1_options_proto_extTypes[6]
 )
 
 var File_es_v1_options_proto protoreflect.FileDescriptor
@@ -132,7 +151,8 @@ const file_es_v1_options_proto_rawDesc = "" +
 	"\n" +
 	"\x13es/v1/options.proto\x12\x05es.v1\x1a google/protobuf/descriptor.proto:?\n" +
 	"\taggregate\x12\x1f.google.protobuf.MessageOptions\x18І\x03 \x01(\tR\taggregate:H\n" +
-	"\x0eschema_version\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\rR\rschemaVersion:D\n" +
+	"\x0eschema_version\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\rR\rschemaVersion:<\n" +
+	"\bsum_type\x12\x1f.google.protobuf.MessageOptions\x18҆\x03 \x01(\tR\asumType:D\n" +
 	"\rsubject_field\x12\x1d.google.protobuf.FieldOptions\x18І\x03 \x01(\bR\fsubjectField:8\n" +
 	"\anon_pii\x12\x1d.google.protobuf.FieldOptions\x18ц\x03 \x01(\bR\x06nonPii:H\n" +
 	"\x0fpii_intentional\x12\x1d.google.protobuf.FieldOptions\x18҆\x03 \x01(\bR\x0epiiIntentional:9\n" +
@@ -146,14 +166,15 @@ var file_es_v1_options_proto_goTypes = []any{
 var file_es_v1_options_proto_depIdxs = []int32{
 	0, // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
 	0, // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
-	1, // 2: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
-	1, // 3: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
-	1, // 4: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
-	1, // 5: es.v1.subject:extendee -> google.protobuf.FieldOptions
-	6, // [6:6] is the sub-list for method output_type
-	6, // [6:6] is the sub-list for method input_type
-	6, // [6:6] is the sub-list for extension type_name
-	0, // [0:6] is the sub-list for extension extendee
+	0, // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
+	1, // 3: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
+	1, // 4: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
+	1, // 5: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
+	1, // 6: es.v1.subject:extendee -> google.protobuf.FieldOptions
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	0, // [0:7] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
@@ -169,7 +190,7 @@ func file_es_v1_options_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_es_v1_options_proto_rawDesc), len(file_es_v1_options_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   0,
-			NumExtensions: 6,
+			NumExtensions: 7,
 			NumServices:   0,
 		},
 		GoTypes:           file_es_v1_options_proto_goTypes,

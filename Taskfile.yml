@@ -34,6 +34,7 @@ tasks:
   generate:
     desc: Run buf + sqlc codegen
     cmds:
+      - go install ./cmd/protoc-gen-es-go
       - cd proto && buf generate
       - cd {{.PG_MOD}} && sqlc generate
       - cd {{.SQ_MOD}} && sqlc generate
