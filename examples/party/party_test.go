@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -19,20 +20,20 @@ import (
 	partyv1 "github.com/laenenai/eventstore/gen/myapp/party/v1"
 )
 
-// Tests run against SQLite via modernc.org/sqlite. Default is ":memory:"
-// (fast, isolated). Set EVENTSTORE_TEST_DB=/path/to/file.db to test
-// against a persistent disk file — useful for debugging or seeing
-// what's actually written.
+// Tests run against SQLite via modernc.org/sqlite. Default is ":memory:".
+// Set EVENTSTORE_TEST_DB=/path/to/dir to persist DB files for debugging.
 
 const tenant = "t-party"
 
-func newRuntime(t *testing.T) *aggregate.Runtime[party.State, partyv1.Command, partyv1.Event] {
+func newRuntime(t *testing.T) *aggregate.Runtime[*party.State, partyv1.Command, partyv1.Event] {
 	t.Helper()
 
 	dsn := ":memory:"
-	if path := os.Getenv("EVENTSTORE_TEST_DB"); path != "" {
+	if dir := os.Getenv("EVENTSTORE_TEST_DB"); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+		safeName := strings.ReplaceAll(t.Name(), "/", "_")
 		dsn = fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)",
-			filepath.Join(path, t.Name()+".db"))
+			filepath.Join(dir, safeName+".db"))
 	}
 
 	db, err := sql.Open("sqlite", dsn)
@@ -45,15 +46,14 @@ func newRuntime(t *testing.T) *aggregate.Runtime[party.State, partyv1.Command, p
 	if err := a.Migrate(context.Background()); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	return &aggregate.Runtime[party.State, partyv1.Command, partyv1.Event]{
+	return &aggregate.Runtime[*party.State, partyv1.Command, partyv1.Event]{
 		Store:   a,
 		Decider: party.Decider,
 		Codec:   party.EventCodec,
 	}
 }
 
-// register is a test helper that creates and returns a registered party.
-func register(t *testing.T, rt *aggregate.Runtime[party.State, partyv1.Command, partyv1.Event], partyID string) es.StreamID {
+func register(t *testing.T, rt *aggregate.Runtime[*party.State, partyv1.Command, partyv1.Event], partyID string) es.StreamID {
 	t.Helper()
 	ctx := es.WithTenant(context.Background(), tenant)
 	sid := estest.MustStream(t, tenant, "party", partyID)
@@ -84,11 +84,11 @@ func TestRegister_Success(t *testing.T) {
 	if version != 1 {
 		t.Errorf("version: got %d want 1", version)
 	}
-	if state.Email != "p1@example.com" {
-		t.Errorf("Email: got %q want p1@example.com", state.Email)
+	if state.GetEmail() != "p1@example.com" {
+		t.Errorf("Email: got %q want p1@example.com", state.GetEmail())
 	}
-	if state.Status != party.StatusActive {
-		t.Errorf("Status: got %v want Active", state.Status)
+	if state.GetStatus() != partyv1.Status_STATUS_ACTIVE {
+		t.Errorf("Status: got %v want ACTIVE", state.GetStatus())
 	}
 }
 
@@ -114,8 +114,6 @@ func TestRegister_EmailUniqueAcrossStreams(t *testing.T) {
 	rt := newRuntime(t)
 	register(t, rt, "p1")
 
-	// A different party trying to register with the same email
-	// should be rejected by the uniqueness constraint.
 	ctx := es.WithTenant(context.Background(), tenant)
 	sid2 := estest.MustStream(t, tenant, "party", "p2")
 	_, err := rt.Handle(ctx, sid2, &partyv1.Register{
@@ -138,7 +136,6 @@ func TestProposeName_HappyPath(t *testing.T) {
 	sid := register(t, rt, "p1")
 	ctx := es.WithTenant(context.Background(), tenant)
 
-	// Maker proposes
 	if _, err := rt.Handle(ctx, sid, &partyv1.ProposeName{
 		ChangeId:   "c1",
 		Proposed:   &partyv1.Name{First: "Alice", Last: "Johnson"},
@@ -148,16 +145,14 @@ func TestProposeName_HappyPath(t *testing.T) {
 		t.Fatalf("ProposeName: %v", err)
 	}
 
-	// State now has a pending change
 	state, _, _ := rt.Load(ctx, sid)
-	if len(state.PendingChanges) != 1 {
-		t.Fatalf("expected 1 pending change, got %d", len(state.PendingChanges))
+	if len(state.GetPendingChanges()) != 1 {
+		t.Fatalf("expected 1 pending change, got %d", len(state.GetPendingChanges()))
 	}
-	if state.Name.Last != "Smith" {
-		t.Errorf("Name not yet applied; got %v", state.Name)
+	if state.GetName().GetLast() != "Smith" {
+		t.Errorf("Name not yet applied; got %v", state.GetName())
 	}
 
-	// Checker approves (different actor)
 	if _, err := rt.Handle(ctx, sid, &partyv1.Approve{
 		ChangeId:   "c1",
 		ApprovedBy: "checker-1",
@@ -166,13 +161,12 @@ func TestProposeName_HappyPath(t *testing.T) {
 		t.Fatalf("Approve: %v", err)
 	}
 
-	// State now reflects the new name
 	state, _, _ = rt.Load(ctx, sid)
-	if state.Name.Last != "Johnson" {
-		t.Errorf("Name not applied; got %v", state.Name)
+	if state.GetName().GetLast() != "Johnson" {
+		t.Errorf("Name not applied; got %v", state.GetName())
 	}
-	if len(state.PendingChanges) != 0 {
-		t.Errorf("expected pending cleared, got %d", len(state.PendingChanges))
+	if len(state.GetPendingChanges()) != 0 {
+		t.Errorf("expected pending cleared, got %d", len(state.GetPendingChanges()))
 	}
 }
 
@@ -187,7 +181,7 @@ func TestProposeName_SelfApprovalForbidden(t *testing.T) {
 	})
 
 	_, err := rt.Handle(ctx, sid, &partyv1.Approve{
-		ChangeId: "c1", ApprovedBy: "maker-1", // same actor
+		ChangeId: "c1", ApprovedBy: "maker-1",
 	})
 	if !errors.Is(err, party.ErrSelfApproval) {
 		t.Fatalf("expected ErrSelfApproval, got %v", err)
@@ -232,11 +226,11 @@ func TestProposeName_RejectedByChecker(t *testing.T) {
 	}
 
 	state, _, _ := rt.Load(ctx, sid)
-	if len(state.PendingChanges) != 0 {
-		t.Errorf("pending should be cleared after reject, got %d", len(state.PendingChanges))
+	if len(state.GetPendingChanges()) != 0 {
+		t.Errorf("pending should be cleared after reject, got %d", len(state.GetPendingChanges()))
 	}
-	if state.Name.First == "X" {
-		t.Errorf("rejected change was applied; got %v", state.Name)
+	if state.GetName().GetFirst() == "X" {
+		t.Errorf("rejected change was applied; got %v", state.GetName())
 	}
 }
 
@@ -250,7 +244,6 @@ func TestPropose_WithdrawnByProposer(t *testing.T) {
 		ProposedBy: "maker-1", Reason: "test",
 	})
 
-	// Wrong actor can't withdraw
 	_, err := rt.Handle(ctx, sid, &partyv1.Withdraw{
 		ChangeId: "c1", WithdrawnBy: "other",
 	})
@@ -258,7 +251,6 @@ func TestPropose_WithdrawnByProposer(t *testing.T) {
 		t.Fatalf("expected ErrNotProposer, got %v", err)
 	}
 
-	// Proposer can withdraw
 	if _, err := rt.Handle(ctx, sid, &partyv1.Withdraw{
 		ChangeId: "c1", WithdrawnBy: "maker-1",
 	}); err != nil {
@@ -266,7 +258,7 @@ func TestPropose_WithdrawnByProposer(t *testing.T) {
 	}
 
 	state, _, _ := rt.Load(ctx, sid)
-	if len(state.PendingChanges) != 0 {
+	if len(state.GetPendingChanges()) != 0 {
 		t.Errorf("pending should be cleared after withdraw")
 	}
 }
@@ -278,7 +270,6 @@ func TestProposeEmail_ApprovalReleasesOldClaimsNew(t *testing.T) {
 	sid := register(t, rt, "p1")
 	ctx := es.WithTenant(context.Background(), tenant)
 
-	// Propose new email
 	if _, err := rt.Handle(ctx, sid, &partyv1.ProposeEmail{
 		ChangeId: "ec1", Proposed: "alice-new@example.com",
 		ProposedBy: "maker-1", Reason: "email change",
@@ -286,25 +277,22 @@ func TestProposeEmail_ApprovalReleasesOldClaimsNew(t *testing.T) {
 		t.Fatalf("ProposeEmail: %v", err)
 	}
 
-	// Approve
 	if _, err := rt.Handle(ctx, sid, &partyv1.Approve{
 		ChangeId: "ec1", ApprovedBy: "checker-1",
 	}); err != nil {
 		t.Fatalf("Approve: %v", err)
 	}
 
-	// State has new email
 	state, _, _ := rt.Load(ctx, sid)
-	if state.Email != "alice-new@example.com" {
-		t.Errorf("Email: got %q want alice-new@example.com", state.Email)
+	if state.GetEmail() != "alice-new@example.com" {
+		t.Errorf("Email: got %q want alice-new@example.com", state.GetEmail())
 	}
 
-	// Old email is now free: a different party can claim it
+	// Old email is now free
 	sid2 := estest.MustStream(t, tenant, "party", "p2")
 	_, err := rt.Handle(ctx, sid2, &partyv1.Register{
 		Name:        &partyv1.Name{First: "Bob", Last: "Jones"},
-		Email:       "p1@example.com", // released
-		Phone:       "+1-555-0200",
+		Email:       "p1@example.com",
 		Address:     &partyv1.Address{Line1: "2", City: "X", Country: "US"},
 		DateOfBirth: "1990-01-01",
 		ActorId:     "system",
@@ -313,12 +301,11 @@ func TestProposeEmail_ApprovalReleasesOldClaimsNew(t *testing.T) {
 		t.Fatalf("re-register with released email: %v", err)
 	}
 
-	// New email is taken: third party can't claim it
+	// New email is taken
 	sid3 := estest.MustStream(t, tenant, "party", "p3")
 	_, err = rt.Handle(ctx, sid3, &partyv1.Register{
 		Name:        &partyv1.Name{First: "Carol", Last: "K"},
-		Email:       "alice-new@example.com", // claimed by p1
-		Phone:       "",
+		Email:       "alice-new@example.com",
 		Address:     &partyv1.Address{Line1: "3", City: "X", Country: "US"},
 		DateOfBirth: "1990-01-01",
 		ActorId:     "system",
@@ -342,11 +329,11 @@ func TestUpdatePhone_AutoApplied(t *testing.T) {
 	}
 
 	state, _, _ := rt.Load(ctx, sid)
-	if state.Phone != "+44-20-7946-0958" {
-		t.Errorf("Phone not updated; got %q", state.Phone)
+	if state.GetPhone() != "+44-20-7946-0958" {
+		t.Errorf("Phone not updated; got %q", state.GetPhone())
 	}
-	if len(state.PendingChanges) != 0 {
-		t.Errorf("expected no pending changes for auto-apply, got %d", len(state.PendingChanges))
+	if len(state.GetPendingChanges()) != 0 {
+		t.Errorf("expected no pending changes for auto-apply, got %d", len(state.GetPendingChanges()))
 	}
 }
 
@@ -363,8 +350,8 @@ func TestUpdateAddress_AutoApplied(t *testing.T) {
 	}
 
 	state, _, _ := rt.Load(ctx, sid)
-	if state.Address.Country != "GB" {
-		t.Errorf("Address not updated; got %+v", state.Address)
+	if state.GetAddress().GetCountry() != "GB" {
+		t.Errorf("Address not updated; got %+v", state.GetAddress())
 	}
 }
 
@@ -417,18 +404,15 @@ func TestClose_ReleasesEmailClaim(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Closed: cannot reactivate
 	_, err := rt.Handle(ctx, sid, &partyv1.Reactivate{ActorId: "admin"})
 	if !errors.Is(err, party.ErrNotSuspended) {
 		t.Fatalf("Reactivate on closed: expected ErrNotSuspended, got %v", err)
 	}
 
-	// Closed: email is released, new party can claim it
 	sid2 := estest.MustStream(t, tenant, "party", "p2")
 	_, err = rt.Handle(ctx, sid2, &partyv1.Register{
 		Name:        &partyv1.Name{First: "B", Last: "C"},
 		Email:       "p1@example.com",
-		Phone:       "",
 		Address:     &partyv1.Address{Line1: "1", City: "X", Country: "US"},
 		DateOfBirth: "1990-01-01",
 		ActorId:     "system",

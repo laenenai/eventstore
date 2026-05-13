@@ -7,17 +7,14 @@ import (
 	partyv1 "github.com/laenenai/eventstore/gen/myapp/party/v1"
 )
 
-// uniqueScopeEmail is the constraint scope name under which email
-// addresses are claimed. Decided by domain convention.
+// uniqueScopeEmail is the constraint scope under which email addresses
+// are claimed. Decided by domain convention.
 const uniqueScopeEmail = "party.email"
 
-// Decider is the party aggregate's pure-function logic. Used by
-// aggregate.Runtime to drive Load + Handle.
-var Decider = es.Decider[State, partyv1.Command, partyv1.Event]{
-	Initial: func() State {
-		return State{
-			PendingChanges: map[string]PendingChange{},
-		}
+// Decider is the party aggregate's pure-function logic.
+var Decider = es.Decider[*State, partyv1.Command, partyv1.Event]{
+	Initial: func() *State {
+		return &State{}
 	},
 	Decide: decide,
 	Evolve: evolve,
@@ -27,38 +24,41 @@ var Decider = es.Decider[State, partyv1.Command, partyv1.Event]{
 // Decide — business rules
 // ==========================================================================
 
-func decide(s State, c partyv1.Command) ([]partyv1.Event, []es.ConstraintOp, error) {
+func decide(s *State, c partyv1.Command) ([]partyv1.Event, []es.ConstraintOp, error) {
 	switch cmd := c.(type) {
 	case *partyv1.Register:
 		return decideRegister(s, cmd)
 
 	case *partyv1.ProposeName:
-		return decidePropose(s, cmd.ProposedBy, cmd.ChangeId, cmd.Reason,
-			PendingChangeName, func() partyv1.Event {
+		return decidePropose(s, cmd.GetProposedBy(), cmd.GetChangeId(),
+			hasPending[*partyv1.PendingChange_Name](s),
+			func() partyv1.Event {
 				return &partyv1.NameChangeProposed{
-					ChangeId: cmd.ChangeId, Proposed: cmd.Proposed,
-					ProposedBy: cmd.ProposedBy, Reason: cmd.Reason,
+					ChangeId: cmd.GetChangeId(), Proposed: cmd.GetProposed(),
+					ProposedBy: cmd.GetProposedBy(), Reason: cmd.GetReason(),
 				}
 			})
 
 	case *partyv1.ProposeEmail:
-		if err := validateEmail(cmd.Proposed); err != nil {
+		if err := validateEmail(cmd.GetProposed()); err != nil {
 			return nil, nil, err
 		}
-		return decidePropose(s, cmd.ProposedBy, cmd.ChangeId, cmd.Reason,
-			PendingChangeEmail, func() partyv1.Event {
+		return decidePropose(s, cmd.GetProposedBy(), cmd.GetChangeId(),
+			hasPending[*partyv1.PendingChange_Email](s),
+			func() partyv1.Event {
 				return &partyv1.EmailChangeProposed{
-					ChangeId: cmd.ChangeId, Proposed: cmd.Proposed,
-					ProposedBy: cmd.ProposedBy, Reason: cmd.Reason,
+					ChangeId: cmd.GetChangeId(), Proposed: cmd.GetProposed(),
+					ProposedBy: cmd.GetProposedBy(), Reason: cmd.GetReason(),
 				}
 			})
 
 	case *partyv1.ProposeDateOfBirth:
-		return decidePropose(s, cmd.ProposedBy, cmd.ChangeId, cmd.Reason,
-			PendingChangeDateOfBirth, func() partyv1.Event {
+		return decidePropose(s, cmd.GetProposedBy(), cmd.GetChangeId(),
+			hasPending[*partyv1.PendingChange_DateOfBirth](s),
+			func() partyv1.Event {
 				return &partyv1.DateOfBirthChangeProposed{
-					ChangeId: cmd.ChangeId, Proposed: cmd.Proposed,
-					ProposedBy: cmd.ProposedBy, Reason: cmd.Reason,
+					ChangeId: cmd.GetChangeId(), Proposed: cmd.GetProposed(),
+					ProposedBy: cmd.GetProposedBy(), Reason: cmd.GetReason(),
 				}
 			})
 
@@ -76,7 +76,7 @@ func decide(s State, c partyv1.Command) ([]partyv1.Event, []es.ConstraintOp, err
 			return nil, nil, err
 		}
 		return []partyv1.Event{&partyv1.PhoneUpdated{
-			NewPhone: cmd.NewPhone, ActorId: cmd.ActorId,
+			NewPhone: cmd.GetNewPhone(), ActorId: cmd.GetActorId(),
 		}}, nil, nil
 
 	case *partyv1.UpdateAddress:
@@ -84,63 +84,70 @@ func decide(s State, c partyv1.Command) ([]partyv1.Event, []es.ConstraintOp, err
 			return nil, nil, err
 		}
 		return []partyv1.Event{&partyv1.AddressUpdated{
-			NewAddress: cmd.NewAddress, ActorId: cmd.ActorId,
+			NewAddress: cmd.GetNewAddress(), ActorId: cmd.GetActorId(),
 		}}, nil, nil
 
 	case *partyv1.Suspend:
 		if err := requireActive(s); err != nil {
 			return nil, nil, err
 		}
-		return []partyv1.Event{&partyv1.Suspended{ActorId: cmd.ActorId, Reason: cmd.Reason}}, nil, nil
+		return []partyv1.Event{&partyv1.Suspended{
+			ActorId: cmd.GetActorId(), Reason: cmd.GetReason(),
+		}}, nil, nil
 
 	case *partyv1.Reactivate:
-		if s.Status != StatusSuspended {
+		if s.GetStatus() != partyv1.Status_STATUS_SUSPENDED {
 			return nil, nil, ErrNotSuspended
 		}
-		return []partyv1.Event{&partyv1.Reactivated{ActorId: cmd.ActorId, Comment: cmd.Comment}}, nil, nil
+		return []partyv1.Event{&partyv1.Reactivated{
+			ActorId: cmd.GetActorId(), Comment: cmd.GetComment(),
+		}}, nil, nil
 
 	case *partyv1.Close:
-		if s.PartyID == "" {
+		if s.GetPartyId() == "" {
 			return nil, nil, ErrNotRegistered
 		}
-		if s.Status == StatusClosed {
+		if s.GetStatus() == partyv1.Status_STATUS_CLOSED {
 			return nil, nil, ErrAlreadyClosed
 		}
-		// Releasing the email's unique-claim frees the address for
-		// reuse on a future Register.
-		return []partyv1.Event{&partyv1.Closed{ActorId: cmd.ActorId, Reason: cmd.Reason}},
-			[]es.ConstraintOp{{Op: es.ReleaseConstraint, Scope: uniqueScopeEmail, Value: s.Email}}, nil
+		return []partyv1.Event{&partyv1.Closed{
+				ActorId: cmd.GetActorId(), Reason: cmd.GetReason(),
+			}},
+			[]es.ConstraintOp{{
+				Op: es.ReleaseConstraint, Scope: uniqueScopeEmail, Value: s.GetEmail(),
+			}}, nil
 	}
 
 	return nil, nil, ErrInvalidInput
 }
 
-func decideRegister(s State, cmd *partyv1.Register) ([]partyv1.Event, []es.ConstraintOp, error) {
-	if s.PartyID != "" {
+func decideRegister(s *State, cmd *partyv1.Register) ([]partyv1.Event, []es.ConstraintOp, error) {
+	if s.GetPartyId() != "" {
 		return nil, nil, ErrAlreadyRegistered
 	}
-	if cmd.Name == nil || cmd.Name.First == "" || cmd.Name.Last == "" {
+	if cmd.GetName() == nil || cmd.GetName().GetFirst() == "" || cmd.GetName().GetLast() == "" {
 		return nil, nil, ErrInvalidInput
 	}
-	if err := validateEmail(cmd.Email); err != nil {
+	if err := validateEmail(cmd.GetEmail()); err != nil {
 		return nil, nil, err
 	}
-
 	return []partyv1.Event{&partyv1.Registered{
-			Name:        cmd.Name,
-			Email:       cmd.Email,
-			Phone:       cmd.Phone,
-			Address:     cmd.Address,
-			DateOfBirth: cmd.DateOfBirth,
-			ActorId:     cmd.ActorId,
+			Name:        cmd.GetName(),
+			Email:       cmd.GetEmail(),
+			Phone:       cmd.GetPhone(),
+			Address:     cmd.GetAddress(),
+			DateOfBirth: cmd.GetDateOfBirth(),
+			ActorId:     cmd.GetActorId(),
 		}},
-		[]es.ConstraintOp{{Op: es.ClaimConstraint, Scope: uniqueScopeEmail, Value: cmd.Email}}, nil
+		[]es.ConstraintOp{{
+			Op: es.ClaimConstraint, Scope: uniqueScopeEmail, Value: cmd.GetEmail(),
+		}}, nil
 }
 
 func decidePropose(
-	s State,
-	proposedBy, changeID, reason string,
-	kind PendingChangeKind,
+	s *State,
+	proposedBy, changeID string,
+	pendingExists bool,
 	makeEvent func() partyv1.Event,
 ) ([]partyv1.Event, []es.ConstraintOp, error) {
 	if err := requireActive(s); err != nil {
@@ -149,84 +156,82 @@ func decidePropose(
 	if changeID == "" || proposedBy == "" {
 		return nil, nil, ErrInvalidInput
 	}
-	if s.HasPending(kind) {
+	if pendingExists {
 		return nil, nil, ErrPendingExists
 	}
 	return []partyv1.Event{makeEvent()}, nil, nil
 }
 
-func decideApprove(s State, cmd *partyv1.Approve) ([]partyv1.Event, []es.ConstraintOp, error) {
+func decideApprove(s *State, cmd *partyv1.Approve) ([]partyv1.Event, []es.ConstraintOp, error) {
 	if err := requireActive(s); err != nil {
 		return nil, nil, err
 	}
-	pc, ok := s.PendingChanges[cmd.ChangeId]
-	if !ok {
+	pc, _ := findPending(s, cmd.GetChangeId())
+	if pc == nil {
 		return nil, nil, ErrNoSuchChange
 	}
-	if pc.ProposedBy == cmd.ApprovedBy {
+	if pc.GetProposedBy() == cmd.GetApprovedBy() {
 		return nil, nil, ErrSelfApproval
 	}
 
-	switch pc.Kind {
-	case PendingChangeName:
+	switch p := pc.GetProposed().(type) {
+	case *partyv1.PendingChange_Name:
 		return []partyv1.Event{&partyv1.NameChangeApplied{
-			ChangeId: pc.ChangeID, ApprovedBy: cmd.ApprovedBy,
-			NewName: nameToProto(pc.NameVal),
+			ChangeId: pc.GetChangeId(), ApprovedBy: cmd.GetApprovedBy(),
+			NewName: p.Name,
 		}}, nil, nil
 
-	case PendingChangeEmail:
-		// Atomically release the old claim and acquire the new one.
+	case *partyv1.PendingChange_Email:
 		return []partyv1.Event{&partyv1.EmailChangeApplied{
-				ChangeId: pc.ChangeID, ApprovedBy: cmd.ApprovedBy,
-				OldEmail: s.Email, NewEmail: pc.EmailVal,
+				ChangeId: pc.GetChangeId(), ApprovedBy: cmd.GetApprovedBy(),
+				OldEmail: s.GetEmail(), NewEmail: p.Email,
 			}},
 			[]es.ConstraintOp{
-				{Op: es.ReleaseConstraint, Scope: uniqueScopeEmail, Value: s.Email},
-				{Op: es.ClaimConstraint, Scope: uniqueScopeEmail, Value: pc.EmailVal},
+				{Op: es.ReleaseConstraint, Scope: uniqueScopeEmail, Value: s.GetEmail()},
+				{Op: es.ClaimConstraint, Scope: uniqueScopeEmail, Value: p.Email},
 			}, nil
 
-	case PendingChangeDateOfBirth:
+	case *partyv1.PendingChange_DateOfBirth:
 		return []partyv1.Event{&partyv1.DateOfBirthChangeApplied{
-			ChangeId: pc.ChangeID, ApprovedBy: cmd.ApprovedBy,
-			NewDateOfBirth: pc.DOBVal,
+			ChangeId: pc.GetChangeId(), ApprovedBy: cmd.GetApprovedBy(),
+			NewDateOfBirth: p.DateOfBirth,
 		}}, nil, nil
 	}
 	return nil, nil, ErrInvalidInput
 }
 
-func decideReject(s State, cmd *partyv1.Reject) ([]partyv1.Event, []es.ConstraintOp, error) {
-	pc, ok := s.PendingChanges[cmd.ChangeId]
-	if !ok {
+func decideReject(s *State, cmd *partyv1.Reject) ([]partyv1.Event, []es.ConstraintOp, error) {
+	pc, _ := findPending(s, cmd.GetChangeId())
+	if pc == nil {
 		return nil, nil, ErrNoSuchChange
 	}
-	if pc.ProposedBy == cmd.RejectedBy {
+	if pc.GetProposedBy() == cmd.GetRejectedBy() {
 		return nil, nil, ErrSelfReject
 	}
 	return []partyv1.Event{&partyv1.ChangeRejected{
-		ChangeId: pc.ChangeID, RejectedBy: cmd.RejectedBy, Reason: cmd.Reason,
+		ChangeId: pc.GetChangeId(), RejectedBy: cmd.GetRejectedBy(), Reason: cmd.GetReason(),
 	}}, nil, nil
 }
 
-func decideWithdraw(s State, cmd *partyv1.Withdraw) ([]partyv1.Event, []es.ConstraintOp, error) {
-	pc, ok := s.PendingChanges[cmd.ChangeId]
-	if !ok {
+func decideWithdraw(s *State, cmd *partyv1.Withdraw) ([]partyv1.Event, []es.ConstraintOp, error) {
+	pc, _ := findPending(s, cmd.GetChangeId())
+	if pc == nil {
 		return nil, nil, ErrNoSuchChange
 	}
-	if pc.ProposedBy != cmd.WithdrawnBy {
+	if pc.GetProposedBy() != cmd.GetWithdrawnBy() {
 		return nil, nil, ErrNotProposer
 	}
 	return []partyv1.Event{&partyv1.ChangeWithdrawn{
-		ChangeId: pc.ChangeID, WithdrawnBy: cmd.WithdrawnBy,
+		ChangeId: pc.GetChangeId(), WithdrawnBy: cmd.GetWithdrawnBy(),
 	}}, nil, nil
 }
 
-// requireActive enforces "party must be registered and active" for
-// commands that mutate the live record.
-func requireActive(s State) error {
-	if s.PartyID == "" {
+// requireActive enforces "party must be registered and active".
+func requireActive(s *State) error {
+	if s.GetPartyId() == "" {
 		return ErrNotRegistered
 	}
-	if s.Status != StatusActive {
+	if s.GetStatus() != partyv1.Status_STATUS_ACTIVE {
 		return ErrNotActive
 	}
 	return nil
@@ -240,83 +245,85 @@ func validateEmail(email string) error {
 }
 
 // ==========================================================================
-// Evolve — fold events into state
+// Evolve — fold events into state (mutates the proto pointer in place)
 // ==========================================================================
 
-func evolve(s State, e partyv1.Event) State {
-	if s.PendingChanges == nil {
-		s.PendingChanges = map[string]PendingChange{}
-	}
-
+func evolve(s *State, e partyv1.Event) *State {
 	switch evt := e.(type) {
 	case *partyv1.Registered:
-		s.PartyID = evt.ActorId // by convention; many domains use a separate id
-		s.Name = nameFromProto(evt.Name)
-		s.Email = evt.Email
-		s.Phone = evt.Phone
-		s.Address = addressFromProto(evt.Address)
-		s.DateOfBirth = evt.DateOfBirth
-		s.Status = StatusActive
-		s.CreatedBy = evt.ActorId
+		s.PartyId = evt.GetActorId() // convention; many domains use a separate id
+		s.Name = evt.GetName()
+		s.Email = evt.GetEmail()
+		s.Phone = evt.GetPhone()
+		s.Address = evt.GetAddress()
+		s.DateOfBirth = evt.GetDateOfBirth()
+		s.Status = partyv1.Status_STATUS_ACTIVE
+		s.CreatedBy = evt.GetActorId()
 
 	case *partyv1.NameChangeProposed:
-		s.PendingChanges[evt.ChangeId] = PendingChange{
-			ChangeID:   evt.ChangeId,
-			ProposedBy: evt.ProposedBy,
-			Reason:     evt.Reason,
-			Kind:       PendingChangeName,
-			NameVal:    nameFromProto(evt.Proposed),
-		}
+		s.PendingChanges = append(s.PendingChanges, &partyv1.PendingChange{
+			ChangeId:   evt.GetChangeId(),
+			ProposedBy: evt.GetProposedBy(),
+			Reason:     evt.GetReason(),
+			Proposed:   &partyv1.PendingChange_Name{Name: evt.GetProposed()},
+		})
 	case *partyv1.NameChangeApplied:
-		delete(s.PendingChanges, evt.ChangeId)
-		s.Name = nameFromProto(evt.NewName)
+		if _, i := findPending(s, evt.GetChangeId()); i >= 0 {
+			removePending(s, i)
+		}
+		s.Name = evt.GetNewName()
 
 	case *partyv1.EmailChangeProposed:
-		s.PendingChanges[evt.ChangeId] = PendingChange{
-			ChangeID:   evt.ChangeId,
-			ProposedBy: evt.ProposedBy,
-			Reason:     evt.Reason,
-			Kind:       PendingChangeEmail,
-			EmailVal:   evt.Proposed,
-		}
+		s.PendingChanges = append(s.PendingChanges, &partyv1.PendingChange{
+			ChangeId:   evt.GetChangeId(),
+			ProposedBy: evt.GetProposedBy(),
+			Reason:     evt.GetReason(),
+			Proposed:   &partyv1.PendingChange_Email{Email: evt.GetProposed()},
+		})
 	case *partyv1.EmailChangeApplied:
-		delete(s.PendingChanges, evt.ChangeId)
-		s.Email = evt.NewEmail
+		if _, i := findPending(s, evt.GetChangeId()); i >= 0 {
+			removePending(s, i)
+		}
+		s.Email = evt.GetNewEmail()
 
 	case *partyv1.DateOfBirthChangeProposed:
-		s.PendingChanges[evt.ChangeId] = PendingChange{
-			ChangeID:   evt.ChangeId,
-			ProposedBy: evt.ProposedBy,
-			Reason:     evt.Reason,
-			Kind:       PendingChangeDateOfBirth,
-			DOBVal:     evt.Proposed,
-		}
+		s.PendingChanges = append(s.PendingChanges, &partyv1.PendingChange{
+			ChangeId:   evt.GetChangeId(),
+			ProposedBy: evt.GetProposedBy(),
+			Reason:     evt.GetReason(),
+			Proposed:   &partyv1.PendingChange_DateOfBirth{DateOfBirth: evt.GetProposed()},
+		})
 	case *partyv1.DateOfBirthChangeApplied:
-		delete(s.PendingChanges, evt.ChangeId)
-		s.DateOfBirth = evt.NewDateOfBirth
+		if _, i := findPending(s, evt.GetChangeId()); i >= 0 {
+			removePending(s, i)
+		}
+		s.DateOfBirth = evt.GetNewDateOfBirth()
 
 	case *partyv1.ChangeRejected:
-		delete(s.PendingChanges, evt.ChangeId)
+		if _, i := findPending(s, evt.GetChangeId()); i >= 0 {
+			removePending(s, i)
+		}
 	case *partyv1.ChangeWithdrawn:
-		delete(s.PendingChanges, evt.ChangeId)
+		if _, i := findPending(s, evt.GetChangeId()); i >= 0 {
+			removePending(s, i)
+		}
 
 	case *partyv1.PhoneUpdated:
-		s.Phone = evt.NewPhone
+		s.Phone = evt.GetNewPhone()
 	case *partyv1.AddressUpdated:
-		s.Address = addressFromProto(evt.NewAddress)
+		s.Address = evt.GetNewAddress()
 
 	case *partyv1.Suspended:
-		s.Status = StatusSuspended
+		s.Status = partyv1.Status_STATUS_SUSPENDED
 	case *partyv1.Reactivated:
-		s.Status = StatusActive
+		s.Status = partyv1.Status_STATUS_ACTIVE
 	case *partyv1.Closed:
-		s.Status = StatusClosed
+		s.Status = partyv1.Status_STATUS_CLOSED
 	}
 
 	return s
 }
 
-// EventCodec is the codegen-emitted codec for the Event sum type.
-// Re-exported here so consumers wire it without importing the proto
-// package directly.
+// EventCodec is the codegen-emitted codec for the Event sum type,
+// re-exported here for ergonomic wiring at the runtime construction site.
 var EventCodec = partyv1.EventCodec{}

@@ -56,37 +56,57 @@ actually ship.
 
 ## State shape
 
-State is a hand-written Go struct, not the proto `Party` message
-directly. The decider is generic over `(S, C, E)` and only the wire
-shapes (commands and events) need to come from codegen:
+State **is** the proto-defined `Party` message — used directly as the
+aggregate's folded state, not duplicated as a parallel Go struct. The
+decider is generic over `(S, C, E)`; using `*partyv1.Party` as `S`
+means the schema lives in exactly one place.
 
 ```go
-type State struct {
-    PartyID        string
-    Name           Name
-    Email          string
-    Phone          string
-    Address        Address
-    DateOfBirth    string
-    Status         Status                     // active | suspended | closed
-    PendingChanges map[string]PendingChange   // keyed by change_id
-    CreatedBy      string
-}
-
-type PendingChange struct {
-    ChangeID, ProposedBy, Reason string
-    Kind                         PendingChangeKind  // discriminator
-    NameVal                      Name               // for PendingChangeName
-    EmailVal                     string             // for PendingChangeEmail
-    DOBVal                       string             // for PendingChangeDateOfBirth
-}
+// state.go
+type State = partyv1.Party
 ```
 
-The proto `Party` message uses `repeated PendingChange` with a oneof
-inside (see [`party.proto`](../../proto/myapp/party/v1/party.proto)).
-The Go state uses a map for O(1) Approve/Reject/Withdraw lookups. The
-"at most one pending per kind" invariant is enforced by the decider,
-not the schema.
+That's it. No conversion helpers, no `Name`/`Address` Go types
+shadowing the proto, no `PendingChangeKind` discriminator enum —
+the proto's oneof inside `PendingChange` already discriminates.
+
+The decider's `Decide` reads state via the generated proto accessors
+(`s.GetEmail()`, `s.GetStatus()`, `s.GetPendingChanges()`); `Evolve`
+mutates the proto pointer in place:
+
+```go
+case *partyv1.Registered:
+    s.Name = evt.GetName()
+    s.Email = evt.GetEmail()
+    s.Status = partyv1.Status_STATUS_ACTIVE
+    // ...
+```
+
+The "at most one pending per change kind" invariant is enforced by
+the decider (via the generic `hasPending[T]` helper in `state.go`),
+not the schema. The proto `repeated PendingChange` allows N entries;
+the decider rejects propose commands that would create a second
+pending of the same oneof variant.
+
+### Why proto state and not a hand-written Go struct?
+
+- **Single source of truth.** The schema lives in the .proto.
+- **Snapshots are free.** When ADR 0011 snapshots get wired up,
+  `proto.Marshal(state)` is the implementation; no separate
+  serialization layer.
+- **Less code.** State is one type alias plus three helpers; no
+  parallel struct, no field-by-field conversion.
+- **Aligns with "proto is the schema"** — the same principle that
+  drives the payload format choice in ADR 0006.
+
+The trade-off is using proto's pointer-based message types (`*Name`,
+`*Address`) and the slightly noisier oneof wrapper syntax inside
+`Evolve` (`&partyv1.PendingChange_Name{Name: x}`). Both are
+contained to the decider's *internal* mutation code, never leaking
+into the caller-facing command API.
+
+For a smaller / less proto-shaped aggregate, a hand-written state
+struct is also defensible — the framework supports either.
 
 ## Business rules (Decide)
 
