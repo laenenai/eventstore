@@ -22,12 +22,14 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 02 | [Stateful saga](./02-stateful-saga.md)                          | Multi-step coordination across events with internal state.                      |
 | 03 | [Cross-aggregate workflow with compensation](./03-cross-aggregate-workflow.md) | Money transfer and similar all-or-nothing flows across aggregates.              |
 | 04 | [Time-based triggers](./04-time-based-triggers.md)              | "Cancel order after 24h with no payment" — in a scale-to-zero deployment.        |
-| 05 | [Layered authorization](./05-layered-authz.md)                  | Wrap `aggregate.Runtime` with a Policy check (Cedar / OPA / RBAC); deliberately not a framework feature. |
+| 05 | [Layered authorization](./05-layered-authz.md)                  | Wrap `aggregate.Runtime` with a Policy check; framework-shipped Cedar adapter (`adapters/authz/cedar`) plus the pattern for OPA / RBAC. |
 | 06 | [Running the outbox drain](./06-running-the-drain.md)           | Five deployment patterns, plus failure handling: backoff, retries, DLQ semantics (quarantine vs auto-resume), `OutboxAdmin` for dashboards and operator replay/abandon. |
 | 07 | [Read models via materialized views](./07-read-models-via-materialized-views.md) | Filtered/joined/aggregated read shapes over Tier 1 `state_cache` via Postgres MVs + scheduled REFRESH; SQLite alternatives. |
 | 08 | [Rebuilding projections](./08-rebuilding-projections.md)        | Truncate-and-replay, versioned parallel rebuild for zero-downtime, and the Tier-1 `state_cache` rebuild helper. |
 | 09 | [Snapshots](./09-snapshots.md)                                  | Enabling snapshots via StateSchemaVersion + SnapshotEvery; tuning cadence; schema-bump operator workflow. |
 | 10 | [Restate as the event publisher](./10-restate-publisher.md)     | Wiring `restate.Publisher`, the receiver-side Restate service shape, idempotency-key semantics, deployment notes. |
+| 11 | [Crypto-shredding for PII](./11-crypto-shredding.md)            | PII proto annotations, `pii_manifest.json` review, `ForgetSubject`, `RewrapDEKs` for KEK rotation, redacted reads. |
+| 12 | [Linked projections / derived streams](./12-linked-projections.md) | Tier 3.5: routing (`OrderShipped` → `FulfillmentTask`) and fan-in audit ledger patterns. Idempotent emit, lineage, replay. |
 
 ## Conventions used in these recipes
 

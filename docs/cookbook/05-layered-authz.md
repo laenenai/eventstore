@@ -109,45 +109,105 @@ be application code.
 
 ## Engine implementations
 
-### Cedar
+### Cedar — framework-shipped adapter
 
-[Cedar](https://www.cedarpolicy.com/) is AWS's policy language with a
-Go SDK (`github.com/cedar-policy/cedar-go`).
+The framework ships a ready-to-use Cedar adapter at
+[`adapters/authz/cedar`](../../adapters/authz/cedar). It satisfies the
+`authz.Policy` interface defined in [`authz/`](../../authz/) — the
+same engine-agnostic seam the rest of this recipe uses.
 
 ```go
-package authzcedar
+import (
+    "github.com/laenenai/eventstore/adapters/authz/cedar"
+    "github.com/laenenai/eventstore/authz"
+)
+
+const policies = `
+permit (
+    principal in Group::"compliance",
+    action == Action::"myapp.party.v1.Approve",
+    resource is Stream
+);
+
+permit (
+    principal == User::"alice",
+    action == Action::"myapp.party.v1.Update",
+    resource is Stream
+);
+`
+
+const entities = `[
+    { "uid": {"type": "User",  "id": "alice"},
+      "attrs": {},
+      "parents": [{"type": "Group", "id": "compliance"}] }
+]`
+
+p, err := cedar.New(cedar.Config{
+    Policies: policies,
+    Entities: cedar.EntitiesJSON(entities),
+})
+if err != nil { return err }
+
+// Now p satisfies authz.Policy — use it inside your Runtime wrapper
+// (the pattern at the top of this recipe).
+if err := p.Authorize(ctx, authz.Request{
+    Principal: authz.Principal{ID: "alice", Type: "User"},
+    Action:    cmd.(interface{ Action() string }).Action(),
+    Stream:    sid,
+}); err != nil {
+    // errors.Is(err, authz.ErrUnauthorized) for the deny case.
+    return err
+}
+```
+
+The adapter maps `authz.Request` onto Cedar requests directly:
+`Principal.ID + Principal.Type → EntityUID`, `Action → Action::"<value>"`,
+`Stream → Stream::"<canonical>"`. Configuration knobs:
+
+- **`Policies`** — Cedar policy text (one document).
+- **`Entities`** — entity store as `cedar.EntityMap` (use `EntitiesJSON`
+  for the JSON form).
+- **`AllowMissingPrincipal`** (default false) — when true, requests
+  without a Principal fall through to Cedar with an empty principal.
+  Useful for "anyone can read" actions.
+
+Separate Go module — the Cedar SDK dependency is isolated to
+`adapters/authz/cedar` so consumers who don't use Cedar don't pull it
+into their go.mod.
+
+### Rolling your own engine
+
+If your authz lives in OPA / Zanzibar / a custom RBAC service / a
+home-grown rule engine, implement `authz.Policy` in a small
+application-internal package. The interface is one method:
+
+```go
+package myauthz
 
 import (
     "context"
-    "fmt"
 
-    cedar "github.com/cedar-policy/cedar-go"
-
-    "github.com/laenenai/eventstore/es"
-    "github.com/<you>/myapp/authz"
+    "github.com/laenenai/eventstore/authz"
 )
 
-type Policy struct {
-    set *cedar.PolicySet
-}
-
-func New(set *cedar.PolicySet) *Policy { return &Policy{set: set} }
+type Policy struct { /* engine state */ }
 
 func (p *Policy) Authorize(ctx context.Context, req authz.Request) error {
-    decision := p.set.IsAuthorized(cedar.Request{
-        Principal: principalToEntity(req.Principal),
-        Action:    cedar.NewEntityUID("Action", req.Action),
-        Resource:  streamToEntity(req.Stream),
-        Context:   resourceContext(req.Resource),
-    })
-    if !decision.Allowed {
-        return fmt.Errorf("forbidden: %s", decision.Reasons)
+    // ... your engine's check ...
+    if !allowed {
+        return authz.ErrUnauthorized
     }
     return nil
 }
 ```
 
-Example policy for the Party aggregate:
+### Example: real Cedar policies for the Party aggregate
+
+The Cedar adapter above evaluates policies like the following. This
+is the same shape you'd write in any Cedar-based system; the
+framework just feeds it the right `Action::` / `Stream::` values
+derived from the codegen-emitted `Action()` method and the command's
+StreamID.
 
 ```cedar
 // Compliance can approve any change, except their own.
