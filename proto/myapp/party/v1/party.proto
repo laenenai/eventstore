@@ -1,0 +1,303 @@
+syntax = "proto3";
+
+package myapp.party.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/myapp/party/v1;partyv1";
+
+// Party (individual) — a complex example demonstrating the framework's
+// features end-to-end:
+//
+//   - First-class uniqueness (email is unique per tenant)
+//   - PII annotations (name, email, phone, address are encrypted by default;
+//     party_id is the subject identifier)
+//   - Maker-checker workflow for identity-critical fields (name, email, DOB)
+//     with propose -> approve/reject/withdraw
+//   - Auto-apply workflow for correspondence fields (phone, address)
+//   - Status state machine (active -> suspended -> reactivate / close)
+//   - Generic pending-changes representation: one slice + oneof inside,
+//     "at most one pending per change type" enforced by the decider
+//
+// See examples/party/README.md for the walkthrough.
+
+// ==========================================================================
+// State
+// ==========================================================================
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE      = 1;
+  STATUS_SUSPENDED   = 2;
+  STATUS_CLOSED      = 3;
+}
+
+message Name {
+  string first = 1;
+  string last  = 2;
+}
+
+message Address {
+  string line1       = 1;
+  string line2       = 2;
+  string city        = 3;
+  string postal_code = 4;
+  string country     = 5; // ISO 3166-1 alpha-2
+}
+
+// Party — the aggregate's State message. The (es.v1.aggregate) option
+// marks it for future typed StreamID codegen; the Go-side state struct
+// in examples/party/state.go is the actual runtime shape.
+message Party {
+  option (es.v1.aggregate) = "party";
+
+  string party_id = 1 [(es.v1.subject_field) = true];
+
+  Name    name          = 2;
+  string  email         = 3;
+  string  phone         = 4;
+  Address address       = 5;
+  string  date_of_birth = 6; // ISO 8601 date
+
+  Status status = 7 [(es.v1.non_pii) = true];
+
+  // Generic. The decider enforces "at most one pending per change type".
+  repeated PendingChange pending_changes = 8;
+
+  string created_by = 20 [(es.v1.non_pii) = true];
+}
+
+message PendingChange {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string proposed_by = 2 [(es.v1.non_pii) = true];
+  string reason      = 3;
+
+  // Discriminated by the oneof variant. New change types are added
+  // here without touching Party state or the Approve/Reject commands.
+  oneof proposed {
+    Name   name          = 10;
+    string email         = 11;
+    string date_of_birth = 12;
+  }
+}
+
+// ==========================================================================
+// Commands
+// ==========================================================================
+
+// Lifecycle
+message Register {
+  Name    name          = 1;
+  string  email         = 2;
+  string  phone         = 3;
+  Address address       = 4;
+  string  date_of_birth = 5;
+  string  actor_id      = 6 [(es.v1.non_pii) = true];
+}
+
+// Maker-checker — identity-critical fields go through propose -> approve
+message ProposeName {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  Name   proposed    = 2;
+  string proposed_by = 3 [(es.v1.non_pii) = true];
+  string reason      = 4;
+}
+
+message ProposeEmail {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string proposed    = 2;
+  string proposed_by = 3 [(es.v1.non_pii) = true];
+  string reason      = 4;
+}
+
+message ProposeDateOfBirth {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string proposed    = 2;
+  string proposed_by = 3 [(es.v1.non_pii) = true];
+  string reason      = 4;
+}
+
+message Approve {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string approved_by = 2 [(es.v1.non_pii) = true];
+  string comment     = 3;
+}
+
+message Reject {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string rejected_by = 2 [(es.v1.non_pii) = true];
+  string reason      = 3;
+}
+
+message Withdraw {
+  string change_id    = 1 [(es.v1.non_pii) = true];
+  string withdrawn_by = 2 [(es.v1.non_pii) = true];
+}
+
+// Auto-apply — correspondence fields update immediately
+message UpdatePhone {
+  string new_phone = 1;
+  string actor_id  = 2 [(es.v1.non_pii) = true];
+}
+
+message UpdateAddress {
+  Address new_address = 1;
+  string  actor_id    = 2 [(es.v1.non_pii) = true];
+}
+
+// Status transitions
+message Suspend {
+  string actor_id = 1 [(es.v1.non_pii) = true];
+  string reason   = 2;
+}
+
+message Reactivate {
+  string actor_id = 1 [(es.v1.non_pii) = true];
+  string comment  = 2;
+}
+
+message Close {
+  string actor_id = 1 [(es.v1.non_pii) = true];
+  string reason   = 2;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+
+  oneof variant {
+    Register register = 1;
+
+    // Maker-checker
+    ProposeName        propose_name          = 10;
+    ProposeEmail       propose_email         = 11;
+    ProposeDateOfBirth propose_date_of_birth = 12;
+    Approve            approve               = 13;
+    Reject             reject                = 14;
+    Withdraw           withdraw              = 15;
+
+    // Auto-apply
+    UpdatePhone   update_phone   = 20;
+    UpdateAddress update_address = 21;
+
+    // Status
+    Suspend    suspend    = 30;
+    Reactivate reactivate = 31;
+    Close      close      = 32;
+  }
+}
+
+// ==========================================================================
+// Events
+// ==========================================================================
+
+message Registered {
+  Name    name          = 1;
+  string  email         = 2;
+  string  phone         = 3;
+  Address address       = 4;
+  string  date_of_birth = 5;
+  string  actor_id      = 6 [(es.v1.non_pii) = true];
+}
+
+// Maker-checker: propose / applied / rejected / withdrawn
+message NameChangeProposed {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  Name   proposed    = 2;
+  string proposed_by = 3 [(es.v1.non_pii) = true];
+  string reason      = 4;
+}
+
+message NameChangeApplied {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string approved_by = 2 [(es.v1.non_pii) = true];
+  Name   new_name    = 3; // copied so the event is self-contained
+}
+
+message EmailChangeProposed {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string proposed    = 2;
+  string proposed_by = 3 [(es.v1.non_pii) = true];
+  string reason      = 4;
+}
+
+message EmailChangeApplied {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string approved_by = 2 [(es.v1.non_pii) = true];
+  string old_email   = 3; // released as a unique-claim
+  string new_email   = 4; // claimed as a unique-claim
+}
+
+message DateOfBirthChangeProposed {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string proposed    = 2;
+  string proposed_by = 3 [(es.v1.non_pii) = true];
+  string reason      = 4;
+}
+
+message DateOfBirthChangeApplied {
+  string change_id      = 1 [(es.v1.non_pii) = true];
+  string approved_by    = 2 [(es.v1.non_pii) = true];
+  string new_date_of_birth = 3;
+}
+
+message ChangeRejected {
+  string change_id   = 1 [(es.v1.non_pii) = true];
+  string rejected_by = 2 [(es.v1.non_pii) = true];
+  string reason      = 3;
+}
+
+message ChangeWithdrawn {
+  string change_id    = 1 [(es.v1.non_pii) = true];
+  string withdrawn_by = 2 [(es.v1.non_pii) = true];
+}
+
+// Auto-apply
+message PhoneUpdated {
+  string new_phone = 1;
+  string actor_id  = 2 [(es.v1.non_pii) = true];
+}
+
+message AddressUpdated {
+  Address new_address = 1;
+  string  actor_id    = 2 [(es.v1.non_pii) = true];
+}
+
+// Status transitions
+message Suspended {
+  string actor_id = 1 [(es.v1.non_pii) = true];
+  string reason   = 2;
+}
+
+message Reactivated {
+  string actor_id = 1 [(es.v1.non_pii) = true];
+  string comment  = 2;
+}
+
+message Closed {
+  string actor_id = 1 [(es.v1.non_pii) = true];
+  string reason   = 2;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+
+  oneof variant {
+    Registered registered = 1;
+
+    NameChangeProposed        name_change_proposed          = 10;
+    NameChangeApplied         name_change_applied           = 11;
+    EmailChangeProposed       email_change_proposed         = 12;
+    EmailChangeApplied        email_change_applied          = 13;
+    DateOfBirthChangeProposed date_of_birth_change_proposed = 14;
+    DateOfBirthChangeApplied  date_of_birth_change_applied  = 15;
+    ChangeRejected            change_rejected               = 16;
+    ChangeWithdrawn           change_withdrawn              = 17;
+
+    PhoneUpdated   phone_updated   = 20;
+    AddressUpdated address_updated = 21;
+
+    Suspended   suspended   = 30;
+    Reactivated reactivated = 31;
+    Closed      closed      = 32;
+  }
+}
