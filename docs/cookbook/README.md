@@ -22,6 +22,7 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 02 | [Stateful saga](./02-stateful-saga.md)                          | Multi-step coordination across events with internal state.                      |
 | 03 | [Cross-aggregate workflow with compensation](./03-cross-aggregate-workflow.md) | Money transfer and similar all-or-nothing flows across aggregates.              |
 | 04 | [Time-based triggers](./04-time-based-triggers.md)              | "Cancel order after 24h with no payment" — in a scale-to-zero deployment.        |
+| 05 | [Layered authorization](./05-layered-authz.md)                  | Wrap `aggregate.Runtime` with a Policy check (Cedar / OPA / RBAC); deliberately not a framework feature. |
 
 ## Conventions used in these recipes
 
