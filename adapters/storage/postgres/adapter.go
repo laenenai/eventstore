@@ -16,6 +16,11 @@ type Adapter struct {
 	pool    *pgxpool.Pool
 	queries *db.Queries
 	lockKey int64
+
+	// drainLocks holds connections for currently-held session-level
+	// advisory locks (es.DrainLocker contract). Populated lazily on
+	// first TryAcquireDrainLock; survives until Close.
+	drainLocks drainLockerState
 }
 
 // Option configures an Adapter.

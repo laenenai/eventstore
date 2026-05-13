@@ -44,6 +44,36 @@ type Drain struct {
 	// the drain's cleanup pass deletes them. Default 7 days.
 	// Set to 0 to disable cleanup.
 	CleanupRetention time.Duration
+
+	// LockKey, if non-empty, enables concurrent-drain safety via the
+	// store's es.DrainLocker interface. When set:
+	//   - Run / RunOnce call TryAcquireDrainLock(LockKey) at start.
+	//   - If acquired, the drain proceeds and releases at end.
+	//   - If another instance holds the lock, Run / RunOnce return
+	//     (0, 0, nil) immediately ("skipped this turn").
+	//   - If the Store does not implement DrainLocker, LockKey is
+	//     ignored (SQLite is naturally single-writer; Postgres
+	//     implements it via pg_try_advisory_lock).
+	//
+	// Recommended values:
+	//   "outbox-drain"           — global, single concurrent drainer
+	//   "outbox-drain:"+Tenant   — per-tenant concurrent drainers
+	//
+	// See cookbook recipe 06 for the deployment patterns.
+	LockKey string
+
+	// Shard / TotalShards enable sharded draining. When TotalShards
+	// > 0, this drain processes only rows where
+	// (global_position % TotalShards) == Shard. Multiple drain
+	// replicas can run concurrently on disjoint subsets without any
+	// coordination — each replica is configured with its own Shard
+	// value. Defaults (0, 0) mean "no sharding".
+	//
+	// Sharding is independent of LockKey. They can be combined
+	// (LockKey = "outbox-drain:shard-N") if you want exactly-one
+	// drainer per shard.
+	Shard       int
+	TotalShards int
 }
 
 const (
@@ -60,10 +90,25 @@ const (
 // invokes Run from a cron, Lambda, Cloudflare Worker scheduled
 // trigger, or similar.
 //
+// If LockKey is set and the Store implements es.DrainLocker, Run
+// acquires the lock first. If another instance holds it, Run returns
+// (0, 0, nil) immediately.
+//
 // Returns the count of rows published and the count cleaned up.
 func (d *Drain) Run(ctx context.Context) (published int, cleaned int, err error) {
 	if err := d.validate(); err != nil {
 		return 0, 0, err
+	}
+
+	locker, locked, err := d.acquireLock(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	if d.LockKey != "" && locker != nil && !locked {
+		return 0, 0, nil
+	}
+	if locked {
+		defer func() { _ = locker.ReleaseDrainLock(ctx, d.LockKey) }()
 	}
 
 	// Drain pending rows in batches until the pending set is empty.
@@ -71,7 +116,7 @@ func (d *Drain) Run(ctx context.Context) (published int, cleaned int, err error)
 		if err := ctx.Err(); err != nil {
 			return published, cleaned, nil
 		}
-		n, err := d.RunOnce(ctx)
+		n, err := d.runBatch(ctx)
 		if err != nil {
 			return published, cleaned, err
 		}
@@ -103,10 +148,30 @@ func (d *Drain) Run(ctx context.Context) (published int, cleaned int, err error)
 // with rate-limited downstream publishers). Run is the standard
 // scheduled-drain entrypoint that calls RunOnce in a loop until
 // drained.
+//
+// If LockKey is set, RunOnce acquires/releases the lock the same way
+// Run does. A drainer that wants the lock to span multiple RunOnce
+// calls should acquire it manually via the store's DrainLocker.
 func (d *Drain) RunOnce(ctx context.Context) (int, error) {
 	if err := d.validate(); err != nil {
 		return 0, err
 	}
+	locker, locked, err := d.acquireLock(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if d.LockKey != "" && locker != nil && !locked {
+		return 0, nil
+	}
+	if locked {
+		defer func() { _ = locker.ReleaseDrainLock(ctx, d.LockKey) }()
+	}
+	return d.runBatch(ctx)
+}
+
+// runBatch is the unlocked single-batch primitive used by both Run
+// and RunOnce. Callers are responsible for any locking.
+func (d *Drain) runBatch(ctx context.Context) (int, error) {
 	rows, err := d.Store.PendingOutbox(ctx, d.Tenant, d.batchSize())
 	if err != nil {
 		return 0, fmt.Errorf("outbox: read pending: %w", err)
@@ -117,14 +182,22 @@ func (d *Drain) RunOnce(ctx context.Context) (int, error) {
 
 	var published int
 	for _, row := range rows {
+		// Client-side shard filter — keeps the framework agnostic to
+		// store-side sharding support. Postgres adapters could push
+		// this down to the WHERE clause in a future commit; for now
+		// the simple filter works on any adapter.
+		if d.TotalShards > 0 {
+			if int(row.Envelope.GlobalPosition%uint64(d.TotalShards)) != d.Shard {
+				continue
+			}
+		}
+
 		if err := d.Publisher.Publish(ctx, row.Envelope); err != nil {
 			// Mark as failed; the next drain run will retry.
 			if markErr := d.Store.MarkOutboxFailed(ctx, row.Envelope.TenantID,
 				row.Envelope.GlobalPosition, err.Error()); markErr != nil {
 				return published, fmt.Errorf("outbox: mark failed: %w", markErr)
 			}
-			// Continue with the rest of the batch — one failing row
-			// shouldn't stop the others.
 			continue
 		}
 		if err := d.Store.MarkOutboxPublished(ctx, row.Envelope.TenantID,
@@ -136,12 +209,34 @@ func (d *Drain) RunOnce(ctx context.Context) (int, error) {
 	return published, nil
 }
 
+// acquireLock returns (locker, locked, err). locker is non-nil iff
+// the Store implements DrainLocker AND LockKey is set; locked is
+// whether we successfully acquired.
+func (d *Drain) acquireLock(ctx context.Context) (es.DrainLocker, bool, error) {
+	if d.LockKey == "" {
+		return nil, false, nil
+	}
+	locker, ok := d.Store.(es.DrainLocker)
+	if !ok {
+		// Store doesn't support locking — SQLite is naturally serial.
+		return nil, false, nil
+	}
+	acquired, err := locker.TryAcquireDrainLock(ctx, d.LockKey)
+	if err != nil {
+		return locker, false, fmt.Errorf("acquire drain lock %q: %w", d.LockKey, err)
+	}
+	return locker, acquired, nil
+}
+
 func (d *Drain) validate() error {
 	if d.Store == nil {
 		return errors.New("outbox: Store is required")
 	}
 	if d.Publisher == nil {
 		return errors.New("outbox: Publisher is required")
+	}
+	if d.TotalShards < 0 || d.Shard < 0 || (d.TotalShards > 0 && d.Shard >= d.TotalShards) {
+		return fmt.Errorf("outbox: invalid sharding: Shard=%d TotalShards=%d", d.Shard, d.TotalShards)
 	}
 	return nil
 }
