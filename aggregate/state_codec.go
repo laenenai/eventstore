@@ -1,29 +1,31 @@
 package aggregate
 
 import (
+	"fmt"
+	"reflect"
+
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-// StateCodec marshals aggregate state into the bytes stored in the
-// Tier 1 state_cache. See ADR 0020.
+// StateCodec marshals and unmarshals aggregate state.
 //
-// Implementations must be deterministic and side-effect-free. Encode
-// is called inside Runtime.Handle, between Decide and Append; the
-// returned bytes are committed in the same transaction as the events.
+// Encode is used by the Tier 1 state_cache write path (ADR 0020 — runs
+// inside Runtime.Handle between Decide and Append; the returned bytes
+// commit in the same transaction as the events). Decode is used by the
+// snapshot read path (ADR 0011 — Load checks the snapshot store first
+// and unmarshals the bytes back into S when the schema matches).
 //
-// Decode is not part of this interface: callers read raw bytes from
-// the state cache (via es.StateCacheReader) and unmarshal them
-// themselves with the same library the codec used to produce them.
-// For proto states, protojson.Unmarshal into a freshly-allocated
-// message is the symmetric inverse of ProtoStateCodec.Encode.
+// Implementations must be deterministic and side-effect-free.
 type StateCodec[S any] interface {
 	Encode(state S) (bytes []byte, typeURL string, err error)
+	Decode(bytes []byte) (S, error)
 }
 
 // ProtoStateCodec is the default StateCodec for proto.Message states.
-// Marshals to JSONB-compatible bytes via protojson. The TypeURL is the
-// proto FullName (e.g., "myapp.counter.v1.State").
+// Marshals via protojson — bytes are JSONB-compatible for state_cache
+// queries and big enough to round-trip schema-evolving messages
+// safely. Snapshot storage reuses the same encoding for simplicity.
 //
 // Usage:
 //
@@ -34,8 +36,9 @@ type StateCodec[S any] interface {
 //	    StateCodec: aggregate.ProtoStateCodec[*counterv1.State]{},
 //	}
 //
-// Non-proto state types remain supported — they just cannot use the
-// state cache. Leave StateCodec unset on those aggregates.
+// Non-proto state types are not supported by this codec; non-proto
+// aggregates either skip the state cache + snapshots, or supply a
+// hand-rolled StateCodec.
 type ProtoStateCodec[T proto.Message] struct{}
 
 // Encode marshals the state to JSON via protojson and derives the
@@ -47,4 +50,25 @@ func (ProtoStateCodec[T]) Encode(state T) ([]byte, string, error) {
 	}
 	typeURL := string(state.ProtoReflect().Descriptor().FullName())
 	return b, typeURL, nil
+}
+
+// Decode unmarshals into a freshly-allocated T. Uses reflection to
+// instantiate the concrete proto type from the zero value's element
+// type — the standard Go-generics workaround for "T is a pointer
+// type and I need a new one".
+func (ProtoStateCodec[T]) Decode(data []byte) (T, error) {
+	var zero T
+	t := reflect.TypeOf(zero)
+	if t == nil || t.Kind() != reflect.Pointer {
+		return zero, fmt.Errorf("aggregate: ProtoStateCodec requires T to be a pointer type, got %T", zero)
+	}
+	msg := reflect.New(t.Elem()).Interface()
+	out, ok := msg.(T)
+	if !ok {
+		return zero, fmt.Errorf("aggregate: ProtoStateCodec.Decode: type assertion failed for %T", msg)
+	}
+	if err := protojson.Unmarshal(data, msg.(proto.Message)); err != nil {
+		return zero, err
+	}
+	return out, nil
 }
