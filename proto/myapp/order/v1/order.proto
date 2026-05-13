@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package myapp.order.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/myapp/order/v1;orderv1";
+
+// Order aggregate — the source side of the linked projection example.
+// OrderShipped events fan out to per-order Fulfillment streams via a
+// LinkedProjection (see examples/orderfulfillment).
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PLACED      = 1;
+  STATUS_SHIPPED     = 2;
+  STATUS_COMPLETED   = 3;
+}
+
+message Order {
+  option (es.v1.aggregate) = "order";
+
+  string order_id    = 1 [(es.v1.subject_field) = true];
+  string customer_id = 2;
+  string warehouse   = 3;
+  Status status      = 4;
+  int64  placed_at_ms = 5;
+  int64  shipped_at_ms = 6;
+  string carrier      = 7;
+  string tracking     = 8;
+}
+
+// ---- Commands ------------------------------------------------------------
+
+message PlaceOrder {
+  string order_id    = 1;
+  string customer_id = 2;
+  string warehouse   = 3;
+  int64  placed_at_ms = 4;
+}
+
+message Ship {
+  string carrier      = 1;
+  string tracking     = 2;
+  int64  shipped_at_ms = 3;
+}
+
+message Complete {
+  int64 completed_at_ms = 1;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    PlaceOrder place_order = 1;
+    Ship       ship        = 2;
+    Complete   complete    = 3;
+  }
+}
+
+// ---- Events --------------------------------------------------------------
+
+message OrderPlaced {
+  string order_id    = 1;
+  string customer_id = 2;
+  string warehouse   = 3;
+  int64  placed_at_ms = 4;
+}
+
+message OrderShipped {
+  string order_id     = 1;
+  string warehouse    = 2;
+  string carrier      = 3;
+  string tracking     = 4;
+  int64  shipped_at_ms = 5;
+}
+
+message OrderCompleted {
+  int64 completed_at_ms = 1;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    OrderPlaced    order_placed    = 1;
+    OrderShipped   order_shipped   = 2;
+    OrderCompleted order_completed = 3;
+  }
+}

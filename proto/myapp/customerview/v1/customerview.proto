@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package myapp.customerview.v1;
+
+import "es/v1/options.proto";
+import "myapp/invoice/v1/invoice.proto";
+import "myapp/order/v1/order.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/myapp/customerview/v1;customerviewv1";
+
+// CustomerView is a v2 spec-driven projection (ADR 0020, cookbook 12)
+// that aggregates events from the Invoice and Order aggregates into a
+// single denormalized "what's happening with this customer" feed.
+//
+// Codegen reads the (es.v1.projection) option, resolves the listed
+// event types across the file set, and emits:
+//
+//   - const CustomerViewName = "customer-view"
+//   - type CustomerViewHandler interface { ... }
+//   - func NewCustomerViewDispatcher(p CustomerViewHandler, opts ...projection.DispatcherOption) projection.Handler
+//
+// The application implements CustomerViewHandler with one method per
+// listed event — adding a new event to the spec is a compile-time
+// gap.
+
+message CustomerView {
+  option (es.v1.projection) = {
+    name: "customer-view"
+    events: [
+      "myapp.invoice.v1.Created",
+      "myapp.invoice.v1.Paid",
+      "myapp.invoice.v1.Voided",
+      "myapp.order.v1.OrderPlaced",
+      "myapp.order.v1.OrderShipped",
+      "myapp.order.v1.OrderCompleted"
+    ]
+  };
+}

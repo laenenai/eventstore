@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package myapp.employee.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/myapp/employee/v1;employeev1";
+
+// Employee — the realistic crypto-shredding example (ADR 0010,
+// cookbook 11). PII fields (legal_name, email, date_of_birth, reason)
+// are `bytes` and encrypted by default. Non-PII fields (department,
+// status, new_role) stay plaintext so ops/analytics queries continue
+// to work after a shred.
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE      = 1;
+  STATUS_ON_LEAVE    = 2;
+  STATUS_TERMINATED  = 3;
+}
+
+message Employee {
+  option (es.v1.aggregate) = "employee";
+
+  string employee_id   = 1 [(es.v1.subject_field) = true];
+  bytes  legal_name    = 2;  // PII
+  bytes  email         = 3;  // PII
+  bytes  date_of_birth = 4;  // PII (string-encoded ISO date in bytes)
+  string department    = 5 [(es.v1.non_pii) = true];
+  string current_role  = 6 [(es.v1.non_pii) = true];
+  Status status        = 7 [(es.v1.non_pii) = true];
+}
+
+// ---- Commands ------------------------------------------------------------
+
+message Hire {
+  string employee_id   = 1;
+  bytes  legal_name    = 2;
+  bytes  email         = 3;
+  bytes  date_of_birth = 4;
+  string department    = 5;
+  string initial_role  = 6;
+}
+
+message Promote {
+  string new_role = 1;
+}
+
+message Terminate {
+  bytes reason = 1;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    Hire      hire      = 1;
+    Promote   promote   = 2;
+    Terminate terminate = 3;
+  }
+}
+
+// ---- Events --------------------------------------------------------------
+
+message Hired {
+  string employee_id   = 1 [(es.v1.subject_field) = true];
+  bytes  legal_name    = 2;
+  bytes  email         = 3;
+  bytes  date_of_birth = 4;
+  string department    = 5 [(es.v1.non_pii) = true];
+  string initial_role  = 6 [(es.v1.non_pii) = true];
+}
+
+message Promoted {
+  string employee_id = 1 [(es.v1.subject_field) = true];
+  string new_role    = 2 [(es.v1.non_pii) = true];
+}
+
+message Terminated {
+  string employee_id = 1 [(es.v1.subject_field) = true];
+  // Free-form notes often contain PII (manager observations, etc.).
+  bytes reason = 2;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    Hired      hired      = 1;
+    Promoted   promoted   = 2;
+    Terminated terminated = 3;
+  }
+}

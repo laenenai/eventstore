@@ -1,0 +1,31 @@
+{
+  "source": "myapp/order/v1/order.proto",
+  "package": "myapp.order.v1",
+  "events": [
+    {
+      "name": "myapp.order.v1.OrderPlaced",
+      "fields": [
+        {"name": "order_id", "classification": "non_pii"},
+        {"name": "customer_id", "classification": "non_pii"},
+        {"name": "warehouse", "classification": "non_pii"},
+        {"name": "placed_at_ms", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.order.v1.OrderShipped",
+      "fields": [
+        {"name": "order_id", "classification": "non_pii"},
+        {"name": "warehouse", "classification": "non_pii"},
+        {"name": "carrier", "classification": "non_pii"},
+        {"name": "tracking", "classification": "non_pii"},
+        {"name": "shipped_at_ms", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.order.v1.OrderCompleted",
+      "fields": [
+        {"name": "completed_at_ms", "classification": "non_pii"}
+      ]
+    }
+  ]
+}

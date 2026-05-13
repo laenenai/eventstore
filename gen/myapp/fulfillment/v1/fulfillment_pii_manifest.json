@@ -1,0 +1,28 @@
+{
+  "source": "myapp/fulfillment/v1/fulfillment.proto",
+  "package": "myapp.fulfillment.v1",
+  "events": [
+    {
+      "name": "myapp.fulfillment.v1.Created",
+      "fields": [
+        {"name": "task_id", "classification": "subject_field"},
+        {"name": "order_id", "classification": "non_pii"},
+        {"name": "warehouse", "classification": "non_pii"},
+        {"name": "created_at_ms", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.fulfillment.v1.Picked",
+      "fields": [
+        {"name": "picker", "classification": "non_pii"},
+        {"name": "picked_at_ms", "classification": "non_pii"}
+      ]
+    },
+    {
+      "name": "myapp.fulfillment.v1.Shipped",
+      "fields": [
+        {"name": "shipped_at_ms", "classification": "non_pii"}
+      ]
+    }
+  ]
+}

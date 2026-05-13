@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package myapp.fulfillment.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/myapp/fulfillment/v1;fulfillmentv1";
+
+// Fulfillment — the destination side of the linked projection. A
+// `FulfillmentTask` stream is auto-created by the linked projection
+// when its corresponding OrderShipped event lands. The warehouse
+// service then issues further commands (Pick, MarkShipped) to advance
+// the task.
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_PENDING     = 1;
+  STATUS_PICKED      = 2;
+  STATUS_SHIPPED     = 3;
+}
+
+message FulfillmentTask {
+  option (es.v1.aggregate) = "fulfillment_task";
+
+  string task_id      = 1 [(es.v1.subject_field) = true];
+  string order_id     = 2;
+  string warehouse    = 3;
+  Status status       = 4;
+  int64  created_at_ms = 5;
+  int64  picked_at_ms  = 6;
+  int64  shipped_at_ms = 7;
+  string picker        = 8;
+}
+
+// ---- Commands ------------------------------------------------------------
+// Pick and MarkShipped are issued by the warehouse service after the
+// linked projection has produced the initial Created event.
+
+message Pick {
+  string picker      = 1;
+  int64  picked_at_ms = 2;
+}
+
+message MarkShipped {
+  int64 shipped_at_ms = 1;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    Pick        pick         = 1;
+    MarkShipped mark_shipped = 2;
+  }
+}
+
+// ---- Events --------------------------------------------------------------
+
+message Created {
+  string task_id      = 1 [(es.v1.subject_field) = true];
+  string order_id     = 2;
+  string warehouse    = 3;
+  int64  created_at_ms = 4;
+}
+
+message Picked {
+  string picker       = 1;
+  int64  picked_at_ms  = 2;
+}
+
+message Shipped {
+  int64 shipped_at_ms = 1;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    Created created = 1;
+    Picked  picked  = 2;
+    Shipped shipped = 3;
+  }
+}

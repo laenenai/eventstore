@@ -6,4 +6,8 @@ use (
 	./adapters/storage/sqlite
 	./adapters/authz/cedar
 	./examples/party
+	./examples/invoice
+	./examples/orderfulfillment
+	./examples/employee
+	./examples/customerview
 )
