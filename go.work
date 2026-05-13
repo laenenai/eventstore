@@ -4,5 +4,6 @@ use (
 	.
 	./adapters/storage/postgres
 	./adapters/storage/sqlite
+	./adapters/authz/cedar
 	./examples/party
 )
