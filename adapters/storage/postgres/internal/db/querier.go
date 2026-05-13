@@ -10,6 +10,10 @@ import (
 )
 
 type Querier interface {
+	// Operator action: bulk-delete all DLQ rows for one projection. Used
+	// after a runbook decision to stop trying to reprocess. The events
+	// themselves remain in the events table; only the DLQ markers go.
+	AbandonAllProjectionDLQ(ctx context.Context, arg AbandonAllProjectionDLQParams) (int64, error)
 	// Mark a DLQ'd row as published (set published_at = now) without
 	// actually publishing. Use when an event is genuinely garbage. The
 	// event itself stays in the events table (ADR 0005); only the
@@ -40,6 +44,10 @@ type Querier interface {
 	// Cross-tenant uniqueness uses tenant_id = '__global__' explicitly; the
 	// framework refuses to set this implicitly.
 	ClaimUnique(ctx context.Context, arg ClaimUniqueParams) error
+	// Retention pruning. Deletes processed_events rows older than
+	// @older_than. Returns the number of rows deleted. Operators run this
+	// periodically since the table grows monotonically with event count.
+	CleanupProcessedEvents(ctx context.Context, arg CleanupProcessedEventsParams) (int64, error)
 	// Retention pruning. Deletes rows that have been published longer
 	// than @older_than. Runs in the same scheduled wake-up as the
 	// publish drain.
@@ -51,10 +59,14 @@ type Querier interface {
 	CountFailing(ctx context.Context, arg CountFailingParams) (int64, error)
 	// Total pending (unpublished) rows. Gauge metric.
 	CountPending(ctx context.Context, tenantID string) (int64, error)
+	CountProjectionDLQ(ctx context.Context, arg CountProjectionDLQParams) (int64, error)
 	// Returns the current version of a stream, or 0 if the stream is empty.
 	// Used for optimistic-concurrency hints; not for primary correctness
 	// (that comes from the PK conflict at append time).
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (int64, error)
+	// Operator action: remove a DLQ row (after Replay via ResetTo, or
+	// after Abandon).
+	DeleteProjectionDLQ(ctx context.Context, arg DeleteProjectionDLQParams) error
 	// Operational tool: force a full-replay on next read.
 	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
 	// Wipe state_cache rows for a given type before a rebuild. Returns the
@@ -84,6 +96,10 @@ type Querier interface {
 	// row for compliance audit.
 	GetSubjectKey(ctx context.Context, arg GetSubjectKeyParams) (SubjectKey, error)
 	GetUniqueClaim(ctx context.Context, arg GetUniqueClaimParams) (UniqueClaim, error)
+	// processed_events queries (ADR 0020 — WithDedup escape hatch).
+	// Returns true if (projection_name, tenant_id, event_id) is already
+	// recorded. The wrapper checks this before invoking the inner handler.
+	HasProcessedEvent(ctx context.Context, arg HasProcessedEventParams) (bool, error)
 	// Insert one event, allocating its global_position from the sequence
 	// under the advisory lock. Returns the assigned position and the DB
 	// commit timestamp so callers can echo them back on the envelope.
@@ -91,6 +107,11 @@ type Querier interface {
 	// Insert the outbox row for an event. The drain process polls
 	// outbox_pending_idx and hands rows to the configured EventPublisher.
 	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
+	// projection_dlq queries (ADR 0020 deferred — DLQ-skip mode).
+	// Capture one event that failed under DLQOnFailure. Idempotent: same
+	// (projection, tenant, global_position) overwrites the existing row
+	// (handler error message is the most useful version).
+	InsertProjectionDLQ(ctx context.Context, arg InsertProjectionDLQParams) error
 	// ===========================================================================
 	// Admin / dashboard queries
 	// ===========================================================================
@@ -101,6 +122,9 @@ type Querier interface {
 	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
 	// Enumerate all known projectors for an ops dashboard.
 	ListProjectionCheckpoints(ctx context.Context) ([]ProjectionCheckpoint, error)
+	// Paginated listing for an admin dashboard. afterPosition = 0 starts
+	// from the beginning.
+	ListProjectionDLQ(ctx context.Context, arg ListProjectionDLQParams) ([]ProjectionDlq, error)
 	// Audit query: enumerate subjects that have been crypto-shredded for a
 	// tenant. Useful for compliance reports.
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
@@ -118,6 +142,11 @@ type Querier interface {
 	// backoff function and passes it in.
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) error
+	// Records that the inner handler processed this event successfully.
+	// Idempotent: a duplicate primary-key insert silently succeeds (this
+	// protects against the race where two replicas process the same event
+	// before the projection lock is acquired).
+	MarkProcessedEvent(ctx context.Context, arg MarkProcessedEventParams) error
 	// Returns the earliest enqueued_at among pending rows, or NULL if
 	// the pending set is empty. Compute lag = now() - this in app code.
 	OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (time.Time, error)

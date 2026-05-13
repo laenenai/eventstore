@@ -49,6 +49,48 @@ extend google.protobuf.MessageOptions {
   //
   // See ADR 0004.
   string sum_type = 50002;
+
+  // Declares this message as a projection spec: codegen emits a
+  // typed Projection interface and dispatcher for the listed events.
+  // Mutually compatible with `aggregate` (a State-and-projection
+  // hybrid) but typically used on a dedicated dummy message:
+  //
+  //   message UserViewProjection {
+  //     option (es.v1.projection) = {
+  //       name: "user-view"
+  //       events: [
+  //         "myapp.invoice.v1.Created",
+  //         "myapp.customer.v1.NameChanged"
+  //       ]
+  //     };
+  //   }
+  //
+  // The generated dispatcher decodes by TypeURL into the variant
+  // struct from each referenced event's package and invokes the
+  // typed handler. Adding/removing an event from the list breaks
+  // the implementation at compile time.
+  //
+  // Use this for cross-aggregate projections that pick specific
+  // events; for single-aggregate exhaustive projections, the
+  // sum_type-emitted Projection interface in the event package
+  // already suffices.
+  //
+  // See ADR 0020 (v2 future direction realised).
+  Projection projection = 50003;
+}
+
+// Projection is the structured value of the (es.v1.projection)
+// message option. See above.
+message Projection {
+  // Stable identifier for this projection. Used as the default
+  // projection.Runtime.Name; the constant emitted is
+  // <Message>Name = "<name>".
+  string name = 1;
+
+  // Full proto type names (e.g., "myapp.invoice.v1.Created") of the
+  // events this projection consumes. Codegen resolves them against
+  // the input file set and emits one handler method per listed event.
+  repeated string events = 2;
 }
 
 // ---- Field-level options -------------------------------------------------

@@ -3,6 +3,8 @@ package es
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ProjectionStatus is the row returned by ProjectionAdmin.Status and
@@ -12,6 +14,46 @@ type ProjectionStatus struct {
 	TenantID  string
 	Cursor    uint64
 	UpdatedAt time.Time
+}
+
+// ProjectionDLQRow is one entry in projection_dlq. Populated by the
+// projection runtime when DLQOnFailure is set and a handler returned
+// an error.
+type ProjectionDLQRow struct {
+	ProjectionName string
+	TenantID       string
+	GlobalPosition uint64
+	EventID        uuid.UUID
+	TypeURL        string
+	LastError      string
+	EnqueuedAt     time.Time
+}
+
+// ProjectionDLQWriter is implemented by adapters that support the
+// DLQ-skip failure mode. projection.Runtime.DLQOnFailure requires the
+// Store to satisfy this interface.
+type ProjectionDLQWriter interface {
+	InsertProjectionDLQ(ctx context.Context, projectionName, tenantID string,
+		globalPosition uint64, eventID uuid.UUID, typeURL, lastError string) error
+}
+
+// ProjectionDLQAdmin is the inspection-and-management surface for the
+// projection DLQ. Admins implement it alongside ProjectionAdmin.
+type ProjectionDLQAdmin interface {
+	ListProjectionDLQ(ctx context.Context, projectionName, tenantID string,
+		afterPosition uint64, limit int) ([]ProjectionDLQRow, error)
+
+	CountProjectionDLQ(ctx context.Context, projectionName, tenantID string) (int64, error)
+
+	// AbandonProjectionDLQ removes one DLQ entry by global_position.
+	// Operator says "this event is permanently skipped". The event
+	// stays in the events table — only the DLQ marker goes.
+	AbandonProjectionDLQ(ctx context.Context, projectionName, tenantID string,
+		globalPosition uint64) error
+
+	// AbandonAllProjectionDLQ wipes every DLQ row for one projection.
+	// Returns the number of rows removed.
+	AbandonAllProjectionDLQ(ctx context.Context, projectionName, tenantID string) (int64, error)
 }
 
 // ProjectionAdmin is the inspection-and-control surface for Tier-3

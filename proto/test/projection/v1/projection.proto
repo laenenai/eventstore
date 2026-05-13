@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package test.projection.v1;
+
+import "es/v1/options.proto";
+import "test/counter/v1/counter.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/projection/v1;projectionv1";
+
+// Test-only projection spec exercising the v2 proto-driven codegen
+// (ADR 0020 v2). Cherry-picks specific events from the counter test
+// aggregate. The generated interface is named CounterTotals (matches
+// the message name); the generated dispatcher is NewCounterTotalsDispatcher.
+
+message CounterTotals {
+  option (es.v1.projection) = {
+    name: "counter-totals"
+    events: [
+      "test.counter.v1.Initialized",
+      "test.counter.v1.Incremented"
+    ]
+  };
+}

@@ -34,16 +34,42 @@ func main() {
 		// artifacts (e.g., a process-wide type-URL registry) are
 		// assembled at runtime via init() registrations, not emitted as
 		// a single big file at codegen time.
+
+		// Build a cross-file message registry so projection specs
+		// (ADR 0020 v2 codegen) can resolve referenced event types
+		// against their declaring files.
+		registry := buildMessageRegistry(plugin)
+
 		for _, file := range plugin.Files {
 			if !file.Generate {
 				continue
 			}
-			if err := generateFile(plugin, file); err != nil {
+			if err := generateFile(plugin, file, registry); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+// buildMessageRegistry indexes every message across plugin.Files by
+// its proto FullName. Used by emitProjectionSpec to resolve event
+// names declared in the (es.v1.projection) option to their
+// *protogen.Message — which carries the GoIdent + GoImportPath the
+// generated dispatcher needs to reference.
+func buildMessageRegistry(plugin *protogen.Plugin) map[string]*protogen.Message {
+	reg := map[string]*protogen.Message{}
+	for _, f := range plugin.Files {
+		walkMessages(f.Messages, reg)
+	}
+	return reg
+}
+
+func walkMessages(msgs []*protogen.Message, reg map[string]*protogen.Message) {
+	for _, m := range msgs {
+		reg[string(m.Desc.FullName())] = m
+		walkMessages(m.Messages, reg) // nested
+	}
 }
 
 // sumType captures one message annotated `option (es.v1.sum_type) = "X"`,
@@ -55,12 +81,16 @@ type sumType struct {
 	variants      []*protogen.Message
 }
 
-func generateFile(plugin *protogen.Plugin, file *protogen.File) error {
+func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[string]*protogen.Message) error {
 	sumTypes, err := findSumTypes(file)
 	if err != nil {
 		return err
 	}
-	if len(sumTypes) == 0 {
+	projectionSpecs, err := findProjectionSpecs(file, registry)
+	if err != nil {
+		return err
+	}
+	if len(sumTypes) == 0 && len(projectionSpecs) == 0 {
 		return nil
 	}
 
@@ -82,6 +112,9 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File) error {
 		if st.interfaceName == "Event" {
 			emitProjection(out, st)
 		}
+	}
+	for _, ps := range projectionSpecs {
+		emitProjectionSpec(out, ps)
 	}
 	return nil
 }
@@ -312,6 +345,138 @@ func emitProjection(out *protogen.GeneratedFile, st *sumType) {
 	}
 	out.P("\t}")
 	out.P("\treturn false")
+	out.P("}")
+	out.P()
+}
+
+// projectionSpec is one (es.v1.projection)-annotated message. It binds
+// a stable projection name + a list of events to a Go interface +
+// dispatcher emitted in the annotated message's package.
+type projectionSpec struct {
+	host   *protogen.Message   // the annotated message
+	name   string              // value of Projection.name
+	events []*protogen.Message // resolved variant types
+}
+
+// findProjectionSpecs scans the file for messages carrying the
+// (es.v1.projection) option, resolves each event name against the
+// cross-file registry, and returns the validated specs.
+//
+// Errors:
+//   - empty name
+//   - empty events list
+//   - event name not present in plugin.Files (typo, missing import)
+//   - duplicate method names after derivation (resolve in proto)
+func findProjectionSpecs(file *protogen.File, registry map[string]*protogen.Message) ([]*projectionSpec, error) {
+	var out []*projectionSpec
+	for _, msg := range file.Messages {
+		opts, ok := msg.Desc.Options().(*descriptorpb.MessageOptions)
+		if !ok || opts == nil {
+			continue
+		}
+		if !proto.HasExtension(opts, esv1.E_Projection) {
+			continue
+		}
+		raw := proto.GetExtension(opts, esv1.E_Projection)
+		spec, _ := raw.(*esv1.Projection)
+		if spec == nil {
+			continue
+		}
+		if spec.Name == "" {
+			return nil, fmt.Errorf("%s: (es.v1.projection).name is required",
+				msg.GoIdent.GoName)
+		}
+		if len(spec.Events) == 0 {
+			return nil, fmt.Errorf("%s: (es.v1.projection).events list cannot be empty",
+				msg.GoIdent.GoName)
+		}
+		ps := &projectionSpec{host: msg, name: spec.Name}
+		seenMethod := map[string]string{} // methodName -> originating event
+		for _, evtName := range spec.Events {
+			eventMsg, found := registry[evtName]
+			if !found {
+				return nil, fmt.Errorf(
+					"%s: (es.v1.projection).events references unknown type %q "+
+						"(missing import in %s?)",
+					msg.GoIdent.GoName, evtName, file.Desc.Path())
+			}
+			methodName := "On" + eventMsg.GoIdent.GoName
+			if prev, dup := seenMethod[methodName]; dup {
+				return nil, fmt.Errorf(
+					"%s: projection method name %q collides — produced by both %q and %q. "+
+						"Rename one of the proto types or split into separate projections.",
+					msg.GoIdent.GoName, methodName, prev, evtName)
+			}
+			seenMethod[methodName] = evtName
+			ps.events = append(ps.events, eventMsg)
+		}
+		out = append(out, ps)
+	}
+	return out, nil
+}
+
+// emitProjectionSpec writes a typed Projection interface and dispatcher
+// for one (es.v1.projection) annotation. Referenced event types may
+// live in other Go packages — protogen's QualifiedGoIdent handles the
+// import generation automatically.
+func emitProjectionSpec(out *protogen.GeneratedFile, ps *projectionSpec) {
+	hostName := ps.host.GoIdent.GoName
+	ifaceName := hostName + "Handler" // host message struct already takes hostName
+	contextType := out.QualifiedGoIdent(contextPkg.Ident("Context"))
+	envelope := out.QualifiedGoIdent(esPkg.Ident("Envelope"))
+	handler := out.QualifiedGoIdent(projectionPkg.Ident("Handler"))
+	dispOption := out.QualifiedGoIdent(projectionPkg.Ident("DispatcherOption"))
+	applyOptions := out.QualifiedGoIdent(projectionPkg.Ident("ApplyOptions"))
+	protoUnmarshal := out.QualifiedGoIdent(protoPkg.Ident("Unmarshal"))
+	fmtErrorf := out.QualifiedGoIdent(fmtPkg.Ident("Errorf"))
+
+	// Name constant — stable string for projection.Runtime.Name.
+	out.P("// ", hostName, "Name is the stable projection name from the")
+	out.P("// (es.v1.projection) annotation on ", hostName, ".")
+	out.P("const ", hostName, "Name = \"", ps.name, "\"")
+	out.P()
+
+	// Interface
+	out.P("// ", ifaceName, " is the typed handler for projection \"", ps.name, "\".")
+	out.P("// Implementations provide a method for each event in the spec —")
+	out.P("// adding or removing an event in the .proto produces a compile-")
+	out.P("// time gap. See ADR 0020 (v2 proto-driven codegen).")
+	out.P("type ", ifaceName, " interface {")
+	for _, evt := range ps.events {
+		methodName := "On" + evt.GoIdent.GoName
+		evtIdent := out.QualifiedGoIdent(evt.GoIdent)
+		out.P("\t", methodName, "(ctx ", contextType, ", env ", envelope, ", e *", evtIdent, ") error")
+	}
+	out.P("}")
+	out.P()
+
+	// Dispatcher — constructor name matches the host message, not the
+	// interface, so users write New<MessageName>Dispatcher rather than
+	// New<MessageName>HandlerDispatcher.
+	out.P("// New", hostName, "Dispatcher returns a projection.Handler that decodes")
+	out.P("// the events declared in this projection's spec and dispatches to")
+	out.P("// the typed ", ifaceName, " interface. Unknown TypeURLs cause an")
+	out.P("// error by default; pass projection.IgnoreUnknown() to skip them.")
+	out.P("func New", hostName, "Dispatcher(p ", ifaceName, ", opts ...", dispOption, ") ", handler, " {")
+	out.P("\tcfg := ", applyOptions, "(opts)")
+	out.P("\treturn func(ctx ", contextType, ", env ", envelope, ") error {")
+	out.P("\t\tswitch env.TypeURL {")
+	for _, evt := range ps.events {
+		methodName := "On" + evt.GoIdent.GoName
+		evtIdent := out.QualifiedGoIdent(evt.GoIdent)
+		out.P("\t\tcase \"", evt.Desc.FullName(), "\":")
+		out.P("\t\t\te := &", evtIdent, "{}")
+		out.P("\t\t\tif err := ", protoUnmarshal, "(env.Payload, e); err != nil {")
+		out.P("\t\t\t\treturn ", fmtErrorf, "(\"projection %s decode %s: %w\", ", hostName, "Name, env.TypeURL, err)")
+		out.P("\t\t\t}")
+		out.P("\t\t\treturn p.", methodName, "(ctx, env, e)")
+	}
+	out.P("\t\t}")
+	out.P("\t\tif cfg.IgnoreUnknown {")
+	out.P("\t\t\treturn nil")
+	out.P("\t\t}")
+	out.P("\t\treturn ", fmtErrorf, "(\"projection %s: unknown TypeURL %q\", ", hostName, "Name, env.TypeURL)")
+	out.P("\t}")
 	out.P("}")
 	out.P()
 }

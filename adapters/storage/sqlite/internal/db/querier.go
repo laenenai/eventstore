@@ -9,15 +9,19 @@ import (
 )
 
 type Querier interface {
+	AbandonAllProjectionDLQ(ctx context.Context, arg AbandonAllProjectionDLQParams) (int64, error)
 	AbandonDLQ(ctx context.Context, arg AbandonDLQParams) error
 	// Uniqueness primitives (ADR 0010). Identical semantics to Postgres;
 	// SQLite UNIQUE PK gives the same fail-fast guarantee.
 	ClaimUnique(ctx context.Context, arg ClaimUniqueParams) error
+	CleanupProcessedEvents(ctx context.Context, arg CleanupProcessedEventsParams) (int64, error)
 	CleanupPublished(ctx context.Context, arg CleanupPublishedParams) error
 	CountDLQ(ctx context.Context, arg CountDLQParams) (int64, error)
 	CountFailing(ctx context.Context, arg CountFailingParams) (int64, error)
 	CountPending(ctx context.Context, tenantID string) (int64, error)
+	CountProjectionDLQ(ctx context.Context, arg CountProjectionDLQParams) (int64, error)
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (interface{}, error)
+	DeleteProjectionDLQ(ctx context.Context, arg DeleteProjectionDLQParams) error
 	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
 	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
@@ -30,6 +34,8 @@ type Querier interface {
 	// Crypto-shredding subject-key queries (ADR 0010).
 	GetSubjectKey(ctx context.Context, arg GetSubjectKeyParams) (SubjectKey, error)
 	GetUniqueClaim(ctx context.Context, arg GetUniqueClaimParams) (UniqueClaim, error)
+	// processed_events queries for SQLite (ADR 0020).
+	HasProcessedEvent(ctx context.Context, arg HasProcessedEventParams) (int64, error)
 	// Append-path queries for SQLite. Mirror of the Postgres adapter's
 	// append.sql, with three dialect deltas:
 	//
@@ -46,11 +52,14 @@ type Querier interface {
 	//     as a safety net for queries that omit it.
 	InsertEvent(ctx context.Context, arg InsertEventParams) (int64, error)
 	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
+	// projection_dlq queries for SQLite (ADR 0020).
+	InsertProjectionDLQ(ctx context.Context, arg InsertProjectionDLQParams) error
 	// ===========================================================================
 	// Admin / dashboard queries
 	// ===========================================================================
 	ListDLQ(ctx context.Context, arg ListDLQParams) ([]ListDLQRow, error)
 	ListProjectionCheckpoints(ctx context.Context) ([]ProjectionCheckpoint, error)
+	ListProjectionDLQ(ctx context.Context, arg ListProjectionDLQParams) ([]ProjectionDlq, error)
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
 	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
 	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
@@ -59,6 +68,7 @@ type Querier interface {
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
 	MarkOutboxPublished(ctx context.Context, arg MarkOutboxPublishedParams) error
+	MarkProcessedEvent(ctx context.Context, arg MarkProcessedEventParams) error
 	OldestPendingEnqueuedAt(ctx context.Context, tenantID string) (interface{}, error)
 	// Outbox queries (ADR 0014).
 	PendingOutboxRows(ctx context.Context, arg PendingOutboxRowsParams) ([]Outbox, error)

@@ -11,6 +11,7 @@ import (
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	descriptorpb "google.golang.org/protobuf/types/descriptorpb"
 	reflect "reflect"
+	sync "sync"
 	unsafe "unsafe"
 )
 
@@ -20,6 +21,66 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+// Projection is the structured value of the (es.v1.projection)
+// message option. See above.
+type Projection struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Stable identifier for this projection. Used as the default
+	// projection.Runtime.Name; the constant emitted is
+	// <Message>Name = "<name>".
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Full proto type names (e.g., "myapp.invoice.v1.Created") of the
+	// events this projection consumes. Codegen resolves them against
+	// the input file set and emits one handler method per listed event.
+	Events        []string `protobuf:"bytes,2,rep,name=events,proto3" json:"events,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Projection) Reset() {
+	*x = Projection{}
+	mi := &file_es_v1_options_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Projection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Projection) ProtoMessage() {}
+
+func (x *Projection) ProtoReflect() protoreflect.Message {
+	mi := &file_es_v1_options_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Projection.ProtoReflect.Descriptor instead.
+func (*Projection) Descriptor() ([]byte, []int) {
+	return file_es_v1_options_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *Projection) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Projection) GetEvents() []string {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
 
 var file_es_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	{
@@ -44,6 +105,14 @@ var file_es_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 		Field:         50002,
 		Name:          "es.v1.sum_type",
 		Tag:           "bytes,50002,opt,name=sum_type",
+		Filename:      "es/v1/options.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.MessageOptions)(nil),
+		ExtensionType: (*Projection)(nil),
+		Field:         50003,
+		Name:          "es.v1.projection",
+		Tag:           "bytes,50003,opt,name=projection",
 		Filename:      "es/v1/options.proto",
 	},
 	{
@@ -109,6 +178,35 @@ var (
 	//
 	// optional string sum_type = 50002;
 	E_SumType = &file_es_v1_options_proto_extTypes[2]
+	// Declares this message as a projection spec: codegen emits a
+	// typed Projection interface and dispatcher for the listed events.
+	// Mutually compatible with `aggregate` (a State-and-projection
+	// hybrid) but typically used on a dedicated dummy message:
+	//
+	//	message UserViewProjection {
+	//	  option (es.v1.projection) = {
+	//	    name: "user-view"
+	//	    events: [
+	//	      "myapp.invoice.v1.Created",
+	//	      "myapp.customer.v1.NameChanged"
+	//	    ]
+	//	  };
+	//	}
+	//
+	// The generated dispatcher decodes by TypeURL into the variant
+	// struct from each referenced event's package and invokes the
+	// typed handler. Adding/removing an event from the list breaks
+	// the implementation at compile time.
+	//
+	// Use this for cross-aggregate projections that pick specific
+	// events; for single-aggregate exhaustive projections, the
+	// sum_type-emitted Projection interface in the event package
+	// already suffices.
+	//
+	// See ADR 0020 (v2 future direction realised).
+	//
+	// optional es.v1.Projection projection = 50003;
+	E_Projection = &file_es_v1_options_proto_extTypes[3]
 )
 
 // Extension fields to descriptorpb.FieldOptions.
@@ -120,21 +218,21 @@ var (
 	// See ADR 0010.
 	//
 	// optional bool subject_field = 50000;
-	E_SubjectField = &file_es_v1_options_proto_extTypes[3]
+	E_SubjectField = &file_es_v1_options_proto_extTypes[4]
 	// Opts the field OUT of crypto-shredding. By default every field is
 	// encrypted (the "deny by default" posture from ADR 0010); mark
 	// known-safe fields with this option to keep them readable
 	// post-shredding.
 	//
 	// optional bool non_pii = 50001;
-	E_NonPii = &file_es_v1_options_proto_extTypes[4]
+	E_NonPii = &file_es_v1_options_proto_extTypes[5]
 	// Suppresses the codegen lint advisory that fires when a primitive
 	// type (int*, bool, enum, Timestamp) is left default-encrypted.
 	// Use when the primitive really IS PII — e.g., a salary integer or
 	// a blood-pressure reading.
 	//
 	// optional bool pii_intentional = 50002;
-	E_PiiIntentional = &file_es_v1_options_proto_extTypes[5]
+	E_PiiIntentional = &file_es_v1_options_proto_extTypes[6]
 	// Per-field subject reference for multi-subject events (transfers,
 	// shared resources). Value is a field path within the same message
 	// pointing at the subject identifier for this particular field.
@@ -142,39 +240,62 @@ var (
 	// (es.v1.subject_field) = true.
 	//
 	// optional string subject = 50003;
-	E_Subject = &file_es_v1_options_proto_extTypes[6]
+	E_Subject = &file_es_v1_options_proto_extTypes[7]
 )
 
 var File_es_v1_options_proto protoreflect.FileDescriptor
 
 const file_es_v1_options_proto_rawDesc = "" +
 	"\n" +
-	"\x13es/v1/options.proto\x12\x05es.v1\x1a google/protobuf/descriptor.proto:?\n" +
+	"\x13es/v1/options.proto\x12\x05es.v1\x1a google/protobuf/descriptor.proto\"8\n" +
+	"\n" +
+	"Projection\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06events\x18\x02 \x03(\tR\x06events:?\n" +
 	"\taggregate\x12\x1f.google.protobuf.MessageOptions\x18І\x03 \x01(\tR\taggregate:H\n" +
 	"\x0eschema_version\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\rR\rschemaVersion:<\n" +
-	"\bsum_type\x12\x1f.google.protobuf.MessageOptions\x18҆\x03 \x01(\tR\asumType:D\n" +
+	"\bsum_type\x12\x1f.google.protobuf.MessageOptions\x18҆\x03 \x01(\tR\asumType:T\n" +
+	"\n" +
+	"projection\x12\x1f.google.protobuf.MessageOptions\x18ӆ\x03 \x01(\v2\x11.es.v1.ProjectionR\n" +
+	"projection:D\n" +
 	"\rsubject_field\x12\x1d.google.protobuf.FieldOptions\x18І\x03 \x01(\bR\fsubjectField:8\n" +
 	"\anon_pii\x12\x1d.google.protobuf.FieldOptions\x18ц\x03 \x01(\bR\x06nonPii:H\n" +
 	"\x0fpii_intentional\x12\x1d.google.protobuf.FieldOptions\x18҆\x03 \x01(\bR\x0epiiIntentional:9\n" +
 	"\asubject\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\tR\asubjectB}\n" +
 	"\tcom.es.v1B\fOptionsProtoP\x01Z-github.com/laenenai/eventstore/gen/es/v1;esv1\xa2\x02\x03EXX\xaa\x02\x05Es.V1\xca\x02\x05Es\\V1\xe2\x02\x11Es\\V1\\GPBMetadata\xea\x02\x06Es::V1b\x06proto3"
 
+var (
+	file_es_v1_options_proto_rawDescOnce sync.Once
+	file_es_v1_options_proto_rawDescData []byte
+)
+
+func file_es_v1_options_proto_rawDescGZIP() []byte {
+	file_es_v1_options_proto_rawDescOnce.Do(func() {
+		file_es_v1_options_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_es_v1_options_proto_rawDesc), len(file_es_v1_options_proto_rawDesc)))
+	})
+	return file_es_v1_options_proto_rawDescData
+}
+
+var file_es_v1_options_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_es_v1_options_proto_goTypes = []any{
-	(*descriptorpb.MessageOptions)(nil), // 0: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 1: google.protobuf.FieldOptions
+	(*Projection)(nil),                  // 0: es.v1.Projection
+	(*descriptorpb.MessageOptions)(nil), // 1: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 2: google.protobuf.FieldOptions
 }
 var file_es_v1_options_proto_depIdxs = []int32{
-	0, // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
-	0, // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
-	0, // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
-	1, // 3: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
-	1, // 4: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
-	1, // 5: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
-	1, // 6: es.v1.subject:extendee -> google.protobuf.FieldOptions
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	0, // [0:7] is the sub-list for extension extendee
+	1, // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
+	1, // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
+	1, // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
+	1, // 3: es.v1.projection:extendee -> google.protobuf.MessageOptions
+	2, // 4: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
+	2, // 5: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
+	2, // 6: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
+	2, // 7: es.v1.subject:extendee -> google.protobuf.FieldOptions
+	0, // 8: es.v1.projection:type_name -> es.v1.Projection
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	8, // [8:9] is the sub-list for extension type_name
+	0, // [0:8] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
@@ -189,12 +310,13 @@ func file_es_v1_options_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_es_v1_options_proto_rawDesc), len(file_es_v1_options_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   0,
-			NumExtensions: 7,
+			NumMessages:   1,
+			NumExtensions: 8,
 			NumServices:   0,
 		},
 		GoTypes:           file_es_v1_options_proto_goTypes,
 		DependencyIndexes: file_es_v1_options_proto_depIdxs,
+		MessageInfos:      file_es_v1_options_proto_msgTypes,
 		ExtensionInfos:    file_es_v1_options_proto_extTypes,
 	}.Build()
 	File_es_v1_options_proto = out.File

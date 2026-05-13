@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"time"
 
 	"github.com/laenenai/eventstore/es"
@@ -70,6 +71,35 @@ type Runtime struct {
 	// "user-by-email" or "user-by-email:" + tenantID for per-tenant
 	// shards.
 	LockKey string
+
+	// Shard / TotalShards enable horizontal partitioning of one
+	// projection across N runners. Sharding is by FNV-1a hash of
+	// (tenant_id | stream_id) % TotalShards — stream-sticky, so all
+	// events of a given stream always go to the same shard. Mirrors
+	// the outbox drain's design.
+	//
+	// Use when single-runner throughput is the bottleneck. Each shard
+	// runs with its own (Name, LockKey) — typically the projection
+	// name with a shard suffix. Within a shard, fail-stop semantics,
+	// per-stream ordering, and checkpoint advance work identically to
+	// a non-sharded runner.
+	//
+	// Default (0, 0) = no sharding. Shard must be in [0, TotalShards).
+	Shard       int
+	TotalShards int
+
+	// DLQOnFailure switches the failure semantic from fail-stop
+	// (ADR 0020 decision 3d) to DLQ-skip: when the handler returns an
+	// error, the event is captured into projection_dlq, the cursor
+	// advances past it, and processing continues with the next event.
+	// The default behavior (fail-stop with last-success advance) is
+	// safer for code-bug failures; DLQ-skip is the right opt-in for
+	// projections where one bad event mustn't halt the whole stream
+	// (e.g., analytics rollups, search indexers that tolerate gaps).
+	//
+	// Requires the Store to implement es.ProjectionDLQWriter (both
+	// shipped adapters do).
+	DLQOnFailure bool
 }
 
 const (
@@ -144,13 +174,37 @@ func (r *Runtime) RunOnce(ctx context.Context) (int, error) {
 	// checkpoint advance. On handler error mid-batch, persist the
 	// cursor up to the last successfully-handled event, then return
 	// the error. The next RunOnce resumes at the failing event.
+	//
+	// When sharding is enabled, events that don't hash to this
+	// shard are skipped — but the cursor still advances past them so
+	// the runner doesn't re-read them every batch. Skipped events
+	// count toward "last" but not "successes".
 	var (
 		last       uint64
 		successes  int
 		handlerErr error
 	)
 	for _, env := range events {
+		if !r.inShard(env) {
+			last = env.GlobalPosition
+			continue
+		}
 		if err := r.Handler(ctx, env); err != nil {
+			if r.DLQOnFailure {
+				dlq, ok := r.Store.(es.ProjectionDLQWriter)
+				if !ok {
+					handlerErr = fmt.Errorf("projection %s: DLQOnFailure set but Store does not implement ProjectionDLQWriter", r.Name)
+					break
+				}
+				if derr := dlq.InsertProjectionDLQ(ctx, r.Name, env.TenantID,
+					env.GlobalPosition, env.EventID, env.TypeURL, err.Error()); derr != nil {
+					handlerErr = fmt.Errorf("projection %s: dlq capture: %w", r.Name, derr)
+					break
+				}
+				// Cursor advances past the failed event; continue.
+				last = env.GlobalPosition
+				continue
+			}
 			handlerErr = fmt.Errorf("projection %s: handle event %s: %w",
 				r.Name, env.EventID, err)
 			break
@@ -200,7 +254,25 @@ func (r *Runtime) validate() error {
 	if r.Handler == nil {
 		return errors.New("projection: Handler is required")
 	}
+	if r.TotalShards < 0 || r.Shard < 0 || (r.TotalShards > 0 && r.Shard >= r.TotalShards) {
+		return fmt.Errorf("projection: invalid sharding Shard=%d TotalShards=%d",
+			r.Shard, r.TotalShards)
+	}
 	return nil
+}
+
+// inShard reports whether env's stream falls within this runner's
+// shard slice. Stream-sticky hashing — all events of one stream go to
+// the same shard — same design as outbox.Drain.
+func (r *Runtime) inShard(env es.Envelope) bool {
+	if r.TotalShards <= 0 {
+		return true
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(env.TenantID))
+	_, _ = h.Write([]byte{'|'})
+	_, _ = h.Write([]byte(env.StreamID.Canonical()))
+	return int(h.Sum32()%uint32(r.TotalShards)) == r.Shard
 }
 
 func (r *Runtime) batchSize() int {

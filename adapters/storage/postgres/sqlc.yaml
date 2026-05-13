@@ -10,6 +10,8 @@ sql:
       - migrations/00003_outbox_next_attempt_at.sql
       - migrations/00004_state_cache.sql
       - migrations/00005_projection_checkpoint.sql
+      - migrations/00006_projection_dlq.sql
+      - migrations/00007_processed_events.sql
     queries: queries/
     gen:
       go:

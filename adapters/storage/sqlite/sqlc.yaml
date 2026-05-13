@@ -7,6 +7,8 @@ sql:
       - migrations/00002_outbox_next_attempt_at.sql
       - migrations/00003_state_cache.sql
       - migrations/00004_projection_checkpoint.sql
+      - migrations/00005_projection_dlq.sql
+      - migrations/00006_processed_events.sql
     queries: queries/
     gen:
       go:
@@ -41,6 +43,14 @@ sql:
               import: "github.com/google/uuid"
               type: "UUID"
           - column: "outbox.event_id"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - column: "projection_dlq.event_id"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - column: "processed_events.event_id"
             go_type:
               import: "github.com/google/uuid"
               type: "UUID"

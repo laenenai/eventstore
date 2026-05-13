@@ -42,11 +42,28 @@ type Outbox struct {
 	NextAttemptAt  *time.Time
 }
 
+type ProcessedEvent struct {
+	ProjectionName string
+	TenantID       string
+	EventID        uuid.UUID
+	ProcessedAt    time.Time
+}
+
 type ProjectionCheckpoint struct {
 	Name      string
 	TenantID  string
 	Cursor    int64
 	UpdatedAt time.Time
+}
+
+type ProjectionDlq struct {
+	ProjectionName string
+	TenantID       string
+	GlobalPosition int64
+	EventID        uuid.UUID
+	TypeUrl        string
+	LastError      string
+	EnqueuedAt     time.Time
 }
 
 type Snapshot struct {
