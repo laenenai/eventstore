@@ -3,9 +3,7 @@ package sqlite_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -14,40 +12,22 @@ import (
 	"github.com/laenenai/eventstore/aggregate"
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/estest"
+	counterv1 "github.com/laenenai/eventstore/gen/test/counter/v1"
 )
 
-// These tests verify the aggregate.Runtime against a real SQLite store
-// using ":memory:" mode. The Counter domain is inlined here as a
-// hand-written illustration of what codegen will eventually emit
-// (sealed interfaces + variants + codec). For consumer tests of their
-// own deciders, the same pattern applies: open sql.Open("sqlite", ":memory:"),
-// migrate, wire the runtime.
+// These tests verify aggregate.Runtime against a real SQLite store via
+// :memory:, using the Counter domain whose Go types are now produced
+// by the codegen plugin (protoc-gen-es-go). The decider and state
+// definitions remain hand-written — codegen of those is a later step.
 
-// ----- Counter domain (hand-written stand-in for codegen output) ----------
-
+// Counter state — a plain Go struct. State doesn't have to be a proto
+// type; the decider is generic over (S, C, E) and only the wire shapes
+// (C, E) need to come from codegen.
 type counterState struct {
 	Initialized bool
 	Count       int64
 	Min, Max    int64
 }
-
-type counterCmd interface{ isCounterCmd() }
-type initCmd struct{ Min, Max, Initial int64 }
-type incCmd struct{ By int64 }
-type decCmd struct{ By int64 }
-
-func (initCmd) isCounterCmd() {}
-func (incCmd) isCounterCmd()  {}
-func (decCmd) isCounterCmd()  {}
-
-type counterEvt interface{ isCounterEvt() }
-type initialized struct{ Min, Max, Value int64 }
-type incremented struct{ By int64 }
-type decremented struct{ By int64 }
-
-func (initialized) isCounterEvt() {}
-func (incremented) isCounterEvt() {}
-func (decremented) isCounterEvt() {}
 
 var (
 	errAlreadyInit = errors.New("counter: already initialized")
@@ -57,93 +37,68 @@ var (
 	errUnknownCmd  = errors.New("counter: unknown command")
 )
 
-var counterDecider = es.Decider[counterState, counterCmd, counterEvt]{
+// counterDecider is the only hand-written piece per aggregate now —
+// the Command and Event sum types and their Codecs come from codegen.
+var counterDecider = es.Decider[counterState, counterv1.Command, counterv1.Event]{
 	Initial: func() counterState { return counterState{} },
-	Decide: func(s counterState, c counterCmd) ([]counterEvt, []es.ConstraintOp, error) {
+
+	Decide: func(s counterState, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
 		switch cmd := c.(type) {
-		case initCmd:
+		case *counterv1.Init:
 			if s.Initialized {
 				return nil, nil, errAlreadyInit
 			}
-			return []counterEvt{initialized{Min: cmd.Min, Max: cmd.Max, Value: cmd.Initial}}, nil, nil
-		case incCmd:
+			return []counterv1.Event{
+				&counterv1.Initialized{Min: cmd.Min, Max: cmd.Max, Value: cmd.Initial},
+			}, nil, nil
+
+		case *counterv1.Increment:
 			if !s.Initialized {
 				return nil, nil, errNotInit
 			}
 			if s.Count+cmd.By > s.Max {
 				return nil, nil, errExceedMax
 			}
-			return []counterEvt{incremented{By: cmd.By}}, nil, nil
-		case decCmd:
+			return []counterv1.Event{&counterv1.Incremented{By: cmd.By}}, nil, nil
+
+		case *counterv1.Decrement:
 			if !s.Initialized {
 				return nil, nil, errNotInit
 			}
 			if s.Count-cmd.By < s.Min {
 				return nil, nil, errBelowMin
 			}
-			return []counterEvt{decremented{By: cmd.By}}, nil, nil
+			return []counterv1.Event{&counterv1.Decremented{By: cmd.By}}, nil, nil
+
 		default:
 			return nil, nil, errUnknownCmd
 		}
 	},
-	Evolve: func(s counterState, e counterEvt) counterState {
+
+	Evolve: func(s counterState, e counterv1.Event) counterState {
 		switch evt := e.(type) {
-		case initialized:
+		case *counterv1.Initialized:
 			s.Initialized = true
 			s.Min = evt.Min
 			s.Max = evt.Max
 			s.Count = evt.Value
-		case incremented:
+		case *counterv1.Incremented:
 			s.Count += evt.By
-		case decremented:
+		case *counterv1.Decremented:
 			s.Count -= evt.By
 		}
 		return s
 	},
 }
 
-type counterCodec struct{}
-
-func (counterCodec) Encode(e counterEvt) (aggregate.EncodedEvent, error) {
-	payload, err := json.Marshal(e)
-	if err != nil {
-		return aggregate.EncodedEvent{}, err
-	}
-	var typeURL string
-	switch e.(type) {
-	case initialized:
-		typeURL = "counter.v1.Initialized"
-	case incremented:
-		typeURL = "counter.v1.Incremented"
-	case decremented:
-		typeURL = "counter.v1.Decremented"
-	default:
-		return aggregate.EncodedEvent{}, fmt.Errorf("unknown event type %T", e)
-	}
-	return aggregate.EncodedEvent{Payload: payload, TypeURL: typeURL, SchemaVersion: 1}, nil
-}
-
-func (counterCodec) Decode(typeURL string, _ uint32, payload []byte) (counterEvt, error) {
-	switch typeURL {
-	case "counter.v1.Initialized":
-		var e initialized
-		return e, json.Unmarshal(payload, &e)
-	case "counter.v1.Incremented":
-		var e incremented
-		return e, json.Unmarshal(payload, &e)
-	case "counter.v1.Decremented":
-		var e decremented
-		return e, json.Unmarshal(payload, &e)
-	}
-	return nil, fmt.Errorf("unknown type_url %q", typeURL)
-}
-
-// ----- Test fixtures ------------------------------------------------------
-
 // newRuntime opens an in-memory SQLite DB, migrates the framework
-// schema, and wires the Counter runtime against it. Returns the
-// runtime; cleanup is via t.Cleanup.
-func newRuntime(t *testing.T) *aggregate.Runtime[counterState, counterCmd, counterEvt] {
+// schema, and wires the Counter runtime using the codegen-emitted
+// EventCodec. The CommandCodec is not used by the runtime itself —
+// commands are passed directly via Handle as Go values, never marshaled
+// to bytes for the runtime's own purposes — but the framework emits
+// both because consumers will need the CommandCodec when wiring sagas
+// or bus dispatch.
+func newRuntime(t *testing.T) *aggregate.Runtime[counterState, counterv1.Command, counterv1.Event] {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -155,10 +110,10 @@ func newRuntime(t *testing.T) *aggregate.Runtime[counterState, counterCmd, count
 	if err := a.Migrate(context.Background()); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	return &aggregate.Runtime[counterState, counterCmd, counterEvt]{
+	return &aggregate.Runtime[counterState, counterv1.Command, counterv1.Event]{
 		Store:   a,
 		Decider: counterDecider,
-		Codec:   counterCodec{},
+		Codec:   counterv1.EventCodec{},
 	}
 }
 
@@ -184,7 +139,7 @@ func TestAggregate_HandleSingleCommand(t *testing.T) {
 	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-single", "counter", "1")
 
-	result, err := rt.Handle(context.Background(), sid, initCmd{Min: 0, Max: 100, Initial: 5})
+	result, err := rt.Handle(context.Background(), sid, &counterv1.Init{Min: 0, Max: 100, Initial: 5})
 	if err != nil {
 		t.Fatalf("Handle init: %v", err)
 	}
@@ -209,16 +164,16 @@ func TestAggregate_HandleMultipleCommands(t *testing.T) {
 	sid := estest.MustStream(t, "t-multi", "counter", "1")
 	ctx := context.Background()
 
-	if _, err := rt.Handle(ctx, sid, initCmd{Min: 0, Max: 100, Initial: 10}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Init{Min: 0, Max: 100, Initial: 10}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := rt.Handle(ctx, sid, incCmd{By: 5}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Increment{By: 5}); err != nil {
 		t.Fatalf("inc: %v", err)
 	}
-	if _, err := rt.Handle(ctx, sid, incCmd{By: 3}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Increment{By: 3}); err != nil {
 		t.Fatalf("inc: %v", err)
 	}
-	if _, err := rt.Handle(ctx, sid, decCmd{By: 2}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Decrement{By: 2}); err != nil {
 		t.Fatalf("dec: %v", err)
 	}
 
@@ -239,11 +194,11 @@ func TestAggregate_DecideError(t *testing.T) {
 	sid := estest.MustStream(t, "t-err", "counter", "1")
 	ctx := context.Background()
 
-	if _, err := rt.Handle(ctx, sid, initCmd{Min: 0, Max: 10, Initial: 5}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Init{Min: 0, Max: 10, Initial: 5}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
 
-	_, err := rt.Handle(ctx, sid, incCmd{By: 100})
+	_, err := rt.Handle(ctx, sid, &counterv1.Increment{By: 100})
 	if !errors.Is(err, errExceedMax) {
 		t.Fatalf("expected errExceedMax, got %v", err)
 	}
@@ -258,9 +213,9 @@ func TestAggregate_DecideError(t *testing.T) {
 }
 
 func TestAggregate_NoOpCommand(t *testing.T) {
-	noopDecider := es.Decider[counterState, counterCmd, counterEvt]{
+	noopDecider := es.Decider[counterState, counterv1.Command, counterv1.Event]{
 		Initial: counterDecider.Initial,
-		Decide: func(_ counterState, _ counterCmd) ([]counterEvt, []es.ConstraintOp, error) {
+		Decide: func(_ counterState, _ counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
 			return nil, nil, nil
 		},
 		Evolve: counterDecider.Evolve,
@@ -271,12 +226,12 @@ func TestAggregate_NoOpCommand(t *testing.T) {
 	if err := a.Migrate(context.Background()); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
-	rt := &aggregate.Runtime[counterState, counterCmd, counterEvt]{
-		Store: a, Decider: noopDecider, Codec: counterCodec{},
+	rt := &aggregate.Runtime[counterState, counterv1.Command, counterv1.Event]{
+		Store: a, Decider: noopDecider, Codec: counterv1.EventCodec{},
 	}
 
 	sid := estest.MustStream(t, "t-noop", "counter", "1")
-	result, err := rt.Handle(context.Background(), sid, incCmd{By: 1})
+	result, err := rt.Handle(context.Background(), sid, &counterv1.Increment{By: 1})
 	if err != nil {
 		t.Fatalf("noop Handle: %v", err)
 	}
@@ -291,19 +246,17 @@ func TestAggregate_NoOpCommand(t *testing.T) {
 }
 
 func TestAggregate_HandleReloads(t *testing.T) {
-	// Two successive Handles each Load fresh state, so two increments
-	// after init produce final count == start + by + by.
 	rt := newRuntime(t)
 	sid := estest.MustStream(t, "t-reload", "counter", "1")
 	ctx := context.Background()
 
-	if _, err := rt.Handle(ctx, sid, initCmd{Min: 0, Max: 100, Initial: 0}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Init{Min: 0, Max: 100, Initial: 0}); err != nil {
 		t.Fatalf("init: %v", err)
 	}
-	if _, err := rt.Handle(ctx, sid, incCmd{By: 1}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Increment{By: 1}); err != nil {
 		t.Fatalf("first inc: %v", err)
 	}
-	if _, err := rt.Handle(ctx, sid, incCmd{By: 1}); err != nil {
+	if _, err := rt.Handle(ctx, sid, &counterv1.Increment{By: 1}); err != nil {
 		t.Fatalf("second inc: %v", err)
 	}
 

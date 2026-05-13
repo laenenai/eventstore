@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package test.counter.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/counter/v1;counterv1";
+
+// Counter is a tiny test-only aggregate used to validate the framework's
+// codegen plugin and aggregate runtime against generated types. Not
+// intended for production use or as a real domain example.
+
+// State of one counter aggregate.
+message Counter {
+  option (es.v1.aggregate) = "counter";
+
+  bool  initialized = 1;
+  int64 count       = 2;
+  int64 min         = 3;
+  int64 max         = 4;
+}
+
+// ---- Commands ------------------------------------------------------------
+
+message Init {
+  int64 min     = 1;
+  int64 max     = 2;
+  int64 initial = 3;
+}
+
+message Increment {
+  int64 by = 1;
+}
+
+message Decrement {
+  int64 by = 1;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+
+  oneof variant {
+    Init      init      = 1;
+    Increment increment = 2;
+    Decrement decrement = 3;
+  }
+}
+
+// ---- Events --------------------------------------------------------------
+
+message Initialized {
+  int64 min   = 1;
+  int64 max   = 2;
+  int64 value = 3;
+}
+
+message Incremented {
+  int64 by = 1;
+}
+
+message Decremented {
+  int64 by = 1;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+
+  oneof variant {
+    Initialized initialized = 1;
+    Incremented incremented = 2;
+    Decremented decremented = 3;
+  }
+}
