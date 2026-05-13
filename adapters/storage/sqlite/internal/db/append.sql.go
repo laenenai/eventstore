@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const insertEvent = `-- name: InsertEvent :one
+const insertEvent = `-- name: InsertEvent :execlastid
 
 INSERT INTO events (
     event_id,
@@ -21,6 +21,7 @@ INSERT INTO events (
     type_url,
     schema_version,
     occurred_at,
+    recorded_at,
     correlation_id,
     causation_id,
     command_id,
@@ -29,8 +30,7 @@ INSERT INTO events (
     payload,
     payload_json,
     encryption_key_refs
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-RETURNING global_position, recorded_
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
@@ -41,6 +41,7 @@ type InsertEventParams struct {
 	TypeUrl           string
 	SchemaVersion     int64
 	OccurredAt        string
+	RecordedAt        string
 	CorrelationID     uuid.UUID
 	CausationID       uuid.UUID
 	CommandID         uuid.UUID
@@ -51,28 +52,22 @@ type InsertEventParams struct {
 	EncryptionKeyRefs *string
 }
 
-type InsertEventRow struct {
-	GlobalPosition int64
-	RecordedAt     string
-}
-
 // Append-path queries for SQLite. Mirror of the Postgres adapter's
-// append.sql, with two dialect deltas:
+// append.sql, with three dialect deltas:
 //
-//   - No AdvisoryLock — SQLite serializes writers at the file level.
-//     The "no-op" advisory lock exists in the adapter code as a stub
-//     to keep the Append flow uniform across adapters.
+//   - No AdvisoryLock. SQLite serializes writers at the file level;
+//     the Append flow in the adapter code skips the AdvisoryLock step.
 //
-//   - global_position comes from INTEGER PRIMARY KEY AUTOINCREMENT,
-//     not nextval(). The INSERT omits the column; SQLite assigns it
-//     and we read it back via RETURNING.
+//   - global_position is INTEGER PRIMARY KEY AUTOINCREMENT, fetched
+//     via database/sql's Result.LastInsertId() (`:execlastid`) rather
+//     than RETURNING. This avoids a sqlc 1.30 SQLite tokenizer bug
+//     that truncates trailing identifiers in RETURNING clauses.
 //
-// Parameter syntax: bare `?` positional. sqlc 1.30's SQLite engine
-// does not reliably handle `@name` or `sqlc.arg(name)` syntax in our
-// setup, but positional `?` works and sqlc infers parameter struct
-// field names from the column context.
-func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (InsertEventRow, error) {
-	row := q.db.QueryRowContext(ctx, insertEvent,
+//   - recorded_at is passed explicitly by the adapter (set to the
+//     adapter-side clock at append time). The schema's DEFAULT remains
+//     as a safety net for queries that omit it.
+func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertEvent,
 		arg.EventID,
 		arg.TenantID,
 		arg.StreamID,
@@ -80,6 +75,7 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Inser
 		arg.TypeUrl,
 		arg.SchemaVersion,
 		arg.OccurredAt,
+		arg.RecordedAt,
 		arg.CorrelationID,
 		arg.CausationID,
 		arg.CommandID,
@@ -89,16 +85,15 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Inser
 		arg.PayloadJson,
 		arg.EncryptionKeyRefs,
 	)
-	var i InsertEventRow
-	err := row.Scan(&i.GlobalPosition, &i.RecordedAt)
-	return i, err
+	if err != nil {
+		return 0, err
+	}
+	return result.LastInsertId()
 }
 
 const insertOutbox = `-- name: InsertOutbox :exec
-t;
-
 INSERT INTO outbox (tenant_id, global_position, event_id)
-VALUES (?, ?,
+VALUES (?, ?, ?)
 `
 
 type InsertOutboxParams struct {
