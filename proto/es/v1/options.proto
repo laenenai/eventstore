@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package es.v1;
+
+import "google/protobuf/descriptor.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/es/v1;esv1";
+
+// Framework-defined protobuf options consumed by protoc-gen-es-go to
+// drive code generation. See ADR 0004 (sum-type representation),
+// ADR 0008 (stream identity), ADR 0010 (crypto-shredding), and
+// ADR 0013 (schema evolution).
+//
+// Usage in a domain .proto:
+//
+//   syntax = "proto3";
+//   import "es/v1/options.proto";
+//
+//   message UserState {
+//     option (es.v1.aggregate) = "user";
+//     string user_id = 1 [(es.v1.subject_field) = true];
+//     string email   = 2;  // default: PII, encrypted
+//     int64  balance = 3 [(es.v1.non_pii) = true];
+//   }
+
+// ---- Message-level options -----------------------------------------------
+
+extend google.protobuf.MessageOptions {
+  // Marks this message as the State type of a top-level aggregate.
+  // The value is the aggregate's short name; codegen emits typed
+  // StreamID wrappers in a Go package named after it
+  // (e.g., `user.StreamID`, `user.NewStreamID`).
+  //
+  // See ADR 0008.
+  string aggregate = 50000;
+
+  // The event's schema_version dispatch key (ADR 0013). Bump on
+  // semantic changes that proto's wire-format compatibility cannot
+  // detect. Codegen scaffolds upcaster registration stubs when a
+  // bump is observed.
+  uint32 schema_version = 50001;
+}
+
+// ---- Field-level options -------------------------------------------------
+
+extend google.protobuf.FieldOptions {
+  // Marks this field as the subject identifier for crypto-shredding.
+  // Subject fields are auto-exempt from encryption — encrypting them
+  // would require the key to find the key. At most one per message.
+  //
+  // See ADR 0010.
+  bool subject_field = 50000;
+
+  // Opts the field OUT of crypto-shredding. By default every field is
+  // encrypted (the "deny by default" posture from ADR 0010); mark
+  // known-safe fields with this option to keep them readable
+  // post-shredding.
+  bool non_pii = 50001;
+
+  // Suppresses the codegen lint advisory that fires when a primitive
+  // type (int*, bool, enum, Timestamp) is left default-encrypted.
+  // Use when the primitive really IS PII — e.g., a salary integer or
+  // a blood-pressure reading.
+  bool pii_intentional = 50002;
+
+  // Per-field subject reference for multi-subject events (transfers,
+  // shared resources). Value is a field path within the same message
+  // pointing at the subject identifier for this particular field.
+  // When unset, the subject defaults to whichever field carries
+  // (es.v1.subject_field) = true.
+  string subject = 50003;
+}
