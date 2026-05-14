@@ -37,6 +37,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0024 | [state_stream — coalesced state-mirror delivery](./0024-state-stream.md)                | Accepted   |
 | 0025 | [Workflow-Orchestrated Command Bus](./0025-workflow-orchestrated-command-bus.md)        | Accepted (Phase 1: framework + inproc) |
 | 0026 | [Workflow Adapters — Restate and DBOS](./0026-workflow-adapters.md)                     | Accepted (Phase 2a–2d) |
+| 0027 | [Data Governance Model — Classification, Access Levels, Codegen](./0027-data-governance-model.md) | Accepted |
 
 ## Conventions
 

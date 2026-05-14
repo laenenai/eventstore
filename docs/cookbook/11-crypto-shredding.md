@@ -1,26 +1,42 @@
-# 11: Crypto-Shredding for PII
+# 11: Crypto-Shredding and Data Classification
 
 GDPR Article 17 requires that, on request, personal data can be made
 effectively inaccessible. Hard-deleting events would violate the
 framework's append-only invariant. The framework ships
-**crypto-shredding** instead: PII fields are encrypted per-subject;
-"forgetting" the subject destroys the key, after which the ciphertext
-on disk is computationally inaccessible.
+**crypto-shredding** instead: classified fields are encrypted
+per-subject; "forgetting" the subject destroys the key, after which
+the ciphertext on disk is computationally inaccessible.
 
-This recipe walks through the full operator + developer story:
+ADR 0010 specifies the encryption mechanism. ADR 0027 sits on top and
+extends the single PII/non-PII bit into a 10-level
+`DataClassification` enum that drives encryption, DSAR export,
+audit-on-read, and retention from one annotation. This recipe is the
+developer-and-operator walkthrough.
 
-1. Annotate PII fields in your `.proto`.
-2. Review the auto-generated `pii_manifest.json` during privacy review.
-3. Wire the runtime: `kms.KeyStore` + `shred.Shredder`.
-4. Operate: `ForgetSubject`, `RewrapDEKs` for KEK rotation, redacted reads.
+## Problem
 
-The mechanism is specified in **ADR 0010**. Here we put it to work.
+A real domain has more than two flavours of sensitive data. An HR
+aggregate has names (PERSONAL), dates of birth (QUASI_IDENTIFIER),
+manager free-text notes (UNSTRUCTURED, may contain spilled PII),
+salary (FINANCIAL, tax-retention-locked), and possibly a session
+token cached during onboarding (CREDENTIAL, never exported via DSAR).
+A fintech aggregate handles balances (FINANCIAL), PEP/sanctions hits
+(SENSITIVE — GDPR Article 9), and PAN/expiry (CARDHOLDER — PCI scope);
+the CVV (SAD — PCI Sensitive Authentication Data) must never reach
+durable storage.
 
-## Annotate PII fields in proto
+The single-bit `(es.v1.pii) = true` model treated all of these
+identically: encrypted-per-subject, exported on DSAR, no audit, no
+retention nuance. That model is gone. Replace it with a single
+annotation per field whose value names the regulatory regime, and let
+codegen + runtime derive every behavior from it.
 
-A real-world example — an HR aggregate. Sensitive fields go through
-crypto-shredding; non-PII fields stay readable for ops/analytics
-forever, even after the subject is forgotten.
+## Pattern
+
+### Annotate fields with `(es.v1.data_classification)`
+
+A worked employee aggregate — the example shipping at
+`examples/employee/`:
 
 ```proto
 syntax = "proto3";
@@ -31,113 +47,204 @@ import "es/v1/options.proto";
 
 option go_package = "myapp/gen/employee/v1;employeev1";
 
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE      = 1;
+  STATUS_ON_LEAVE    = 2;
+  STATUS_TERMINATED  = 3;
+}
+
 message Employee {
   option (es.v1.aggregate) = "employee";
 
   string employee_id   = 1 [(es.v1.subject_field) = true];
-  bytes  legal_name    = 2;  // PII by default
-  bytes  email         = 3;  // PII by default
-  bytes  date_of_birth = 4;  // PII by default
-  string department    = 5 [(es.v1.non_pii) = true];  // non-PII, plaintext
-  string status        = 6 [(es.v1.non_pii) = true];  // active / on_leave / terminated
+  string legal_name    = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string email         = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string date_of_birth = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_QUASI_IDENTIFIER];
+  string department    = 5 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  string current_role  = 6 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  Status status        = 7 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
 }
 
 message Hired {
   string employee_id   = 1 [(es.v1.subject_field) = true];
-  bytes  legal_name    = 2;
-  bytes  email         = 3;
-  bytes  date_of_birth = 4;
-  string department    = 5 [(es.v1.non_pii) = true];
-}
-
-message Promoted {
-  string employee_id = 1 [(es.v1.subject_field) = true];
-  string new_role    = 2 [(es.v1.non_pii) = true];
+  string legal_name    = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string email         = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string date_of_birth = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_QUASI_IDENTIFIER];
+  string department    = 5 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  string initial_role  = 6 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
 }
 
 message Terminated {
   string employee_id = 1 [(es.v1.subject_field) = true];
-  // Reason often contains free-text PII (manager notes etc.).
-  bytes reason = 2;
-}
-
-message Events {
-  option (es.v1.sum_type) = "Event";
-  oneof variant {
-    Hired      hired      = 1;
-    Promoted   promoted   = 2;
-    Terminated terminated = 3;
-  }
+  // Manager observations: free-form, accidental PII is the default
+  // assumption.
+  string reason = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
 }
 ```
 
-Conventions enforced by the framework:
+Two rules to internalise:
 
-- **PII fields must be `bytes`.** The wire format wraps every
-  encrypted field as `version(1B) | iv(12B) | ciphertext | tag(16B)`.
-  Bytes is the only proto scalar that can carry that on the wire.
-- **Subject fields stay plaintext.** "You'd need the key to find the
-  key" otherwise. Mark them with `(es.v1.subject_field) = true`.
-- **Default is encrypted.** Forget an annotation and the field gets
-  encrypted — secure-by-default. The reverse-audit question ("which
-  fields are safe?") then becomes the easier one.
+- **Unannotated fields default to PUBLIC**, meaning no encryption.
+  Encryption is opt-in from PERSONAL onwards. This inverts the
+  previous bytes-default convention — every field that needs
+  encryption now declares it explicitly. The reverse audit question
+  ("what's encrypted?") is the manifest, not a scan of fields without
+  an opt-out.
+- **Subject fields stay plaintext** regardless of classification.
+  Marked with `(es.v1.subject_field) = true`. They are key handles,
+  not identifying data on their own — encrypting them would require
+  the key to find the key.
 
-## Review `pii_manifest.json`
+### What each classification means
 
-Codegen writes one manifest per package next to the generated Go:
+Eleven enum values (UNSPECIFIED + ten classifications). The
+authoritative table lives in `proto/es/v1/options.proto`; the short
+version:
 
+| Classification | Encrypted? | In DSAR? | Audit-on-read | Retention |
+| -------------- | ---------- | -------- | ------------- | --------- |
+| PUBLIC         | no         | yes      | no            | standard  |
+| INTERNAL       | no         | no       | no            | standard  |
+| PERSONAL       | yes        | yes      | no            | standard  |
+| QUASI_IDENTIFIER | yes      | yes      | no            | standard  |
+| SENSITIVE (Art 9) | yes    | yes (\*) | yes           | shorter   |
+| FINANCIAL      | yes        | yes (\*) | optional      | tax-locked |
+| CARDHOLDER (PCI) | yes      | yes      | yes           | PCI-scope |
+| SAD (PCI)      | **REJECTED** | n/a    | n/a           | n/a       |
+| CREDENTIAL     | yes        | **never** | yes          | standard  |
+| UNSTRUCTURED   | yes        | yes      | no            | standard  |
+
+(\*) SENSITIVE DSAR requires an explicit per-Art-9 consent check;
+FINANCIAL is locked behind tax retention windows before delete.
+
+The codegen reads these classifications and emits per-message helpers
+(below); the per-aggregate manifest at
+`gen/<pkg>/<v>/<name>_pii_manifest.json` records the derived behavior
+columns so DSAR-export tooling, PCI-scope scanners, and retention
+jobs can consume one source of truth.
+
+### Wire format: string vs bytes
+
+Both encryption envelopes resolve to the same `version(1B) | iv(12B)
+| ciphertext | tag(16B)` shape (ADR 0010). They differ on the
+field-type encoding:
+
+- **`string` PII** is round-tripped through `base64.RawStdEncoding` so
+  the field remains UTF-8-valid on the wire. ~33% storage overhead.
+  Pick this for ordinary text PII (names, emails, free-form notes).
+- **`bytes` PII** holds raw ciphertext. No base64 overhead. Pick this
+  for genuinely binary PII — biometric templates, MRZ scans, signed
+  document blobs.
+
+Choose the proto type that matches the natural shape of the data;
+the codegen does the right thing for either.
+
+### The generated helpers
+
+For every message, `protoc-gen-es-go` emits three methods alongside
+the standard `*.pb.go`:
+
+```go
+// Clone — deep copy. Handles oneofs (type-switch over the wrapper),
+// maps, repeated fields, and nested messages. Nil-safe.
+func (m *Hired) Clone() *Hired
+
+// View — deep copy filtered by the caller's access level. Fields
+// above `level` are zero-valued; subject fields are always visible.
+// Nested messages recurse at the same level.
+func (m *Hired) View(level es.AccessLevel) *Hired
+
+// LogValue — implements slog.LogValuer at AccessLevelInternal.
+// PII fields render as "[REDACTED:<CLASS>]" markers so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Hired) LogValue() slog.Value
 ```
-gen/myapp/employee/v1/employee.pb.go
-gen/myapp/employee/v1/employee_es.pb.go
-gen/myapp/employee/v1/employee_pii_manifest.json
+
+For messages that have at least one encrypted field, codegen also
+emits the existing `PIIFields`, `Subject`, `EncryptPII`, `DecryptPII`
+methods that the framework's Shredder calls during Append/Load.
+
+#### Using `View` in a Decider or projection
+
+DSAR export — the data subject sees their own PERSONAL,
+QUASI_IDENTIFIER, and UNSTRUCTURED fields, plus INTERNAL/PUBLIC:
+
+```go
+func (h *DSARHandler) Export(ctx context.Context, emp *employeev1.Employee) *employeev1.Employee {
+    return emp.View(es.AccessLevelSubject)
+}
 ```
 
-The manifest for the example above:
+Back-office dashboard — INTERNAL only, never PERSONAL:
 
-```json
-{
-  "source": "myapp/employee/v1/employee.proto",
-  "package": "myapp.employee.v1",
-  "events": [
-    {
-      "name": "myapp.employee.v1.Hired",
-      "fields": [
-        {"name": "employee_id", "classification": "subject_field"},
-        {"name": "legal_name", "classification": "pii"},
-        {"name": "email", "classification": "pii"},
-        {"name": "date_of_birth", "classification": "pii"},
-        {"name": "department", "classification": "non_pii"}
-      ]
-    },
-    {
-      "name": "myapp.employee.v1.Promoted",
-      "fields": [
-        {"name": "employee_id", "classification": "subject_field"},
-        {"name": "new_role", "classification": "non_pii"}
-      ]
-    },
-    {
-      "name": "myapp.employee.v1.Terminated",
-      "fields": [
-        {"name": "employee_id", "classification": "subject_field"},
-        {"name": "reason", "classification": "pii"}
-      ]
+```go
+func (p *EmployeeProjection) ToOpsView(emp *employeev1.Employee) *employeev1.Employee {
+    return emp.View(es.AccessLevelInternal)
+}
+```
+
+Compliance officer pulling a fraud investigation — adds SENSITIVE,
+FINANCIAL, CARDHOLDER on top of Subject:
+
+```go
+view := emp.View(es.AccessLevelCompliance)
+```
+
+The level ladder is in `es/access.go`: Public → Internal → Subject →
+Compliance → Operator. Subject was named after GDPR Article 4(1)'s
+"data subject" — the same natural person who is the encryption
+subject. Operator is god-mode; treat it as such.
+
+#### Using `LogValue` everywhere
+
+Once a message implements `slog.LogValuer`, any `slog.Info("...",
+"event", e)` automatically redacts. No call-site discipline needed:
+
+```go
+func (s *EmployeeService) Hire(ctx context.Context, cmd *employeev1.Hire) error {
+    slog.InfoContext(ctx, "handling hire",
+        "tenant", es.TenantFromContext(ctx),
+        "cmd", cmd) // legal_name renders as [REDACTED:PERSONAL]
+    // ...
+}
+```
+
+The structured-logging path is now safe by default. Misconfigured
+JSON handlers, third-party log shippers, and ad-hoc debug prints all
+see the redacted markers instead of cleartext. This is the
+defence-in-depth pairing for the at-rest encryption: classification
+stops a misconfigured logger from leaking; encryption stops a dropped
+database from leaking. Different attackers, different defences.
+
+#### Clone in the Decider's Evolve
+
+`Clone` replaces hand-rolled state copies. Worked example:
+
+```go
+Evolve: func(s *employeev1.Employee, e employeev1.Event) *employeev1.Employee {
+    out := s.Clone() // deep copy, oneof-safe
+    switch evt := e.(type) {
+    case *employeev1.Hired:
+        out.EmployeeId  = evt.EmployeeId
+        out.LegalName   = evt.LegalName
+        out.Email       = evt.Email
+        out.DateOfBirth = evt.DateOfBirth
+        out.Department  = evt.Department
+        out.CurrentRole = evt.InitialRole
+        out.Status      = employeev1.Status_STATUS_ACTIVE
+    // ...
     }
-  ]
-}
+    return out
+},
 ```
 
-**Check it in.** Treat the manifest like any other reviewed artifact:
-PRs touching event protos surface the diff in code review, privacy
-reviewers see exactly which fields are encrypted vs plaintext. Any
-unintended switch from `pii` → `non_pii` (or vice-versa) is one diff
-line away from being caught.
+`Clone()` returns the concrete pointer type — no `proto.Clone` cast,
+no missing-field bugs after a new field lands in the proto.
 
-## Wire the runtime
+### Wire the runtime
 
-Stand up a KMS (the in-process implementation is fine for tests and
-single-binary deployments; AWS KMS / GCP KMS adapters slot in
-later):
+Stand up a KMS, a Shredder, and pass it to the aggregate Runtime:
 
 ```go
 import (
@@ -157,11 +264,11 @@ func newEmployeeRuntime(store es.Store) *aggregate.Runtime[*employeev1.Employee,
         Codec:    employeev1.EventCodec{},
         Shredder: shredder,
         OnRedacted: func(redacted shred.RedactedFields) {
-            // Logged or surfaced to the caller when Load hits a
-            // shredded subject. Fields are zeroed; the read still
-            // succeeds.
+            // Fires when Load hits a shredded subject. Fields are
+            // zeroed; the read still succeeds. Surface to the caller
+            // (audit log, UI banner, sidecar metric).
             for _, r := range redacted {
-                log.Warn("PII redacted on read",
+                slog.Warn("PII redacted on read",
                     "subject", r.Subject,
                     "field", r.Name,
                     "reason", r.Reason)
@@ -171,26 +278,30 @@ func newEmployeeRuntime(store es.Store) *aggregate.Runtime[*employeev1.Employee,
 }
 ```
 
-What happens at write time (Handle):
+What happens at write time (`Handle`):
 
-1. The Decider produces typed events with **plaintext** in PII fields.
-2. The runtime clones each event and calls codegen-emitted `EncryptPII`
-   — those bytes are now ciphertext.
-3. Codec.Encode produces the wire payload; Append persists it. **The
-   on-disk bytes never contain plaintext.**
+1. The Decider produces typed events with **plaintext** in classified
+   fields.
+2. The runtime clones each event and calls codegen-emitted
+   `EncryptPII` — fields whose classification engages encryption are
+   now ciphertext (string → base64'd, bytes → raw).
+3. `Codec.Encode` produces the wire payload; `Append` persists it.
+   **The on-disk bytes never contain plaintext for encrypted fields.**
 
-What happens at read time (Load):
+What happens at read time (`Load`):
 
-1. Codec.Decode unmarshals the on-disk bytes — PII fields hold
-   ciphertext.
-2. The runtime calls codegen-emitted `DecryptPII`. If every subject is
-   live, fields are replaced with plaintext.
-3. If any subject has been shredded, those fields are **zeroed** and
-   added to `RedactedFields`. The `OnRedacted` hook fires.
+1. `Codec.Decode` unmarshals the on-disk bytes — encrypted fields
+   hold ciphertext.
+2. The runtime calls codegen-emitted `DecryptPII`. If every subject
+   is live, fields are replaced with plaintext.
+3. If any subject has been shredded, those fields are **zeroed** (or
+   emptied, for strings) and added to `RedactedFields`. The
+   `OnRedacted` hook fires.
 
-## Forgetting a subject
+### Forgetting a subject — `ForgetSubject`
 
-GDPR-style deletion is one call:
+GDPR-style deletion is one call. Semantics are unchanged from ADR
+0010:
 
 ```go
 if err := shredder.ForgetSubject(ctx, "tenant-acme", "emp-42"); err != nil {
@@ -204,135 +315,154 @@ Effect:
   The DEK is gone; the row stays for compliance audit ("we deleted
   this on 2026-03-14").
 - The in-process DEK cache evicts the entry.
-- Any subsequent `EncryptField` or `DecryptField` for this subject
-  fails — `EncryptField` returns an error ("subject has been
-  shredded"), `DecryptField` returns `shred.ErrShredded`.
-- All historical events for this subject become unreadable for the
-  encrypted fields. The events themselves stay on disk (per
-  append-only), but their PII fields are now ciphertext nobody can
-  decrypt.
-- Non-PII fields (department, status, the subject_field itself)
-  remain readable forever. Ops, analytics, and audit can still answer
-  "how many people were terminated last quarter?" without holding any
-  PII.
+- Subsequent `EncryptField` for this subject fails;
+  `DecryptField` returns `shred.ErrShredded`.
+- Historical events for this subject become unreadable for the
+  encrypted fields. Events themselves stay on disk; their classified
+  fields surface as `RedactedField` markers on Load.
+- Fields classified PUBLIC or INTERNAL (department, status, the
+  subject_field itself) remain readable forever.
 
-**Operator runbook check**: after `ForgetSubject`, run the framework's
-projection rebuild for any read model that mirrored the subject. The
-Tier 1 `state_cache` is overwritten on the next event; old rows for
-the subject's stream may still contain the encrypted bytes — these
-will surface as redacted on read but won't auto-erase. To proactively
-overwrite, call `aggregate.RebuildStateCache` after shredding.
+Then run the state-cache rebuild for the affected stream so any
+plaintext that the cache retained from a pre-shred Load is
+overwritten:
+
+```go
+if err := aggregate.RebuildStateCache(ctx, runtime, streamID); err != nil {
+    return err
+}
+```
+
+### DSAR export and the manifest
+
+GDPR Article 15 requires a per-subject export of their personal data.
+The manifest's `dsar_export` column is the authoritative allowlist:
+
+```json
+{
+  "name": "myapp.employee.v1.Hired",
+  "fields": [
+    {"name": "employee_id",   "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD",   "encryption": "none",                  "dsar_export": true,  "audit_on_read": false, "retention": "standard"},
+    {"name": "legal_name",    "classification": "DATA_CLASSIFICATION_PERSONAL",        "encryption": "subject_string_base64", "dsar_export": true,  "audit_on_read": false, "retention": "standard"},
+    {"name": "email",         "classification": "DATA_CLASSIFICATION_PERSONAL",        "encryption": "subject_string_base64", "dsar_export": true,  "audit_on_read": false, "retention": "standard"},
+    {"name": "date_of_birth", "classification": "DATA_CLASSIFICATION_QUASI_IDENTIFIER","encryption": "subject_string_base64", "dsar_export": true,  "audit_on_read": false, "retention": "standard"},
+    {"name": "department",    "classification": "DATA_CLASSIFICATION_INTERNAL",        "encryption": "none",                  "dsar_export": false, "audit_on_read": false, "retention": "standard"},
+    {"name": "initial_role",  "classification": "DATA_CLASSIFICATION_INTERNAL",        "encryption": "none",                  "dsar_export": false, "audit_on_read": false, "retention": "standard"}
+  ]
+}
+```
+
+DSAR-export tooling reads each manifest, joins on the in-flight
+event/state types, and emits the fields where `dsar_export: true`.
+CREDENTIAL fields are always `dsar_export: false` (auth tokens are
+never the subject's own data they can take with them). INTERNAL is
+also `false` (system-owned, not subject-owned). Everything else
+PERSONAL-and-up defaults to exportable; the exporter applies the
+domain-specific Art 9 consent / tax retention checks as documented in
+ADR 0027.
+
+**Check the manifest into the repo.** PRs touching event protos
+surface the diff in code review; privacy reviewers see exactly which
+fields change classification, switch encryption modes, or flip in/out
+of DSAR scope. Any unintended downgrade (e.g., PERSONAL → INTERNAL)
+is one diff line away from being caught.
 
 ## KEK rotation: `RewrapDEKs`
 
-Per ADR 0010, **DEKs don't rotate** (rotating a DEK means
-re-encrypting every historical field under it — only worth it if the
-DEK itself is compromised). **KEKs do rotate** routinely (annual key
-rollover, key-pinning policies).
-
-Procedure:
+Per ADR 0010, **DEKs don't rotate** — rotating a DEK means
+re-encrypting every historical field under it, only worth it if the
+DEK itself is compromised. **KEKs do rotate** routinely.
 
 ```go
-// 1. Tell the KMS to rotate. Inproc takes a tenantID; AWS/GCP adapters
-//    typically rotate the underlying KMS key out-of-band, then the
-//    next CurrentKEKVersion reflects the new version.
 if r, ok := keyStore.(kms.KEKRotator); ok {
     newVersion, err := r.RotateKEK(ctx, "tenant-acme")
     if err != nil { return err }
-    log.Info("KEK rotated", "tenant", "tenant-acme", "new_version", newVersion)
+    slog.Info("KEK rotated", "tenant", "tenant-acme", "new_version", newVersion)
 }
 
-// 2. Re-wrap existing DEKs under the new KEK.
 n, err := shredder.RewrapDEKs(ctx, "tenant-acme", 100 /* pageSize */)
 if err != nil { return err }
-log.Info("re-wrapped DEKs", "rows", n)
+slog.Info("re-wrapped DEKs", "rows", n)
 ```
 
-The rotation job is **idempotent and resumable**:
+The job is idempotent and resumable; crashes are safe and the next
+run picks up where it left off. Run after every KEK rotation, then
+once a quarter as a defensive sweep. Schedule alongside the outbox
+drain (recipe 06).
 
-- Reads `subject_keys` rows with `kek_version < current` in batches.
-- Skips shredded rows — their DEKs are intentionally gone.
-- For each: unwrap under old KEK version, wrap under current, upsert.
-- Crashes are safe; the next run picks up where it left off.
+## Failure modes
 
-Recommended cadence: run after every KEK rotation, then once a quarter
-as a defensive sweep. Schedule alongside the outbox drain (recipe 06).
+**SAD fields at write time.** A field classified
+`DATA_CLASSIFICATION_SAD` must never reach durable storage. The
+framework rejects the encrypt attempt with a clear error from
+`EncryptPII`; commands that produce SAD-bearing events fail fast.
+SAD belongs on ephemeral channels only — authorize and discard.
 
-## Redacted reads in handlers
-
-When a projection or aggregate handler reads a stream containing
-shredded events, the framework returns the event with PII fields
-zeroed and surfaces the redaction via `OnRedacted`. Handler code
-**doesn't** need to special-case missing fields beyond accepting that
-they might be empty:
-
-```go
-func (p *EmployeeProjection) OnHired(ctx context.Context, env es.Envelope, e *employeev1.Hired) error {
-    name := string(e.LegalName)
-    if name == "" {
-        // Subject shredded or KMS unavailable. Write a redacted
-        // placeholder to the read model.
-        name = "[redacted]"
-    }
-    return p.upsert(ctx, e.EmployeeId, name, e.Department)
-}
-```
-
-Or, if your projection tolerates gaps, just write empty values and let
-the UI/API surface redaction status via a sidecar query.
-
-## What stays accessible after a shred
-
-For the Employee example above, after `ForgetSubject(ctx, tenant, "emp-42")`:
-
-| Field | Status on disk | Readable after shred? |
-| ----- | -------------- | --------------------- |
-| `employee_id` | plaintext (subject) | ✅ yes |
-| `legal_name` | ciphertext | ❌ redacted |
-| `email` | ciphertext | ❌ redacted |
-| `date_of_birth` | ciphertext | ❌ redacted |
-| `department` | plaintext (non_pii) | ✅ yes |
-| `status` | plaintext (non_pii) | ✅ yes |
-
-Analytics queries like "headcount per department over time" continue
-to work for the shredded employee — they reference only the
-plaintext fields. Queries like "show me Bob Smith's email history"
-return `[redacted]`.
-
-## Gotchas and limitations
-
-**Schema evolution.** Adding a new PII field is safe (encrypts on
-first write). Renaming a field is a proto-level breaking change —
-new proto, new events; old events still decrypt under the old name
-because proto's wire format keys by field number, not name.
+**Schema evolution.** Adding a new classified field is safe (encrypts
+on first write). Renaming a field is a proto-level breaking change.
+Changing a classification (PERSONAL → SENSITIVE, INTERNAL →
+PERSONAL) is a behavior change: events already written under the old
+classification stay where they are, but the manifest now describes
+the new regime. Pair the change with a `state_schema_version` bump
+(ADR 0013) so projections and the state cache rebuild.
 
 **Cross-shred lineage.** If event A in stream X references subject Y,
 and Y is shredded, the reference itself (the subject identifier
 field) is plaintext and remains. Only the encrypted fields go dark.
-This is intentional — operators need to be able to trace "what
-stream did this reference?" without holding any PII.
+Intentional: operators need to trace "what stream did this
+reference?" without holding any PII.
 
-**snapshots.** Tier 1 `state_cache` and Tier-1 snapshots (ADR 0011)
-hold derived state. After a shred, the state cache may still hold
+**State cache after shred.** Tier 1 `state_cache` (ADR 0023) holds
+derived state. After `ForgetSubject`, the cache may still hold
 the last-loaded plaintext until the next write rebuilds it. Force a
 rebuild via `aggregate.RebuildStateCache` if zero-residue is
 mandatory for compliance.
 
-**External read stores.** Anything you fanned out via Tier 3
-projections to external systems (Elasticsearch, BigQuery, S3) is
-**not** auto-shredded. Your compliance runbook must coordinate the
-shred call with deletion in each external store. Document the list
-of external stores per aggregate in your privacy review.
+**External read stores.** Anything fanned out via projections to
+external systems (Elasticsearch, BigQuery, S3) is **not**
+auto-shredded. Your compliance runbook coordinates the shred call
+with deletion in each external store. Document the list of external
+stores per aggregate in the privacy review.
 
 **KMS unavailability.** When the KMS is down on a read path and the
 DEK isn't cached, the framework returns `es.ErrKMSUnavailable` —
-hard error, not silent fallback. The decision is: "better to fail
-loud than to silently substitute defaults that look like real data."
+hard error, not silent fallback.
 
-## Reference
+## What NOT to do
 
-- ADR 0010 — Crypto-Shredding for PII
-- [`kms/`](../../kms/) — KMS interface + in-process implementation
-- [`shred/`](../../shred/) — Shredder + Encrypt/Decrypt + ForgetSubject + RewrapDEKs
-- [`cmd/protoc-gen-es-go/main.go`](../../cmd/protoc-gen-es-go/main.go) — codegen for PII methods + manifest
-- [`adapters/storage/postgres/shred.go`](../../adapters/storage/postgres/shred.go) / [`adapters/storage/sqlite/shred.go`](../../adapters/storage/sqlite/shred.go) — adapter SubjectStore implementations
+- **Don't downgrade a classification to silence a test.** PERSONAL →
+  INTERNAL bypasses encryption AND removes the field from DSAR
+  exports. Both behaviours change at once. If the test wants
+  plaintext for assertions, decrypt explicitly via `View(level)` at
+  the test boundary.
+- **Don't try to migrate from `(es.v1.pii)` / `(es.v1.non_pii)` /
+  `(es.v1.pii_intentional)`** — those annotations are gone. There is
+  no migration shim. Adopters update their protos to use
+  `(es.v1.data_classification)`. Fields previously declared `bytes`
+  with no annotation will become PUBLIC by default; this is the one
+  case where the new model is more lax than the old, and it's
+  intentional — unannotated bytes were a sharp edge of the old
+  default-to-encrypted rule.
+- **Don't store SAD even briefly in a stream "for debugging".**
+  Codegen rejects it; bypassing the reject (writing a SAD field
+  through some other code path) violates PCI scope. Use a separate
+  ephemeral channel and discard after authorization.
+- **Don't bypass `LogValue`.** If you stringify an event yourself
+  (`fmt.Sprintf("%+v", e)` or `proto.Marshal` + base64), you lose the
+  redaction. Pass the proto pointer to `slog` and let `LogValue`
+  render.
+
+## See also
+
+- ADR 0010 — Crypto-Shredding for PII (the encryption mechanism).
+- ADR 0027 — Data Governance Model (the classification policy).
+- `es/access.go` — `AccessLevel` ladder.
+- `proto/es/v1/options.proto` — `DataClassification` enum.
+- `kms/` — KMS interface + in-process implementation.
+- `shred/` — Shredder + Encrypt/Decrypt + ForgetSubject + RewrapDEKs.
+- `proto-gen/main.go` — codegen for View / LogValue / Clone / PII
+  methods + manifest.
+- `examples/employee/` — the full worked aggregate.
+- `adapters/storage/postgres/shred.go` /
+  `adapters/storage/sqlite/shred.go` — adapter SubjectStore
+  implementations.
