@@ -31,6 +31,7 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 11 | [Crypto-shredding for PII](./11-crypto-shredding.md)            | PII proto annotations, `pii_manifest.json` review, `ForgetSubject`, `RewrapDEKs` for KEK rotation, redacted reads. |
 | 12 | [Linked projections / derived streams](./12-linked-projections.md) | Tier 3.5: routing (`OrderShipped` → `FulfillmentTask`) and fan-in audit ledger patterns. Idempotent emit, lineage, replay. |
 | 13 | [state_stream — coalesced state-mirror delivery](./13-state-stream.md) | Mirror current aggregate state to search indexes / external read-stores. Coalesced-on-retry, cold-start backfill, no DLQ, crypto-shred runbook, schema-bump cascade. |
+| 14 | [cmdworkflow deployment](./14-cmdworkflow-deployment.md) | Production wiring of the workflow-orchestrated command bus on Restate. Three-step start, topologies (sidecar / cluster / managed), idempotency at the edge, observability, common pitfalls. |
 
 ## Conventions used in these recipes
 
