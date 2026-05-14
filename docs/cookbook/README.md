@@ -33,6 +33,7 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 13 | [state_stream — coalesced state-mirror delivery](./13-state-stream.md) | Mirror current aggregate state to search indexes / external read-stores. Coalesced-on-retry, cold-start backfill, no DLQ, crypto-shred runbook, schema-bump cascade. |
 | 14 | [cmdworkflow deployment](./14-cmdworkflow-deployment.md) | Production wiring of the workflow-orchestrated command bus on Restate. Three-step start, topologies (sidecar / cluster / managed), idempotency at the edge, observability, common pitfalls. |
 | 15 | [HTTP edge with Connect-go](./15-http-edge-with-connect.md) | Expose `cmdworkflow.Workflow` over HTTP via the `adapters/httpedge/connect` runtime helper. DTO seam, error mapping, idempotency header, async-ack pattern. |
+| 16 | [Sagas at the app layer](./16-sagas-at-the-app-layer.md) | Multi-step orchestration with timers / external callbacks / concurrent waits as user workflow functions calling the framework's command bus. Restate + DBOS variants. Why sagas are deliberately out of framework scope. |
 
 ## Conventions used in these recipes
 

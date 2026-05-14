@@ -497,7 +497,7 @@ happened.
 - **One generic command handler.** `HandleCmd[S, C, E]` is framework code, not per-aggregate code. Adding a new aggregate adds an entry in a router, not a new workflow.
 - **Declarative subscriptions.** Adding a Typesense mirror, an audit sink, a SaaS-side webhook = `bus.Register(Subscriber{Name, Filter, Handle})`. No workflow rewrite, no new pipeline.
 - **Per-subscriber durability without dual-write risk.** Each subscriber's update is an independently-journaled step. Eventstore is the source of truth; subscribers derive from it. If one is down for an hour, the workflow keeps retrying that one step until it succeeds — eventstore state is unaffected.
-- **Sagas are just subscribers.** A saga is a Subscriber whose `Handle` emits more commands (back into `HandleCmd`). Same registration mechanism, same observability surface, same journal.
+- **Transactional saga rollback is built-in via `Sync + Compensate`** — a Subscriber whose exhaustion fires a compensating command. Single-event, single-aggregate, in-line. For **multi-step sagas with timers / external callbacks / concurrent fan-out**, write them as user workflow functions that call `bus.HandleCmd`; that's app-layer composition, not framework code. See cookbook recipe 16.
 - **Backfill stays clean.** `state_stream.Drain` keeps its role: when a new subscriber is added, point it at `state_cache` for one-shot backfill, then let the workflow take over for live events. Section 2's drains are not deleted; they become the *catch-up* path while the workflow is the *live* path.
 
 ### Why you might NOT pick this
@@ -520,12 +520,11 @@ happened.
 | Connect-go services | Codegen extension (`protoc-gen-es-go` already generates the typed event/command code; adding Connect service definitions is a mechanical extension). |
 | Cross-domain fan-out | NATS / Kafka subscriber registered as one of the `Subscriber`s. |
 
-Status: the workflow-orchestrated command bus is **architectural intent
-not yet shipped**. ADR pending. The shipped primitives (aggregate
-runtime, state_cache, state_stream, outbox, projection runtime) are
-each independently usable today; this section describes how they
-compose under a Restate/DBOS layer when that's how you choose to
-deploy.
+Status: **shipped**. ADR 0025 + 0026 define the contract; the
+`cmdworkflow` package + Restate and DBOS adapters are operational
+with codegen for per-aggregate Service structs. Cookbook recipe 14
+covers production deployment; recipe 16 covers app-layer sagas
+that call into the bus.
 
 ## Reference
 

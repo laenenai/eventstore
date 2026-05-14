@@ -78,10 +78,19 @@ type Future interface {
 }
 ```
 
-Three methods for v1. Run is durable journaled step; RunAsync is the
-same with a Future the caller awaits (enables parallel Sync fan-out);
-Spawn is fire-and-forget child workflow. No Cancel, no Terminate, no
-Sleep / Wait / Awakeable. Saga primitives come in a future ADR.
+Three methods. Run is a durable journaled step; RunAsync is the same
+with a Future the caller awaits (enables parallel Sync fan-out);
+Spawn is fire-and-forget child workflow. Nothing else.
+
+**Saga orchestration is deliberately out of scope** for `WorkflowRuntime`.
+Sleep, Wait, Awakeable, Select, Cancel — these are the runtime's
+own primitives, and applications use them **directly** from saga
+functions (Restate's `restate.Sleep`, DBOS's `dctx.Sleep`, etc.),
+not through framework wrappers. The framework stops at command bus
++ subscribers; multi-step orchestration with timers, external
+callbacks, and concurrent waits lives at the application layer.
+
+See cookbook recipe 16 for the saga-as-user-workflow pattern.
 
 ### 4. Sync subscribers run in parallel; retries hidden inside one step
 
@@ -332,9 +341,12 @@ extension.
 9. Codegen extension — typed `RegisterFor[*EventType](handler)`.
 10. Connect-go service stubs from `protoc-gen-es-go`.
 
-**Phase 4 (separate ADR if needed):**
+**Future (if it ever needs to be in-framework):**
 
-11. Saga primitives (`Sleep`, `Wait`, `Awakeable`, `Cancel`,
-    `Terminate`) — extends `WorkflowRuntime` interface.
+11. ~~Saga primitives (`Sleep`, `Wait`, `Awakeable`, `Cancel`,
+    `Terminate`)~~ — **out of scope**. Sagas live at the application
+    layer using the runtime's own primitives directly. See cookbook
+    recipe 16.
 12. Decider-emitted compensation plans — optional override of
-    per-subscriber Compensate.
+    per-subscriber Compensate. Would only be valuable if multi-event
+    transaction-spanning compensation patterns emerge.

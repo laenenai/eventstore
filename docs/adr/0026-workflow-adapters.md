@@ -279,15 +279,32 @@ DLQ or Drop for Async failures.
 Inproc adapter continues to use a goroutine for Spawn (not durable
 — inproc is test-only anyway).
 
-### 7. Saga primitives (`Sleep`, `Wait`, `Awakeable`, `Cancel`) deferred
+### 7. Saga orchestration is out of scope (app-layer concern)
 
-This ADR does not extend `WorkflowRuntime` with the saga primitives
-named in ADR 0025's deferral list. The current two-method interface
-(`Run` + `Spawn`) is sufficient for Sync, Async, and Compensate
-subscribers. Long-running waits, timers, and external-event
-awakeables come in a future ADR alongside the saga API surface;
-that ADR will widen `WorkflowRuntime` with the new methods and both
-adapters add implementations.
+This ADR does not extend `WorkflowRuntime` with `Sleep`, `Wait`,
+`Awakeable`, or `Cancel`. The interface stops at `Run` + `RunAsync` +
+`Spawn`, which is sufficient for Sync, Async, and Compensate
+subscribers — the framework's responsibility.
+
+Saga orchestration — multi-step processes with timers, external
+callbacks, concurrent fan-out, conditional retries — **lives at the
+application layer**. Both Restate and DBOS expose these primitives
+directly to user code; an app saga is a Go function that uses
+`restate.Sleep` / `dbos.Sleep` and invokes the framework's
+`bus.HandleCmd` for the state-change steps. The framework knows
+nothing about the saga's structure — it only sees commands arriving
+and dispatches them through subscribers as usual.
+
+This is a deliberate scope line:
+
+- **Framework**: state, delivery, subscribers (the "what changed"
+  and "who heard about it").
+- **App**: orchestration in user workflow functions (the "when, in
+  what sequence, with what waits").
+- **Runtime** (Restate / DBOS): provides the workflow primitives to
+  both layers directly.
+
+See cookbook recipe 16 for the worked saga-as-user-workflow pattern.
 
 ## Consequences
 
