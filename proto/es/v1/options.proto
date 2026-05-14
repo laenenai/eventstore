@@ -8,20 +8,25 @@ option go_package = "github.com/laenenai/eventstore/gen/es/v1;esv1";
 
 // Framework-defined protobuf options consumed by protoc-gen-es-go to
 // drive code generation. See ADR 0004 (sum-type representation),
-// ADR 0008 (stream identity), ADR 0010 (crypto-shredding), and
-// ADR 0013 (schema evolution).
+// ADR 0008 (stream identity), ADR 0010 (crypto-shredding), ADR 0013
+// (schema evolution), ADR 0026 (workflow handlers), ADR 0027 (data
+// governance).
 //
 // Usage in a domain .proto:
 //
 //   syntax = "proto3";
 //   import "es/v1/options.proto";
 //
-//   message UserState {
+//   message User {
 //     option (es.v1.aggregate) = "user";
 //     string user_id = 1 [(es.v1.subject_field) = true];
-//     string email   = 2;  // default: PII, encrypted
-//     int64  balance = 3 [(es.v1.non_pii) = true];
+//     string email   = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+//     int64  balance = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_FINANCIAL];
 //   }
+//
+// Unannotated fields default to DATA_CLASSIFICATION_PUBLIC — no
+// encryption, freely exported. Encryption is opt-in via explicit
+// classification.
 
 // ---- Message-level options -----------------------------------------------
 
@@ -100,20 +105,12 @@ extend google.protobuf.FieldOptions {
   // Subject fields are auto-exempt from encryption — encrypting them
   // would require the key to find the key. At most one per message.
   //
+  // The subject value is what the framework uses to look up the DEK.
+  // Typical pattern: a stable id field (user_id, public_id, …) is
+  // both the subject_field AND the stream_id.
+  //
   // See ADR 0010.
   bool subject_field = 50000;
-
-  // Opts the field OUT of crypto-shredding. By default every field is
-  // encrypted (the "deny by default" posture from ADR 0010); mark
-  // known-safe fields with this option to keep them readable
-  // post-shredding.
-  bool non_pii = 50001;
-
-  // Suppresses the codegen lint advisory that fires when a primitive
-  // type (int*, bool, enum, Timestamp) is left default-encrypted.
-  // Use when the primitive really IS PII — e.g., a salary integer or
-  // a blood-pressure reading.
-  bool pii_intentional = 50002;
 
   // Per-field subject reference for multi-subject events (transfers,
   // shared resources). Value is a field path within the same message
@@ -141,4 +138,115 @@ extend google.protobuf.FieldOptions {
   // Having tenant on every command shape keeps it first-class in the
   // audit trail.
   bool tenant_id = 50005;
+
+  // Data classification — the regulatory regime this field falls
+  // under. The framework derives encryption, DSAR export, access
+  // audit, and retention behavior from this single annotation.
+  //
+  // Unannotated fields default to DATA_CLASSIFICATION_PUBLIC (no
+  // encryption). Encryption is OPT-IN — declare a classification
+  // from PERSONAL onwards to engage crypto-shredding.
+  //
+  // See ADR 0027 for the data-governance design and the
+  // classification-to-behavior mapping.
+  DataClassification data_classification = 50007;
+}
+
+// DataClassification — the regulatory regime a field falls under.
+// The framework's codec derives all governance behavior from this
+// single annotation. Numeric values are pinned forever; new
+// categories are appended.
+//
+// Mapping to framework behavior:
+//
+// | Classification         | Encryption | DSAR    | Audit-on-read | Retention      |
+// | ---------------------- | ---------- | ------- | ------------- | -------------- |
+// | UNSPECIFIED            | none       | yes     | no            | standard       |
+// | PUBLIC                 | none       | yes     | no            | standard       |
+// | INTERNAL               | none       | no      | no            | standard       |
+// | PERSONAL               | subject    | yes     | no            | standard       |
+// | QUASI_IDENTIFIER       | subject    | yes     | no            | standard       |
+// | SENSITIVE (Art 9)      | subject    | yes (*) | YES           | shorter        |
+// | FINANCIAL              | subject    | yes (*) | optional      | tax-locked     |
+// | CARDHOLDER (PCI CHD)   | subject    | yes     | YES           | PCI-scope      |
+// | SAD (PCI sens. auth)   | REJECTED   | n/a     | n/a           | n/a            |
+// | CREDENTIAL             | subject    | NEVER   | yes           | standard       |
+// | UNSTRUCTURED           | subject    | yes     | no            | standard       |
+//
+// (*) DSAR for SENSITIVE requires an explicit per-Art-9 consent
+// check; FINANCIAL respects tax-retention windows before delete.
+//
+// Wire-format note: for string fields, ciphertext is base64-encoded
+// (RawStdEncoding, no padding) to keep the field UTF-8-valid. For
+// bytes fields, ciphertext is raw (no base64 overhead). Both produce
+// equivalent semantics; pick `bytes` for genuinely binary PII
+// (biometric templates, MRZ scans).
+enum DataClassification {
+  // Default. Treated as PUBLIC for behavior. New protos should set
+  // this explicitly.
+  DATA_CLASSIFICATION_UNSPECIFIED = 0;
+
+  // Public — non-sensitive. No encryption. Freely exported. No
+  // audit. Examples: ISO country codes, enum statuses, document
+  // type names.
+  DATA_CLASSIFICATION_PUBLIC = 1;
+
+  // Internal — non-PII but not public. No encryption. Not exported
+  // in DSAR. Examples: internal flags, system-set timestamps,
+  // computed metrics.
+  DATA_CLASSIFICATION_INTERNAL = 2;
+
+  // GDPR Article 4 personal data — directly identifies a natural
+  // person. Encrypted per-subject. Subject to standard retention +
+  // DSAR export rules. Examples: name, email, phone, address,
+  // government IDs (when not in CARDHOLDER/SAD scope).
+  DATA_CLASSIFICATION_PERSONAL = 3;
+
+  // Quasi-identifier — alone non-identifying, in combination can re-
+  // identify a person (HIPAA-safe-harbor 18-element list lineage).
+  // Encrypted per-subject. Analytics adapters apply k-anonymity in
+  // aggregations. Examples: date of birth, postal code, gender,
+  // employer name.
+  DATA_CLASSIFICATION_QUASI_IDENTIFIER = 4;
+
+  // GDPR Article 9 special category — racial/ethnic origin, religious
+  // or philosophical beliefs, political opinions, trade-union
+  // membership, health, biometric, genetic, sexual orientation,
+  // criminal records. Encrypted per-subject + every read audited +
+  // shorter default retention. Examples: PEP declaration details
+  // (political), biometric facial templates, race/ethnicity surveys.
+  DATA_CLASSIFICATION_SENSITIVE = 5;
+
+  // Financial data — balances, transactions, source-of-funds, tax
+  // identifiers (TINs). Encrypted per-subject. Tax-retention-locked:
+  // crypto-shred of the subject is blocked until the regulatory
+  // retention window has elapsed (jurisdiction-dependent, typically
+  // 5-10 years).
+  DATA_CLASSIFICATION_FINANCIAL = 6;
+
+  // PCI-DSS Cardholder Data (CHD) — PAN, cardholder name on card,
+  // expiration date, service code. Encrypted per-subject + every
+  // read audited + segregated storage (PCI scope tag). Examples:
+  // card.pan, card.cardholder_name, card.expiry.
+  DATA_CLASSIFICATION_CARDHOLDER = 7;
+
+  // PCI-DSS Sensitive Authentication Data (SAD) — CVV/CVV2, PIN,
+  // PIN block, full magnetic track data. MUST NOT be persisted to
+  // durable streams post-authorization. Framework REJECTS encrypt
+  // attempts at runtime with a clear error. Use ephemeral / in-
+  // memory channels only.
+  DATA_CLASSIFICATION_SAD = 8;
+
+  // Authentication credentials — password hashes, API tokens, OAuth
+  // secrets, MFA seeds. v1: encrypted per-subject (the subject's
+  // DEK). DSAR export ALWAYS skips. Crypto-shred of the subject
+  // destroys (which is correct — they're gone). Future: move to a
+  // dedicated system key with different rotation cadence.
+  DATA_CLASSIFICATION_CREDENTIAL = 9;
+
+  // Unstructured / free-form — notes, descriptions, comments,
+  // chat messages. May contain accidental PII spilled in by humans.
+  // Encrypted per-subject; treated as PERSONAL for access; flagged
+  // for upstream PII-scanner pipelines to inspect/quarantine.
+  DATA_CLASSIFICATION_UNSTRUCTURED = 10;
 }

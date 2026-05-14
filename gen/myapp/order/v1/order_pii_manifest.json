@@ -5,26 +5,26 @@
     {
       "name": "myapp.order.v1.OrderPlaced",
       "fields": [
-        {"name": "order_id", "classification": "non_pii"},
-        {"name": "customer_id", "classification": "non_pii"},
-        {"name": "warehouse", "classification": "non_pii"},
-        {"name": "placed_at_ms", "classification": "non_pii"}
+        {"name": "order_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "customer_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "warehouse", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "placed_at_ms", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "myapp.order.v1.OrderShipped",
       "fields": [
-        {"name": "order_id", "classification": "non_pii"},
-        {"name": "warehouse", "classification": "non_pii"},
-        {"name": "carrier", "classification": "non_pii"},
-        {"name": "tracking", "classification": "non_pii"},
-        {"name": "shipped_at_ms", "classification": "non_pii"}
+        {"name": "order_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "warehouse", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "carrier", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "tracking", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "shipped_at_ms", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "myapp.order.v1.OrderCompleted",
       "fields": [
-        {"name": "completed_at_ms", "classification": "non_pii"}
+        {"name": "completed_at_ms", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

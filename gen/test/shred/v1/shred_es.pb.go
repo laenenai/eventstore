@@ -12,6 +12,7 @@ import (
 	projection "github.com/laenenai/eventstore/projection"
 	shred "github.com/laenenai/eventstore/shred"
 	proto "google.golang.org/protobuf/proto"
+	slog "log/slog"
 )
 
 // Command is the sealed interface for the Commands sum type.
@@ -230,6 +231,10 @@ func (e *Registered) Subject() string {
 // by aggregate.Runtime before Codec.Encode when Runtime.Shredder
 // is configured. The framework passes the resolved subject id;
 // per-field (es.v1.subject) overrides are honored below.
+//
+// `bytes` PII fields hold raw ciphertext after encrypt; `string`
+// PII fields (declared with (es.v1.pii) = true) hold base64-
+// encoded ciphertext so the field remains UTF-8-valid.
 func (e *Registered) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
 	if len(e.DisplayName) > 0 {
 		sealed, err := s.EncryptField(ctx, tenantID, subject, e.DisplayName)
@@ -249,7 +254,8 @@ func (e *Registered) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID
 }
 
 // DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
-// other errors abort.
+// base64 decode failure on string PII fields counts as a corrupt
+// payload and aborts; other errors abort.
 func (e *Registered) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
 	var redacted shred.RedactedFields
 	if len(e.DisplayName) > 0 {
@@ -300,6 +306,10 @@ func (e *NameChanged) Subject() string {
 // by aggregate.Runtime before Codec.Encode when Runtime.Shredder
 // is configured. The framework passes the resolved subject id;
 // per-field (es.v1.subject) overrides are honored below.
+//
+// `bytes` PII fields hold raw ciphertext after encrypt; `string`
+// PII fields (declared with (es.v1.pii) = true) hold base64-
+// encoded ciphertext so the field remains UTF-8-valid.
 func (e *NameChanged) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
 	if len(e.NewDisplayName) > 0 {
 		sealed, err := s.EncryptField(ctx, tenantID, subject, e.NewDisplayName)
@@ -312,7 +322,8 @@ func (e *NameChanged) EncryptPII(ctx context.Context, s *shred.Shredder, tenantI
 }
 
 // DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
-// other errors abort.
+// base64 decode failure on string PII fields counts as a corrupt
+// payload and aborts; other errors abort.
 func (e *NameChanged) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
 	var redacted shred.RedactedFields
 	if len(e.NewDisplayName) > 0 {
@@ -328,4 +339,231 @@ func (e *NameChanged) DecryptPII(ctx context.Context, s *shred.Shredder, tenantI
 		}
 	}
 	return redacted, nil
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Person.
+func (m *Person) Clone() *Person {
+	if m == nil {
+		return nil
+	}
+	out := &Person{}
+	out.PersonId = m.PersonId
+	out.DisplayName = m.DisplayName
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Person) View(level es.AccessLevel) *Person {
+	if m == nil {
+		return nil
+	}
+	out := &Person{}
+	out.PersonId = m.PersonId
+	if level >= es.AccessLevelCustomer {
+		out.DisplayName = m.DisplayName
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Person) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("person_id", m.PersonId),
+		slog.String("display_name", "[REDACTED:PERSONAL]"),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Register.
+func (m *Register) Clone() *Register {
+	if m == nil {
+		return nil
+	}
+	out := &Register{}
+	out.PersonId = m.PersonId
+	out.DisplayName = m.DisplayName
+	out.Email = m.Email
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Register) View(level es.AccessLevel) *Register {
+	if m == nil {
+		return nil
+	}
+	out := &Register{}
+	out.PersonId = m.PersonId
+	if level >= es.AccessLevelCustomer {
+		out.DisplayName = m.DisplayName
+	}
+	if level >= es.AccessLevelCustomer {
+		out.Email = m.Email
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Register) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("person_id", m.PersonId),
+		slog.String("display_name", "[REDACTED:PERSONAL]"),
+		slog.String("email", "[REDACTED:PERSONAL]"),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *UpdateName.
+func (m *UpdateName) Clone() *UpdateName {
+	if m == nil {
+		return nil
+	}
+	out := &UpdateName{}
+	out.NewDisplayName = m.NewDisplayName
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *UpdateName) View(level es.AccessLevel) *UpdateName {
+	if m == nil {
+		return nil
+	}
+	out := &UpdateName{}
+	if level >= es.AccessLevelCustomer {
+		out.NewDisplayName = m.NewDisplayName
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *UpdateName) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("new_display_name", "[REDACTED:PERSONAL]"),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Registered.
+func (m *Registered) Clone() *Registered {
+	if m == nil {
+		return nil
+	}
+	out := &Registered{}
+	out.PersonId = m.PersonId
+	out.DisplayName = m.DisplayName
+	out.Email = m.Email
+	out.ReferrerId = m.ReferrerId
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Registered) View(level es.AccessLevel) *Registered {
+	if m == nil {
+		return nil
+	}
+	out := &Registered{}
+	out.PersonId = m.PersonId
+	if level >= es.AccessLevelCustomer {
+		out.DisplayName = m.DisplayName
+	}
+	if level >= es.AccessLevelCustomer {
+		out.Email = m.Email
+	}
+	if level >= es.AccessLevelInternal {
+		out.ReferrerId = m.ReferrerId
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Registered) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("person_id", m.PersonId),
+		slog.String("display_name", "[REDACTED:PERSONAL]"),
+		slog.String("email", "[REDACTED:PERSONAL]"),
+		slog.String("referrer_id", m.ReferrerId),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *NameChanged.
+func (m *NameChanged) Clone() *NameChanged {
+	if m == nil {
+		return nil
+	}
+	out := &NameChanged{}
+	out.PersonId = m.PersonId
+	out.NewDisplayName = m.NewDisplayName
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *NameChanged) View(level es.AccessLevel) *NameChanged {
+	if m == nil {
+		return nil
+	}
+	out := &NameChanged{}
+	out.PersonId = m.PersonId
+	if level >= es.AccessLevelCustomer {
+		out.NewDisplayName = m.NewDisplayName
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *NameChanged) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("person_id", m.PersonId),
+		slog.String("new_display_name", "[REDACTED:PERSONAL]"),
+	)
 }

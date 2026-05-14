@@ -25,7 +25,7 @@ const (
 type Person struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PersonId      string                 `protobuf:"bytes,1,opt,name=person_id,json=personId,proto3" json:"person_id,omitempty"`
-	DisplayName   []byte                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // PII (default): encrypted per-person
+	DisplayName   []byte                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -264,9 +264,9 @@ type Registered struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Subject for this event's PII fields. Same value as Person.person_id.
 	PersonId      string `protobuf:"bytes,1,opt,name=person_id,json=personId,proto3" json:"person_id,omitempty"`
-	DisplayName   []byte `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"` // PII (default): encrypted under person_id's DEK
-	Email         []byte `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`                                // PII (default): encrypted under person_id's DEK
-	ReferrerId    string `protobuf:"bytes,4,opt,name=referrer_id,json=referrerId,proto3" json:"referrer_id,omitempty"`    // public field, kept plaintext
+	DisplayName   []byte `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Email         []byte `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	ReferrerId    string `protobuf:"bytes,4,opt,name=referrer_id,json=referrerId,proto3" json:"referrer_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -467,33 +467,33 @@ var File_test_shred_v1_shred_proto protoreflect.FileDescriptor
 
 const file_test_shred_v1_shred_proto_rawDesc = "" +
 	"\n" +
-	"\x19test/shred/v1/shred.proto\x12\rtest.shred.v1\x1a\x13es/v1/options.proto\"Z\n" +
+	"\x19test/shred/v1/shred.proto\x12\rtest.shred.v1\x1a\x13es/v1/options.proto\"`\n" +
 	"\x06Person\x12!\n" +
-	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12!\n" +
-	"\fdisplay_name\x18\x02 \x01(\fR\vdisplayName:\n" +
-	"\x82\xb5\x18\x06person\"`\n" +
+	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12'\n" +
+	"\fdisplay_name\x18\x02 \x01(\fB\x04\xb8\xb5\x18\x03R\vdisplayName:\n" +
+	"\x82\xb5\x18\x06person\"l\n" +
 	"\bRegister\x12\x1b\n" +
-	"\tperson_id\x18\x01 \x01(\tR\bpersonId\x12!\n" +
-	"\fdisplay_name\x18\x02 \x01(\fR\vdisplayName\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\fR\x05email\"6\n" +
+	"\tperson_id\x18\x01 \x01(\tR\bpersonId\x12'\n" +
+	"\fdisplay_name\x18\x02 \x01(\fB\x04\xb8\xb5\x18\x03R\vdisplayName\x12\x1a\n" +
+	"\x05email\x18\x03 \x01(\fB\x04\xb8\xb5\x18\x03R\x05email\"<\n" +
 	"\n" +
-	"UpdateName\x12(\n" +
-	"\x10new_display_name\x18\x01 \x01(\fR\x0enewDisplayName\"\x97\x01\n" +
+	"UpdateName\x12.\n" +
+	"\x10new_display_name\x18\x01 \x01(\fB\x04\xb8\xb5\x18\x03R\x0enewDisplayName\"\x97\x01\n" +
 	"\bCommands\x125\n" +
 	"\bregister\x18\x01 \x01(\v2\x17.test.shred.v1.RegisterH\x00R\bregister\x12<\n" +
 	"\vupdate_name\x18\x02 \x01(\v2\x19.test.shred.v1.UpdateNameH\x00R\n" +
 	"updateName:\v\x92\xb5\x18\aCommandB\t\n" +
-	"\avariant\"\x8f\x01\n" +
+	"\avariant\"\x9b\x01\n" +
 	"\n" +
 	"Registered\x12!\n" +
-	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12!\n" +
-	"\fdisplay_name\x18\x02 \x01(\fR\vdisplayName\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\fR\x05email\x12%\n" +
-	"\vreferrer_id\x18\x04 \x01(\tB\x04\x88\xb5\x18\x01R\n" +
-	"referrerId\"Z\n" +
+	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12'\n" +
+	"\fdisplay_name\x18\x02 \x01(\fB\x04\xb8\xb5\x18\x03R\vdisplayName\x12\x1a\n" +
+	"\x05email\x18\x03 \x01(\fB\x04\xb8\xb5\x18\x03R\x05email\x12%\n" +
+	"\vreferrer_id\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x02R\n" +
+	"referrerId\"`\n" +
 	"\vNameChanged\x12!\n" +
-	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12(\n" +
-	"\x10new_display_name\x18\x02 \x01(\fR\x0enewDisplayName\"\x9c\x01\n" +
+	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12.\n" +
+	"\x10new_display_name\x18\x02 \x01(\fB\x04\xb8\xb5\x18\x03R\x0enewDisplayName\"\x9c\x01\n" +
 	"\x06Events\x12;\n" +
 	"\n" +
 	"registered\x18\x01 \x01(\v2\x19.test.shred.v1.RegisteredH\x00R\n" +

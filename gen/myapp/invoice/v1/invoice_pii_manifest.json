@@ -5,26 +5,26 @@
     {
       "name": "myapp.invoice.v1.Created",
       "fields": [
-        {"name": "invoice_id", "classification": "non_pii"},
-        {"name": "customer_id", "classification": "non_pii"},
-        {"name": "currency", "classification": "non_pii"},
-        {"name": "total_cents", "classification": "non_pii"},
-        {"name": "line_items", "classification": "non_pii"},
-        {"name": "created_at_ms", "classification": "non_pii"}
+        {"name": "invoice_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "customer_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "currency", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "total_cents", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "line_items", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "created_at_ms", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "myapp.invoice.v1.Paid",
       "fields": [
-        {"name": "payment_ref", "classification": "non_pii"},
-        {"name": "paid_at_ms", "classification": "non_pii"}
+        {"name": "payment_ref", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "paid_at_ms", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "myapp.invoice.v1.Voided",
       "fields": [
-        {"name": "reason", "classification": "non_pii"},
-        {"name": "voided_at_ms", "classification": "non_pii"}
+        {"name": "reason", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "voided_at_ms", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

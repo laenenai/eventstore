@@ -74,6 +74,19 @@ func main() {
 	})
 }
 
+// isFrameworkPackage reports whether the proto package is one of the
+// framework's own type spaces — the View/LogValue emitter must skip
+// these to avoid an import cycle against the `es` package (which
+// imports gen/es/v1 itself).
+func isFrameworkPackage(file *protogen.File) bool {
+	pkg := string(file.Desc.Package())
+	switch pkg {
+	case "es.v1", "eventstore.envelope.v1":
+		return true
+	}
+	return false
+}
+
 // pluginParam parses the plugin's `,key=value,…` request parameter
 // string. Returns the value for key, or "" when absent.
 func pluginParam(plugin *protogen.Plugin, key string) string {
@@ -148,7 +161,24 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 	if err != nil {
 		return err
 	}
-	if len(sumTypes) == 0 && len(projectionSpecs) == 0 {
+	// Count messages eligible for access-helper emission (every non-
+	// sum-type, non-projection-spec, non-map-entry message). When a
+	// file has only value types — neither sum types nor projection
+	// specs nor aggregates — we still emit a _es.pb.go for the
+	// View/LogValue helpers on those value types.
+	//
+	// Framework-internal packages (es.v1, eventstore.envelope.v1) are
+	// skipped: the helpers reference es.AccessLevel, so emitting them
+	// inside the framework's own gen tree would produce an import
+	// cycle.
+	var accessMsgCount int
+	if !isFrameworkPackage(file) {
+		walkEmittableMessages(file.Messages, func(*protogen.Message) {
+			accessMsgCount++
+		})
+	}
+
+	if len(sumTypes) == 0 && len(projectionSpecs) == 0 && accessMsgCount == 0 {
 		return nil
 	}
 
@@ -183,6 +213,16 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 	}
 	for _, ps := range projectionSpecs {
 		emitProjectionSpec(out, ps)
+	}
+
+	// Access-level View/LogValue helpers — emitted for every non-sum-
+	// type, non-projection-spec message in this file. Framework-
+	// internal packages are skipped to avoid an es-package import
+	// cycle (see isFrameworkPackage).
+	if !isFrameworkPackage(file) {
+		walkEmittableMessages(file.Messages, func(m *protogen.Message) {
+			emitAccessHelpers(out, m)
+		})
 	}
 
 	// ADR 0010: emit pii_manifest.json — the audit artifact listing
@@ -559,20 +599,48 @@ func emitProjectionSpec(out *protogen.GeneratedFile, ps *projectionSpec) {
 }
 
 // piiField captures the codegen analysis of one field on an event
-// variant as it relates to crypto-shredding (ADR 0010).
+// variant as it relates to data classification (ADR 0010 + ADR 0027).
 type piiField struct {
-	goName        string // Go struct field name (e.g. "Email")
-	protoName     string // proto field name (e.g. "email")
-	isSubject     bool   // marked (es.v1.subject_field) = true
-	isNonPII      bool   // marked (es.v1.non_pii) = true (or implicitly: it's the subject field)
-	piiIntentional bool  // marked (es.v1.pii_intentional) = true
-	subjectField  string // (es.v1.subject) = "other_field" override; default ""
+	goName         string                  // Go struct field name (e.g. "Email")
+	protoName      string                  // proto field name (e.g. "email")
+	isSubject      bool                    // marked (es.v1.subject_field) = true
+	subjectField   string                  // (es.v1.subject) = "other_field" override; default ""
+	classification esv1.DataClassification // (es.v1.data_classification) value, UNSPECIFIED if absent
+	kind           piiKind                 // how this field is encoded for encryption
 }
 
-// classifyFields walks an event variant message and classifies each
-// field per ADR 0010's rules. The boolean result reports whether the
-// variant carries any PII at all — when false, codegen omits the
-// EncryptPII/DecryptPII methods entirely.
+// piiKind selects the encrypt/decrypt code path emitted by codegen.
+type piiKind int
+
+const (
+	piiKindNone     piiKind = iota // not encrypted — no encryption code emitted
+	piiKindBytes                   // bytes field, encrypted in place as raw ciphertext
+	piiKindString                  // string field, base64-encoded ciphertext for UTF-8 safety
+	piiKindRejected                // SAD — must not be persisted; codegen emits a runtime-reject EncryptPII
+)
+
+// isEncryptedClassification returns true when the classification means
+// the field must be encrypted per-subject. PUBLIC, INTERNAL,
+// UNSPECIFIED stay plaintext; SAD is rejected (handled separately).
+func isEncryptedClassification(c esv1.DataClassification) bool {
+	switch c {
+	case esv1.DataClassification_DATA_CLASSIFICATION_PERSONAL,
+		esv1.DataClassification_DATA_CLASSIFICATION_QUASI_IDENTIFIER,
+		esv1.DataClassification_DATA_CLASSIFICATION_SENSITIVE,
+		esv1.DataClassification_DATA_CLASSIFICATION_FINANCIAL,
+		esv1.DataClassification_DATA_CLASSIFICATION_CARDHOLDER,
+		esv1.DataClassification_DATA_CLASSIFICATION_CREDENTIAL,
+		esv1.DataClassification_DATA_CLASSIFICATION_UNSTRUCTURED:
+		return true
+	}
+	return false
+}
+
+// classifyFields walks a message's fields and derives each field's
+// encryption code path from its (es.v1.data_classification). The
+// boolean result reports whether the variant has at least one field
+// that produces emit-able encryption code — when false, codegen omits
+// the EncryptPII/DecryptPII methods entirely.
 func classifyFields(v *protogen.Message) ([]piiField, bool, error) {
 	var (
 		fields []piiField
@@ -589,38 +657,44 @@ func classifyFields(v *protogen.Message) ([]piiField, bool, error) {
 					pf.isSubject = true
 				}
 			}
-			if proto.HasExtension(opts, esv1.E_NonPii) {
-				if val, _ := proto.GetExtension(opts, esv1.E_NonPii).(bool); val {
-					pf.isNonPII = true
-				}
-			}
-			if proto.HasExtension(opts, esv1.E_PiiIntentional) {
-				if val, _ := proto.GetExtension(opts, esv1.E_PiiIntentional).(bool); val {
-					pf.piiIntentional = true
-				}
-			}
 			if proto.HasExtension(opts, esv1.E_Subject) {
 				if val, _ := proto.GetExtension(opts, esv1.E_Subject).(string); val != "" {
 					pf.subjectField = val
 				}
 			}
+			if proto.HasExtension(opts, esv1.E_DataClassification) {
+				if val, _ := proto.GetExtension(opts, esv1.E_DataClassification).(esv1.DataClassification); val != 0 {
+					pf.classification = val
+				}
+			}
 		}
-		// Subject fields are always non-PII per ADR 0010
-		// ("you would need the key to find the key").
-		if pf.isSubject {
-			pf.isNonPII = true
+
+		// Subject fields are auto-non-encrypted per ADR 0010 ("you
+		// would need the key to find the key"). Setting a classification
+		// on a subject_field is a no-op for encryption (the manifest
+		// still records the declared classification for audit).
+		switch {
+		case pf.isSubject:
+			pf.kind = piiKindNone
+		case pf.classification == esv1.DataClassification_DATA_CLASSIFICATION_SAD:
+			pf.kind = piiKindRejected
+		case isEncryptedClassification(pf.classification):
+			switch f.Desc.Kind() {
+			case protoreflect.BytesKind:
+				pf.kind = piiKindBytes
+			case protoreflect.StringKind:
+				pf.kind = piiKindString
+			default:
+				return nil, false, fmt.Errorf(
+					"protoc-gen-es-go: field %s.%s has data_classification=%s but type %s is not encryptable (must be string or bytes)",
+					v.Desc.FullName(), pf.protoName, pf.classification, f.Desc.Kind())
+			}
+		default:
+			pf.kind = piiKindNone
 		}
-		// Non-bytes fields are implicitly non-PII regardless of the
-		// (es.v1.non_pii) annotation — the wire format
-		// (version|iv|ct|tag) requires the on-wire field to be bytes.
-		// ADR 0010 calls this out as a build-time advisory rather than
-		// a hard error; we treat the type itself as authoritative.
-		kind := f.Desc.Kind()
-		if kind != protoreflect.BytesKind {
-			pf.isNonPII = true
-		}
+
 		fields = append(fields, pf)
-		if !pf.isNonPII {
+		if pf.kind != piiKindNone {
 			hasPII = true
 		}
 	}
@@ -652,8 +726,16 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 	// Collect just the PII fields.
 	var piiFields []piiField
 	for _, f := range fields {
-		if !f.isNonPII {
+		if f.kind != piiKindNone {
 			piiFields = append(piiFields, f)
+		}
+	}
+	// base64 import is only needed when at least one field is string-PII.
+	var b64Pkg string
+	for _, pf := range piiFields {
+		if pf.kind == piiKindString {
+			b64Pkg = out.QualifiedGoIdent(protogen.GoImportPath("encoding/base64").Ident("RawStdEncoding"))
+			break
 		}
 	}
 	// Subject field, if any.
@@ -701,19 +783,34 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 	out.P("// by aggregate.Runtime before Codec.Encode when Runtime.Shredder")
 	out.P("// is configured. The framework passes the resolved subject id;")
 	out.P("// per-field (es.v1.subject) overrides are honored below.")
+	out.P("//")
+	out.P("// `bytes` PII fields hold raw ciphertext after encrypt; `string`")
+	out.P("// PII fields (declared with (es.v1.pii) = true) hold base64-")
+	out.P("// encoded ciphertext so the field remains UTF-8-valid.")
 	out.P("func (e *", vName, ") EncryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) error {")
 	for _, pf := range piiFields {
 		subjExpr := "subject"
 		if pf.subjectField != "" {
 			subjExpr = `e.Get` + upperGoFieldName(pf.subjectField) + `()`
 		}
-		out.P("\tif len(e.", pf.goName, ") > 0 {")
-		out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
-		out.P("\t\tif err != nil {")
-		out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
-		out.P("\t\t}")
-		out.P("\t\te.", pf.goName, " = sealed")
-		out.P("\t}")
+		switch pf.kind {
+		case piiKindBytes:
+			out.P("\tif len(e.", pf.goName, ") > 0 {")
+			out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
+			out.P("\t\tif err != nil {")
+			out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
+			out.P("\t\t}")
+			out.P("\t\te.", pf.goName, " = sealed")
+			out.P("\t}")
+		case piiKindString:
+			out.P("\tif e.", pf.goName, " != \"\" {")
+			out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", []byte(e.", pf.goName, "))")
+			out.P("\t\tif err != nil {")
+			out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
+			out.P("\t\t}")
+			out.P("\t\te.", pf.goName, " = ", b64Pkg, ".EncodeToString(sealed)")
+			out.P("\t}")
+		}
 	}
 	out.P("\treturn nil")
 	out.P("}")
@@ -721,7 +818,8 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 
 	// DecryptPII
 	out.P("// DecryptPII reverses EncryptPII. Per-field shred → RedactedField;")
-	out.P("// other errors abort.")
+	out.P("// base64 decode failure on string PII fields counts as a corrupt")
+	out.P("// payload and aborts; other errors abort.")
 	out.P("func (e *", vName, ") DecryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) (", redactedType, ", error) {")
 	out.P("\tvar redacted ", redactedType)
 	for _, pf := range piiFields {
@@ -729,23 +827,106 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 		if pf.subjectField != "" {
 			subjExpr = `e.Get` + upperGoFieldName(pf.subjectField) + `()`
 		}
-		out.P("\tif len(e.", pf.goName, ") > 0 {")
-		out.P("\t\tpt, err := s.DecryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
-		out.P("\t\tswitch {")
-		out.P("\t\tcase err == nil:")
-		out.P("\t\t\te.", pf.goName, " = pt")
-		out.P("\t\tcase ", errorsIs, "(err, ", errShredded, "):")
-		out.P("\t\t\te.", pf.goName, " = nil")
-		out.P("\t\t\tredacted = append(redacted, ", redactedField, "{Name: \"", pf.protoName, "\", Subject: ", subjExpr, ", Reason: \"shredded\"})")
-		out.P("\t\tdefault:")
-		out.P("\t\t\treturn redacted, ", fmtErrorf, "(\"", vName, ".DecryptPII ", pf.protoName, ": %w\", err)")
-		out.P("\t\t}")
-		out.P("\t}")
+		switch pf.kind {
+		case piiKindBytes:
+			out.P("\tif len(e.", pf.goName, ") > 0 {")
+			out.P("\t\tpt, err := s.DecryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
+			out.P("\t\tswitch {")
+			out.P("\t\tcase err == nil:")
+			out.P("\t\t\te.", pf.goName, " = pt")
+			out.P("\t\tcase ", errorsIs, "(err, ", errShredded, "):")
+			out.P("\t\t\te.", pf.goName, " = nil")
+			out.P("\t\t\tredacted = append(redacted, ", redactedField, "{Name: \"", pf.protoName, "\", Subject: ", subjExpr, ", Reason: \"shredded\"})")
+			out.P("\t\tdefault:")
+			out.P("\t\t\treturn redacted, ", fmtErrorf, "(\"", vName, ".DecryptPII ", pf.protoName, ": %w\", err)")
+			out.P("\t\t}")
+			out.P("\t}")
+		case piiKindString:
+			out.P("\tif e.", pf.goName, " != \"\" {")
+			out.P("\t\tsealed, b64err := ", b64Pkg, ".DecodeString(e.", pf.goName, ")")
+			out.P("\t\tif b64err != nil {")
+			out.P("\t\t\treturn redacted, ", fmtErrorf, "(\"", vName, ".DecryptPII ", pf.protoName, " base64: %w\", b64err)")
+			out.P("\t\t}")
+			out.P("\t\tpt, err := s.DecryptField(ctx, tenantID, ", subjExpr, ", sealed)")
+			out.P("\t\tswitch {")
+			out.P("\t\tcase err == nil:")
+			out.P("\t\t\te.", pf.goName, " = string(pt)")
+			out.P("\t\tcase ", errorsIs, "(err, ", errShredded, "):")
+			out.P("\t\t\te.", pf.goName, " = \"\"")
+			out.P("\t\t\tredacted = append(redacted, ", redactedField, "{Name: \"", pf.protoName, "\", Subject: ", subjExpr, ", Reason: \"shredded\"})")
+			out.P("\t\tdefault:")
+			out.P("\t\t\treturn redacted, ", fmtErrorf, "(\"", vName, ".DecryptPII ", pf.protoName, ": %w\", err)")
+			out.P("\t\t}")
+			out.P("\t}")
+		}
 	}
 	out.P("\treturn redacted, nil")
 	out.P("}")
 	out.P()
 	return nil
+}
+
+// manifestAttrs renders one field entry of the pii_manifest.json as
+// a single deterministic JSON object literal. Captures classification
+// + derived behaviors (encryption, DSAR export, audit-on-read,
+// retention class) so audit / DSAR-exporter / PCI-scope tooling can
+// consume the manifest without re-implementing the rules.
+func manifestAttrs(pf piiField) string {
+	classification := pf.classification.String()
+	if pf.isSubject {
+		classification = "DATA_CLASSIFICATION_SUBJECT_FIELD"
+	}
+
+	var encryption string
+	switch pf.kind {
+	case piiKindNone:
+		encryption = "none"
+	case piiKindBytes:
+		encryption = "subject_bytes"
+	case piiKindString:
+		encryption = "subject_string_base64"
+	case piiKindRejected:
+		encryption = "rejected_sad"
+	}
+
+	dsarExport := true
+	auditOnRead := false
+	retention := "standard"
+	switch pf.classification {
+	case esv1.DataClassification_DATA_CLASSIFICATION_INTERNAL:
+		dsarExport = false
+	case esv1.DataClassification_DATA_CLASSIFICATION_SENSITIVE:
+		auditOnRead = true
+		retention = "shorter"
+	case esv1.DataClassification_DATA_CLASSIFICATION_FINANCIAL:
+		retention = "tax_locked"
+	case esv1.DataClassification_DATA_CLASSIFICATION_CARDHOLDER:
+		auditOnRead = true
+		retention = "pci_scope"
+	case esv1.DataClassification_DATA_CLASSIFICATION_CREDENTIAL:
+		dsarExport = false
+		auditOnRead = true
+	case esv1.DataClassification_DATA_CLASSIFICATION_SAD:
+		dsarExport = false
+	}
+	if pf.isSubject {
+		// Subject ids are the look-up handles for the DEK and are not
+		// themselves PII (per ADR 0010); they remain plaintext and
+		// always DSAR-exportable as an entity identifier.
+		dsarExport = true
+		auditOnRead = false
+		retention = "standard"
+	}
+
+	subjectAttr := ""
+	if pf.subjectField != "" {
+		subjectAttr = fmt.Sprintf(`, "subject_field_override": %q`, pf.subjectField)
+	}
+
+	return fmt.Sprintf(
+		`{"name": %q, "classification": %q, "encryption": %q, "dsar_export": %t, "audit_on_read": %t, "retention": %q%s}`,
+		pf.protoName, classification, encryption, dsarExport, auditOnRead, retention, subjectAttr,
+	)
 }
 
 // upperGoFieldName converts a proto field name (snake_case) to its
@@ -800,24 +981,12 @@ func emitPIIManifest(plugin *protogen.Plugin, file *protogen.File, variants []*p
 		out.P(`      "name": "`, v.Desc.FullName(), `",`)
 		out.P(`      "fields": [`)
 		for j, pf := range fields {
-			class := "pii"
-			switch {
-			case pf.isSubject:
-				class = "subject_field"
-			case pf.isNonPII && pf.piiIntentional:
-				class = "pii_intentional"
-			case pf.isNonPII:
-				class = "non_pii"
-			}
 			fcomma := ","
 			if j == len(fields)-1 {
 				fcomma = ""
 			}
-			subjectAttr := ""
-			if pf.subjectField != "" {
-				subjectAttr = `, "subject_field_override": "` + pf.subjectField + `"`
-			}
-			out.P(`        {"name": "`, pf.protoName, `", "classification": "`, class, `"`, subjectAttr, `}`, fcomma)
+			attrs := manifestAttrs(pf)
+			out.P(`        `, attrs, fcomma)
 		}
 		out.P(`      ]`)
 		out.P(`    }`, comma)

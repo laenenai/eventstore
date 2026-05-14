@@ -5,17 +5,17 @@
     {
       "name": "test.shred.v1.Registered",
       "fields": [
-        {"name": "person_id", "classification": "subject_field"},
-        {"name": "display_name", "classification": "pii"},
-        {"name": "email", "classification": "pii"},
-        {"name": "referrer_id", "classification": "non_pii"}
+        {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "display_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "referrer_id", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.shred.v1.NameChanged",
       "fields": [
-        {"name": "person_id", "classification": "subject_field"},
-        {"name": "new_display_name", "classification": "pii"}
+        {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "new_display_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

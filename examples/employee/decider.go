@@ -1,7 +1,8 @@
 // Package employee is the worked example for crypto-shredding
-// (ADR 0010, cookbook 11). PII fields are `bytes` and the
-// codegen-emitted EncryptPII / DecryptPII methods round-trip them
-// through the framework's Shredder at write and read time.
+// (ADR 0010, cookbook 11). PII fields are declared as `string`
+// with (es.v1.pii) = true; the codegen-emitted EncryptPII /
+// DecryptPII methods round-trip them through the framework's
+// Shredder at write and read time (base64'd ciphertext at rest).
 package employee
 
 import (
@@ -101,20 +102,13 @@ func cloneState(s *employeev1.Employee) *employeev1.Employee {
 	if s == nil {
 		return &employeev1.Employee{}
 	}
-	out := &employeev1.Employee{
+	return &employeev1.Employee{
 		EmployeeId:  s.EmployeeId,
+		LegalName:   s.LegalName,
+		Email:       s.Email,
+		DateOfBirth: s.DateOfBirth,
 		Department:  s.Department,
 		CurrentRole: s.CurrentRole,
 		Status:      s.Status,
 	}
-	if s.LegalName != nil {
-		out.LegalName = append([]byte(nil), s.LegalName...)
-	}
-	if s.Email != nil {
-		out.Email = append([]byte(nil), s.Email...)
-	}
-	if s.DateOfBirth != nil {
-		out.DateOfBirth = append([]byte(nil), s.DateOfBirth...)
-	}
-	return out
 }

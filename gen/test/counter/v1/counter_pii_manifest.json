@@ -5,21 +5,21 @@
     {
       "name": "test.counter.v1.Initialized",
       "fields": [
-        {"name": "min", "classification": "non_pii"},
-        {"name": "max", "classification": "non_pii"},
-        {"name": "value", "classification": "non_pii"}
+        {"name": "min", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "max", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "value", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.counter.v1.Incremented",
       "fields": [
-        {"name": "by", "classification": "non_pii"}
+        {"name": "by", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.counter.v1.Decremented",
       "fields": [
-        {"name": "by", "classification": "non_pii"}
+        {"name": "by", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

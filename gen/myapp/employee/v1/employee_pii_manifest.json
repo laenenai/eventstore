@@ -5,26 +5,26 @@
     {
       "name": "myapp.employee.v1.Hired",
       "fields": [
-        {"name": "employee_id", "classification": "subject_field"},
-        {"name": "legal_name", "classification": "pii"},
-        {"name": "email", "classification": "pii"},
-        {"name": "date_of_birth", "classification": "pii"},
-        {"name": "department", "classification": "non_pii"},
-        {"name": "initial_role", "classification": "non_pii"}
+        {"name": "employee_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "legal_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "date_of_birth", "classification": "DATA_CLASSIFICATION_QUASI_IDENTIFIER", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "department", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"},
+        {"name": "initial_role", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "myapp.employee.v1.Promoted",
       "fields": [
-        {"name": "employee_id", "classification": "subject_field"},
-        {"name": "new_role", "classification": "non_pii"}
+        {"name": "employee_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "new_role", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "myapp.employee.v1.Terminated",
       "fields": [
-        {"name": "employee_id", "classification": "subject_field"},
-        {"name": "reason", "classification": "pii"}
+        {"name": "employee_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "reason", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

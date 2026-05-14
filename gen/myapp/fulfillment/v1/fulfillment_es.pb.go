@@ -10,6 +10,7 @@ import (
 	es "github.com/laenenai/eventstore/es"
 	projection "github.com/laenenai/eventstore/projection"
 	proto "google.golang.org/protobuf/proto"
+	slog "log/slog"
 )
 
 // Command is the sealed interface for the Commands sum type.
@@ -227,4 +228,268 @@ func isOurType(typeURL string) bool {
 		return true
 	}
 	return false
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *FulfillmentTask.
+func (m *FulfillmentTask) Clone() *FulfillmentTask {
+	if m == nil {
+		return nil
+	}
+	out := &FulfillmentTask{}
+	out.TaskId = m.TaskId
+	out.OrderId = m.OrderId
+	out.Warehouse = m.Warehouse
+	out.Status = m.Status
+	out.CreatedAtMs = m.CreatedAtMs
+	out.PickedAtMs = m.PickedAtMs
+	out.ShippedAtMs = m.ShippedAtMs
+	out.Picker = m.Picker
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *FulfillmentTask) View(level es.AccessLevel) *FulfillmentTask {
+	if m == nil {
+		return nil
+	}
+	out := &FulfillmentTask{}
+	out.TaskId = m.TaskId
+	out.OrderId = m.OrderId
+	out.Warehouse = m.Warehouse
+	out.Status = m.Status
+	out.CreatedAtMs = m.CreatedAtMs
+	out.PickedAtMs = m.PickedAtMs
+	out.ShippedAtMs = m.ShippedAtMs
+	out.Picker = m.Picker
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *FulfillmentTask) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("task_id", m.TaskId),
+		slog.String("order_id", m.OrderId),
+		slog.String("warehouse", m.Warehouse),
+		slog.String("status", m.Status.String()),
+		slog.Int64("created_at_ms", int64(m.CreatedAtMs)),
+		slog.Int64("picked_at_ms", int64(m.PickedAtMs)),
+		slog.Int64("shipped_at_ms", int64(m.ShippedAtMs)),
+		slog.String("picker", m.Picker),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Pick.
+func (m *Pick) Clone() *Pick {
+	if m == nil {
+		return nil
+	}
+	out := &Pick{}
+	out.Picker = m.Picker
+	out.PickedAtMs = m.PickedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Pick) View(level es.AccessLevel) *Pick {
+	if m == nil {
+		return nil
+	}
+	out := &Pick{}
+	out.Picker = m.Picker
+	out.PickedAtMs = m.PickedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Pick) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("picker", m.Picker),
+		slog.Int64("picked_at_ms", int64(m.PickedAtMs)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *MarkShipped.
+func (m *MarkShipped) Clone() *MarkShipped {
+	if m == nil {
+		return nil
+	}
+	out := &MarkShipped{}
+	out.ShippedAtMs = m.ShippedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *MarkShipped) View(level es.AccessLevel) *MarkShipped {
+	if m == nil {
+		return nil
+	}
+	out := &MarkShipped{}
+	out.ShippedAtMs = m.ShippedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *MarkShipped) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("shipped_at_ms", int64(m.ShippedAtMs)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Created.
+func (m *Created) Clone() *Created {
+	if m == nil {
+		return nil
+	}
+	out := &Created{}
+	out.TaskId = m.TaskId
+	out.OrderId = m.OrderId
+	out.Warehouse = m.Warehouse
+	out.CreatedAtMs = m.CreatedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Created) View(level es.AccessLevel) *Created {
+	if m == nil {
+		return nil
+	}
+	out := &Created{}
+	out.TaskId = m.TaskId
+	out.OrderId = m.OrderId
+	out.Warehouse = m.Warehouse
+	out.CreatedAtMs = m.CreatedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Created) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("task_id", m.TaskId),
+		slog.String("order_id", m.OrderId),
+		slog.String("warehouse", m.Warehouse),
+		slog.Int64("created_at_ms", int64(m.CreatedAtMs)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Picked.
+func (m *Picked) Clone() *Picked {
+	if m == nil {
+		return nil
+	}
+	out := &Picked{}
+	out.Picker = m.Picker
+	out.PickedAtMs = m.PickedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Picked) View(level es.AccessLevel) *Picked {
+	if m == nil {
+		return nil
+	}
+	out := &Picked{}
+	out.Picker = m.Picker
+	out.PickedAtMs = m.PickedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Picked) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("picker", m.Picker),
+		slog.Int64("picked_at_ms", int64(m.PickedAtMs)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Shipped.
+func (m *Shipped) Clone() *Shipped {
+	if m == nil {
+		return nil
+	}
+	out := &Shipped{}
+	out.ShippedAtMs = m.ShippedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Shipped) View(level es.AccessLevel) *Shipped {
+	if m == nil {
+		return nil
+	}
+	out := &Shipped{}
+	out.ShippedAtMs = m.ShippedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Shipped) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("shipped_at_ms", int64(m.ShippedAtMs)),
+	)
 }

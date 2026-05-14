@@ -10,6 +10,7 @@ import (
 	es "github.com/laenenai/eventstore/es"
 	projection "github.com/laenenai/eventstore/projection"
 	proto "google.golang.org/protobuf/proto"
+	slog "log/slog"
 )
 
 // Command is the sealed interface for the Commands sum type.
@@ -245,4 +246,434 @@ func isOurType(typeURL string) bool {
 		return true
 	}
 	return false
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *LineItem.
+func (m *LineItem) Clone() *LineItem {
+	if m == nil {
+		return nil
+	}
+	out := &LineItem{}
+	out.Sku = m.Sku
+	out.Name = m.Name
+	out.Quantity = m.Quantity
+	out.UnitCents = m.UnitCents
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *LineItem) View(level es.AccessLevel) *LineItem {
+	if m == nil {
+		return nil
+	}
+	out := &LineItem{}
+	out.Sku = m.Sku
+	out.Name = m.Name
+	out.Quantity = m.Quantity
+	out.UnitCents = m.UnitCents
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *LineItem) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("sku", m.Sku),
+		slog.String("name", m.Name),
+		slog.Int64("quantity", int64(m.Quantity)),
+		slog.Int64("unit_cents", int64(m.UnitCents)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Invoice.
+func (m *Invoice) Clone() *Invoice {
+	if m == nil {
+		return nil
+	}
+	out := &Invoice{}
+	out.InvoiceId = m.InvoiceId
+	out.CustomerId = m.CustomerId
+	out.Currency = m.Currency
+	out.TotalCents = m.TotalCents
+	out.Status = m.Status
+	if len(m.LineItems) > 0 {
+		out.LineItems = make([]*LineItem, len(m.LineItems))
+		for i, e := range m.LineItems {
+			out.LineItems[i] = e.Clone()
+		}
+	}
+	out.CreatedAtMs = m.CreatedAtMs
+	out.ClosedAtMs = m.ClosedAtMs
+	out.PaymentRef = m.PaymentRef
+	out.VoidReason = m.VoidReason
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Invoice) View(level es.AccessLevel) *Invoice {
+	if m == nil {
+		return nil
+	}
+	out := &Invoice{}
+	out.InvoiceId = m.InvoiceId
+	out.CustomerId = m.CustomerId
+	out.Currency = m.Currency
+	out.TotalCents = m.TotalCents
+	out.Status = m.Status
+	if len(m.LineItems) > 0 {
+		out.LineItems = make([]*LineItem, len(m.LineItems))
+		for i, e := range m.LineItems {
+			out.LineItems[i] = e.View(level)
+		}
+	}
+	out.CreatedAtMs = m.CreatedAtMs
+	out.ClosedAtMs = m.ClosedAtMs
+	out.PaymentRef = m.PaymentRef
+	out.VoidReason = m.VoidReason
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Invoice) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("invoice_id", m.InvoiceId),
+		slog.String("customer_id", m.CustomerId),
+		slog.String("currency", m.Currency),
+		slog.Int64("total_cents", int64(m.TotalCents)),
+		slog.String("status", m.Status.String()),
+		slog.Group("line_items",
+			slog.Int64("count", int64(len(m.LineItems))),
+		),
+		slog.Int64("created_at_ms", int64(m.CreatedAtMs)),
+		slog.Int64("closed_at_ms", int64(m.ClosedAtMs)),
+		slog.String("payment_ref", m.PaymentRef),
+		slog.String("void_reason", m.VoidReason),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Create.
+func (m *Create) Clone() *Create {
+	if m == nil {
+		return nil
+	}
+	out := &Create{}
+	out.InvoiceId = m.InvoiceId
+	out.CustomerId = m.CustomerId
+	out.Currency = m.Currency
+	if len(m.LineItems) > 0 {
+		out.LineItems = make([]*LineItem, len(m.LineItems))
+		for i, e := range m.LineItems {
+			out.LineItems[i] = e.Clone()
+		}
+	}
+	out.CreatedAtMs = m.CreatedAtMs
+	out.TenantId = m.TenantId
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Create) View(level es.AccessLevel) *Create {
+	if m == nil {
+		return nil
+	}
+	out := &Create{}
+	out.InvoiceId = m.InvoiceId
+	out.CustomerId = m.CustomerId
+	out.Currency = m.Currency
+	if len(m.LineItems) > 0 {
+		out.LineItems = make([]*LineItem, len(m.LineItems))
+		for i, e := range m.LineItems {
+			out.LineItems[i] = e.View(level)
+		}
+	}
+	out.CreatedAtMs = m.CreatedAtMs
+	out.TenantId = m.TenantId
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Create) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("invoice_id", m.InvoiceId),
+		slog.String("customer_id", m.CustomerId),
+		slog.String("currency", m.Currency),
+		slog.Group("line_items",
+			slog.Int64("count", int64(len(m.LineItems))),
+		),
+		slog.Int64("created_at_ms", int64(m.CreatedAtMs)),
+		slog.String("tenant_id", m.TenantId),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *MarkPaid.
+func (m *MarkPaid) Clone() *MarkPaid {
+	if m == nil {
+		return nil
+	}
+	out := &MarkPaid{}
+	out.PaymentRef = m.PaymentRef
+	out.PaidAtMs = m.PaidAtMs
+	out.TenantId = m.TenantId
+	out.InvoiceId = m.InvoiceId
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *MarkPaid) View(level es.AccessLevel) *MarkPaid {
+	if m == nil {
+		return nil
+	}
+	out := &MarkPaid{}
+	out.PaymentRef = m.PaymentRef
+	out.PaidAtMs = m.PaidAtMs
+	out.TenantId = m.TenantId
+	out.InvoiceId = m.InvoiceId
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *MarkPaid) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("payment_ref", m.PaymentRef),
+		slog.Int64("paid_at_ms", int64(m.PaidAtMs)),
+		slog.String("tenant_id", m.TenantId),
+		slog.String("invoice_id", m.InvoiceId),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Void.
+func (m *Void) Clone() *Void {
+	if m == nil {
+		return nil
+	}
+	out := &Void{}
+	out.Reason = m.Reason
+	out.VoidedAtMs = m.VoidedAtMs
+	out.TenantId = m.TenantId
+	out.InvoiceId = m.InvoiceId
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Void) View(level es.AccessLevel) *Void {
+	if m == nil {
+		return nil
+	}
+	out := &Void{}
+	out.Reason = m.Reason
+	out.VoidedAtMs = m.VoidedAtMs
+	out.TenantId = m.TenantId
+	out.InvoiceId = m.InvoiceId
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Void) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("reason", m.Reason),
+		slog.Int64("voided_at_ms", int64(m.VoidedAtMs)),
+		slog.String("tenant_id", m.TenantId),
+		slog.String("invoice_id", m.InvoiceId),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Created.
+func (m *Created) Clone() *Created {
+	if m == nil {
+		return nil
+	}
+	out := &Created{}
+	out.InvoiceId = m.InvoiceId
+	out.CustomerId = m.CustomerId
+	out.Currency = m.Currency
+	out.TotalCents = m.TotalCents
+	if len(m.LineItems) > 0 {
+		out.LineItems = make([]*LineItem, len(m.LineItems))
+		for i, e := range m.LineItems {
+			out.LineItems[i] = e.Clone()
+		}
+	}
+	out.CreatedAtMs = m.CreatedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Created) View(level es.AccessLevel) *Created {
+	if m == nil {
+		return nil
+	}
+	out := &Created{}
+	out.InvoiceId = m.InvoiceId
+	out.CustomerId = m.CustomerId
+	out.Currency = m.Currency
+	out.TotalCents = m.TotalCents
+	if len(m.LineItems) > 0 {
+		out.LineItems = make([]*LineItem, len(m.LineItems))
+		for i, e := range m.LineItems {
+			out.LineItems[i] = e.View(level)
+		}
+	}
+	out.CreatedAtMs = m.CreatedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Created) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("invoice_id", m.InvoiceId),
+		slog.String("customer_id", m.CustomerId),
+		slog.String("currency", m.Currency),
+		slog.Int64("total_cents", int64(m.TotalCents)),
+		slog.Group("line_items",
+			slog.Int64("count", int64(len(m.LineItems))),
+		),
+		slog.Int64("created_at_ms", int64(m.CreatedAtMs)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Paid.
+func (m *Paid) Clone() *Paid {
+	if m == nil {
+		return nil
+	}
+	out := &Paid{}
+	out.PaymentRef = m.PaymentRef
+	out.PaidAtMs = m.PaidAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Paid) View(level es.AccessLevel) *Paid {
+	if m == nil {
+		return nil
+	}
+	out := &Paid{}
+	out.PaymentRef = m.PaymentRef
+	out.PaidAtMs = m.PaidAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Paid) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("payment_ref", m.PaymentRef),
+		slog.Int64("paid_at_ms", int64(m.PaidAtMs)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Voided.
+func (m *Voided) Clone() *Voided {
+	if m == nil {
+		return nil
+	}
+	out := &Voided{}
+	out.Reason = m.Reason
+	out.VoidedAtMs = m.VoidedAtMs
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Voided) View(level es.AccessLevel) *Voided {
+	if m == nil {
+		return nil
+	}
+	out := &Voided{}
+	out.Reason = m.Reason
+	out.VoidedAtMs = m.VoidedAtMs
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Voided) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("reason", m.Reason),
+		slog.Int64("voided_at_ms", int64(m.VoidedAtMs)),
+	)
 }

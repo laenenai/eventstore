@@ -22,6 +22,154 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// DataClassification — the regulatory regime a field falls under.
+// The framework's codec derives all governance behavior from this
+// single annotation. Numeric values are pinned forever; new
+// categories are appended.
+//
+// Mapping to framework behavior:
+//
+// | Classification         | Encryption | DSAR    | Audit-on-read | Retention      |
+// | ---------------------- | ---------- | ------- | ------------- | -------------- |
+// | UNSPECIFIED            | none       | yes     | no            | standard       |
+// | PUBLIC                 | none       | yes     | no            | standard       |
+// | INTERNAL               | none       | no      | no            | standard       |
+// | PERSONAL               | subject    | yes     | no            | standard       |
+// | QUASI_IDENTIFIER       | subject    | yes     | no            | standard       |
+// | SENSITIVE (Art 9)      | subject    | yes (*) | YES           | shorter        |
+// | FINANCIAL              | subject    | yes (*) | optional      | tax-locked     |
+// | CARDHOLDER (PCI CHD)   | subject    | yes     | YES           | PCI-scope      |
+// | SAD (PCI sens. auth)   | REJECTED   | n/a     | n/a           | n/a            |
+// | CREDENTIAL             | subject    | NEVER   | yes           | standard       |
+// | UNSTRUCTURED           | subject    | yes     | no            | standard       |
+//
+// (*) DSAR for SENSITIVE requires an explicit per-Art-9 consent
+// check; FINANCIAL respects tax-retention windows before delete.
+//
+// Wire-format note: for string fields, ciphertext is base64-encoded
+// (RawStdEncoding, no padding) to keep the field UTF-8-valid. For
+// bytes fields, ciphertext is raw (no base64 overhead). Both produce
+// equivalent semantics; pick `bytes` for genuinely binary PII
+// (biometric templates, MRZ scans).
+type DataClassification int32
+
+const (
+	// Default. Treated as PUBLIC for behavior. New protos should set
+	// this explicitly.
+	DataClassification_DATA_CLASSIFICATION_UNSPECIFIED DataClassification = 0
+	// Public — non-sensitive. No encryption. Freely exported. No
+	// audit. Examples: ISO country codes, enum statuses, document
+	// type names.
+	DataClassification_DATA_CLASSIFICATION_PUBLIC DataClassification = 1
+	// Internal — non-PII but not public. No encryption. Not exported
+	// in DSAR. Examples: internal flags, system-set timestamps,
+	// computed metrics.
+	DataClassification_DATA_CLASSIFICATION_INTERNAL DataClassification = 2
+	// GDPR Article 4 personal data — directly identifies a natural
+	// person. Encrypted per-subject. Subject to standard retention +
+	// DSAR export rules. Examples: name, email, phone, address,
+	// government IDs (when not in CARDHOLDER/SAD scope).
+	DataClassification_DATA_CLASSIFICATION_PERSONAL DataClassification = 3
+	// Quasi-identifier — alone non-identifying, in combination can re-
+	// identify a person (HIPAA-safe-harbor 18-element list lineage).
+	// Encrypted per-subject. Analytics adapters apply k-anonymity in
+	// aggregations. Examples: date of birth, postal code, gender,
+	// employer name.
+	DataClassification_DATA_CLASSIFICATION_QUASI_IDENTIFIER DataClassification = 4
+	// GDPR Article 9 special category — racial/ethnic origin, religious
+	// or philosophical beliefs, political opinions, trade-union
+	// membership, health, biometric, genetic, sexual orientation,
+	// criminal records. Encrypted per-subject + every read audited +
+	// shorter default retention. Examples: PEP declaration details
+	// (political), biometric facial templates, race/ethnicity surveys.
+	DataClassification_DATA_CLASSIFICATION_SENSITIVE DataClassification = 5
+	// Financial data — balances, transactions, source-of-funds, tax
+	// identifiers (TINs). Encrypted per-subject. Tax-retention-locked:
+	// crypto-shred of the subject is blocked until the regulatory
+	// retention window has elapsed (jurisdiction-dependent, typically
+	// 5-10 years).
+	DataClassification_DATA_CLASSIFICATION_FINANCIAL DataClassification = 6
+	// PCI-DSS Cardholder Data (CHD) — PAN, cardholder name on card,
+	// expiration date, service code. Encrypted per-subject + every
+	// read audited + segregated storage (PCI scope tag). Examples:
+	// card.pan, card.cardholder_name, card.expiry.
+	DataClassification_DATA_CLASSIFICATION_CARDHOLDER DataClassification = 7
+	// PCI-DSS Sensitive Authentication Data (SAD) — CVV/CVV2, PIN,
+	// PIN block, full magnetic track data. MUST NOT be persisted to
+	// durable streams post-authorization. Framework REJECTS encrypt
+	// attempts at runtime with a clear error. Use ephemeral / in-
+	// memory channels only.
+	DataClassification_DATA_CLASSIFICATION_SAD DataClassification = 8
+	// Authentication credentials — password hashes, API tokens, OAuth
+	// secrets, MFA seeds. v1: encrypted per-subject (the subject's
+	// DEK). DSAR export ALWAYS skips. Crypto-shred of the subject
+	// destroys (which is correct — they're gone). Future: move to a
+	// dedicated system key with different rotation cadence.
+	DataClassification_DATA_CLASSIFICATION_CREDENTIAL DataClassification = 9
+	// Unstructured / free-form — notes, descriptions, comments,
+	// chat messages. May contain accidental PII spilled in by humans.
+	// Encrypted per-subject; treated as PERSONAL for access; flagged
+	// for upstream PII-scanner pipelines to inspect/quarantine.
+	DataClassification_DATA_CLASSIFICATION_UNSTRUCTURED DataClassification = 10
+)
+
+// Enum value maps for DataClassification.
+var (
+	DataClassification_name = map[int32]string{
+		0:  "DATA_CLASSIFICATION_UNSPECIFIED",
+		1:  "DATA_CLASSIFICATION_PUBLIC",
+		2:  "DATA_CLASSIFICATION_INTERNAL",
+		3:  "DATA_CLASSIFICATION_PERSONAL",
+		4:  "DATA_CLASSIFICATION_QUASI_IDENTIFIER",
+		5:  "DATA_CLASSIFICATION_SENSITIVE",
+		6:  "DATA_CLASSIFICATION_FINANCIAL",
+		7:  "DATA_CLASSIFICATION_CARDHOLDER",
+		8:  "DATA_CLASSIFICATION_SAD",
+		9:  "DATA_CLASSIFICATION_CREDENTIAL",
+		10: "DATA_CLASSIFICATION_UNSTRUCTURED",
+	}
+	DataClassification_value = map[string]int32{
+		"DATA_CLASSIFICATION_UNSPECIFIED":      0,
+		"DATA_CLASSIFICATION_PUBLIC":           1,
+		"DATA_CLASSIFICATION_INTERNAL":         2,
+		"DATA_CLASSIFICATION_PERSONAL":         3,
+		"DATA_CLASSIFICATION_QUASI_IDENTIFIER": 4,
+		"DATA_CLASSIFICATION_SENSITIVE":        5,
+		"DATA_CLASSIFICATION_FINANCIAL":        6,
+		"DATA_CLASSIFICATION_CARDHOLDER":       7,
+		"DATA_CLASSIFICATION_SAD":              8,
+		"DATA_CLASSIFICATION_CREDENTIAL":       9,
+		"DATA_CLASSIFICATION_UNSTRUCTURED":     10,
+	}
+)
+
+func (x DataClassification) Enum() *DataClassification {
+	p := new(DataClassification)
+	*p = x
+	return p
+}
+
+func (x DataClassification) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DataClassification) Descriptor() protoreflect.EnumDescriptor {
+	return file_es_v1_options_proto_enumTypes[0].Descriptor()
+}
+
+func (DataClassification) Type() protoreflect.EnumType {
+	return &file_es_v1_options_proto_enumTypes[0]
+}
+
+func (x DataClassification) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DataClassification.Descriptor instead.
+func (DataClassification) EnumDescriptor() ([]byte, []int) {
+	return file_es_v1_options_proto_rawDescGZIP(), []int{0}
+}
+
 // Projection is the structured value of the (es.v1.projection)
 // message option. See above.
 type Projection struct {
@@ -125,22 +273,6 @@ var file_es_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 	},
 	{
 		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-		ExtensionType: (*bool)(nil),
-		Field:         50001,
-		Name:          "es.v1.non_pii",
-		Tag:           "varint,50001,opt,name=non_pii",
-		Filename:      "es/v1/options.proto",
-	},
-	{
-		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
-		ExtensionType: (*bool)(nil),
-		Field:         50002,
-		Name:          "es.v1.pii_intentional",
-		Tag:           "varint,50002,opt,name=pii_intentional",
-		Filename:      "es/v1/options.proto",
-	},
-	{
-		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
 		ExtensionType: (*string)(nil),
 		Field:         50003,
 		Name:          "es.v1.subject",
@@ -161,6 +293,14 @@ var file_es_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 		Field:         50005,
 		Name:          "es.v1.tenant_id",
 		Tag:           "varint,50005,opt,name=tenant_id",
+		Filename:      "es/v1/options.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: (*DataClassification)(nil),
+		Field:         50007,
+		Name:          "es.v1.data_classification",
+		Tag:           "varint,50007,opt,name=data_classification,enum=es.v1.DataClassification",
 		Filename:      "es/v1/options.proto",
 	},
 }
@@ -231,24 +371,14 @@ var (
 	// Subject fields are auto-exempt from encryption — encrypting them
 	// would require the key to find the key. At most one per message.
 	//
+	// The subject value is what the framework uses to look up the DEK.
+	// Typical pattern: a stable id field (user_id, public_id, …) is
+	// both the subject_field AND the stream_id.
+	//
 	// See ADR 0010.
 	//
 	// optional bool subject_field = 50000;
 	E_SubjectField = &file_es_v1_options_proto_extTypes[4]
-	// Opts the field OUT of crypto-shredding. By default every field is
-	// encrypted (the "deny by default" posture from ADR 0010); mark
-	// known-safe fields with this option to keep them readable
-	// post-shredding.
-	//
-	// optional bool non_pii = 50001;
-	E_NonPii = &file_es_v1_options_proto_extTypes[5]
-	// Suppresses the codegen lint advisory that fires when a primitive
-	// type (int*, bool, enum, Timestamp) is left default-encrypted.
-	// Use when the primitive really IS PII — e.g., a salary integer or
-	// a blood-pressure reading.
-	//
-	// optional bool pii_intentional = 50002;
-	E_PiiIntentional = &file_es_v1_options_proto_extTypes[6]
 	// Per-field subject reference for multi-subject events (transfers,
 	// shared resources). Value is a field path within the same message
 	// pointing at the subject identifier for this particular field.
@@ -256,7 +386,7 @@ var (
 	// (es.v1.subject_field) = true.
 	//
 	// optional string subject = 50003;
-	E_Subject = &file_es_v1_options_proto_extTypes[7]
+	E_Subject = &file_es_v1_options_proto_extTypes[5]
 	// Marks this field as the source of the aggregate's StreamID.ID
 	// component when codegen emits workflow handlers. Required on
 	// every command type that participates in a sum_type = "Command"
@@ -266,7 +396,7 @@ var (
 	// stream_id field, usually the aggregate's id (invoice_id, etc.).
 	//
 	// optional bool stream_id = 50004;
-	E_StreamId = &file_es_v1_options_proto_extTypes[8]
+	E_StreamId = &file_es_v1_options_proto_extTypes[6]
 	// Marks this field as the tenant_id source on a command. Required
 	// on every command type that participates in a sum_type = "Command"
 	// set — codegen fails at build time otherwise. See ADR 0026 § 3
@@ -278,7 +408,20 @@ var (
 	// audit trail.
 	//
 	// optional bool tenant_id = 50005;
-	E_TenantId = &file_es_v1_options_proto_extTypes[9]
+	E_TenantId = &file_es_v1_options_proto_extTypes[7]
+	// Data classification — the regulatory regime this field falls
+	// under. The framework derives encryption, DSAR export, access
+	// audit, and retention behavior from this single annotation.
+	//
+	// Unannotated fields default to DATA_CLASSIFICATION_PUBLIC (no
+	// encryption). Encryption is OPT-IN — declare a classification
+	// from PERSONAL onwards to engage crypto-shredding.
+	//
+	// See ADR 0027 for the data-governance design and the
+	// classification-to-behavior mapping.
+	//
+	// optional es.v1.DataClassification data_classification = 50007;
+	E_DataClassification = &file_es_v1_options_proto_extTypes[8]
 )
 
 var File_es_v1_options_proto protoreflect.FileDescriptor
@@ -289,19 +432,31 @@ const file_es_v1_options_proto_rawDesc = "" +
 	"\n" +
 	"Projection\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
-	"\x06events\x18\x02 \x03(\tR\x06events:?\n" +
+	"\x06events\x18\x02 \x03(\tR\x06events*\x98\x03\n" +
+	"\x12DataClassification\x12#\n" +
+	"\x1fDATA_CLASSIFICATION_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aDATA_CLASSIFICATION_PUBLIC\x10\x01\x12 \n" +
+	"\x1cDATA_CLASSIFICATION_INTERNAL\x10\x02\x12 \n" +
+	"\x1cDATA_CLASSIFICATION_PERSONAL\x10\x03\x12(\n" +
+	"$DATA_CLASSIFICATION_QUASI_IDENTIFIER\x10\x04\x12!\n" +
+	"\x1dDATA_CLASSIFICATION_SENSITIVE\x10\x05\x12!\n" +
+	"\x1dDATA_CLASSIFICATION_FINANCIAL\x10\x06\x12\"\n" +
+	"\x1eDATA_CLASSIFICATION_CARDHOLDER\x10\a\x12\x1b\n" +
+	"\x17DATA_CLASSIFICATION_SAD\x10\b\x12\"\n" +
+	"\x1eDATA_CLASSIFICATION_CREDENTIAL\x10\t\x12$\n" +
+	" DATA_CLASSIFICATION_UNSTRUCTURED\x10\n" +
+	":?\n" +
 	"\taggregate\x12\x1f.google.protobuf.MessageOptions\x18І\x03 \x01(\tR\taggregate:H\n" +
 	"\x0eschema_version\x12\x1f.google.protobuf.MessageOptions\x18ц\x03 \x01(\rR\rschemaVersion:<\n" +
 	"\bsum_type\x12\x1f.google.protobuf.MessageOptions\x18҆\x03 \x01(\tR\asumType:T\n" +
 	"\n" +
 	"projection\x12\x1f.google.protobuf.MessageOptions\x18ӆ\x03 \x01(\v2\x11.es.v1.ProjectionR\n" +
 	"projection:D\n" +
-	"\rsubject_field\x12\x1d.google.protobuf.FieldOptions\x18І\x03 \x01(\bR\fsubjectField:8\n" +
-	"\anon_pii\x12\x1d.google.protobuf.FieldOptions\x18ц\x03 \x01(\bR\x06nonPii:H\n" +
-	"\x0fpii_intentional\x12\x1d.google.protobuf.FieldOptions\x18҆\x03 \x01(\bR\x0epiiIntentional:9\n" +
+	"\rsubject_field\x12\x1d.google.protobuf.FieldOptions\x18І\x03 \x01(\bR\fsubjectField:9\n" +
 	"\asubject\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\tR\asubject:<\n" +
 	"\tstream_id\x12\x1d.google.protobuf.FieldOptions\x18Ԇ\x03 \x01(\bR\bstreamId:<\n" +
-	"\ttenant_id\x12\x1d.google.protobuf.FieldOptions\x18Ն\x03 \x01(\bR\btenantIdB}\n" +
+	"\ttenant_id\x12\x1d.google.protobuf.FieldOptions\x18Ն\x03 \x01(\bR\btenantId:k\n" +
+	"\x13data_classification\x12\x1d.google.protobuf.FieldOptions\x18׆\x03 \x01(\x0e2\x19.es.v1.DataClassificationR\x12dataClassificationB}\n" +
 	"\tcom.es.v1B\fOptionsProtoP\x01Z-github.com/laenenai/eventstore/gen/es/v1;esv1\xa2\x02\x03EXX\xaa\x02\x05Es.V1\xca\x02\x05Es\\V1\xe2\x02\x11Es\\V1\\GPBMetadata\xea\x02\x06Es::V1b\x06proto3"
 
 var (
@@ -316,28 +471,30 @@ func file_es_v1_options_proto_rawDescGZIP() []byte {
 	return file_es_v1_options_proto_rawDescData
 }
 
+var file_es_v1_options_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_es_v1_options_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_es_v1_options_proto_goTypes = []any{
-	(*Projection)(nil),                  // 0: es.v1.Projection
-	(*descriptorpb.MessageOptions)(nil), // 1: google.protobuf.MessageOptions
-	(*descriptorpb.FieldOptions)(nil),   // 2: google.protobuf.FieldOptions
+	(DataClassification)(0),             // 0: es.v1.DataClassification
+	(*Projection)(nil),                  // 1: es.v1.Projection
+	(*descriptorpb.MessageOptions)(nil), // 2: google.protobuf.MessageOptions
+	(*descriptorpb.FieldOptions)(nil),   // 3: google.protobuf.FieldOptions
 }
 var file_es_v1_options_proto_depIdxs = []int32{
-	1,  // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
-	1,  // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
-	1,  // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
-	1,  // 3: es.v1.projection:extendee -> google.protobuf.MessageOptions
-	2,  // 4: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
-	2,  // 5: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
-	2,  // 6: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
-	2,  // 7: es.v1.subject:extendee -> google.protobuf.FieldOptions
-	2,  // 8: es.v1.stream_id:extendee -> google.protobuf.FieldOptions
-	2,  // 9: es.v1.tenant_id:extendee -> google.protobuf.FieldOptions
-	0,  // 10: es.v1.projection:type_name -> es.v1.Projection
+	2,  // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
+	2,  // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
+	2,  // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
+	2,  // 3: es.v1.projection:extendee -> google.protobuf.MessageOptions
+	3,  // 4: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
+	3,  // 5: es.v1.subject:extendee -> google.protobuf.FieldOptions
+	3,  // 6: es.v1.stream_id:extendee -> google.protobuf.FieldOptions
+	3,  // 7: es.v1.tenant_id:extendee -> google.protobuf.FieldOptions
+	3,  // 8: es.v1.data_classification:extendee -> google.protobuf.FieldOptions
+	1,  // 9: es.v1.projection:type_name -> es.v1.Projection
+	0,  // 10: es.v1.data_classification:type_name -> es.v1.DataClassification
 	11, // [11:11] is the sub-list for method output_type
 	11, // [11:11] is the sub-list for method input_type
-	10, // [10:11] is the sub-list for extension type_name
-	0,  // [0:10] is the sub-list for extension extendee
+	9,  // [9:11] is the sub-list for extension type_name
+	0,  // [0:9] is the sub-list for extension extendee
 	0,  // [0:0] is the sub-list for field type_name
 }
 
@@ -351,13 +508,14 @@ func file_es_v1_options_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_es_v1_options_proto_rawDesc), len(file_es_v1_options_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   1,
-			NumExtensions: 10,
+			NumExtensions: 9,
 			NumServices:   0,
 		},
 		GoTypes:           file_es_v1_options_proto_goTypes,
 		DependencyIndexes: file_es_v1_options_proto_depIdxs,
+		EnumInfos:         file_es_v1_options_proto_enumTypes,
 		MessageInfos:      file_es_v1_options_proto_msgTypes,
 		ExtensionInfos:    file_es_v1_options_proto_extTypes,
 	}.Build()

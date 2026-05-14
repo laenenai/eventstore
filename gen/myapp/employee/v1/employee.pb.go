@@ -77,9 +77,9 @@ func (Status) EnumDescriptor() ([]byte, []int) {
 type Employee struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EmployeeId    string                 `protobuf:"bytes,1,opt,name=employee_id,json=employeeId,proto3" json:"employee_id,omitempty"`
-	LegalName     []byte                 `protobuf:"bytes,2,opt,name=legal_name,json=legalName,proto3" json:"legal_name,omitempty"`         // PII
-	Email         []byte                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`                                  // PII
-	DateOfBirth   []byte                 `protobuf:"bytes,4,opt,name=date_of_birth,json=dateOfBirth,proto3" json:"date_of_birth,omitempty"` // PII (string-encoded ISO date in bytes)
+	LegalName     string                 `protobuf:"bytes,2,opt,name=legal_name,json=legalName,proto3" json:"legal_name,omitempty"`
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	DateOfBirth   string                 `protobuf:"bytes,4,opt,name=date_of_birth,json=dateOfBirth,proto3" json:"date_of_birth,omitempty"` // ISO 8601 YYYY-MM-DD — quasi-identifier per HIPAA
 	Department    string                 `protobuf:"bytes,5,opt,name=department,proto3" json:"department,omitempty"`
 	CurrentRole   string                 `protobuf:"bytes,6,opt,name=current_role,json=currentRole,proto3" json:"current_role,omitempty"`
 	Status        Status                 `protobuf:"varint,7,opt,name=status,proto3,enum=myapp.employee.v1.Status" json:"status,omitempty"`
@@ -124,25 +124,25 @@ func (x *Employee) GetEmployeeId() string {
 	return ""
 }
 
-func (x *Employee) GetLegalName() []byte {
+func (x *Employee) GetLegalName() string {
 	if x != nil {
 		return x.LegalName
 	}
-	return nil
+	return ""
 }
 
-func (x *Employee) GetEmail() []byte {
+func (x *Employee) GetEmail() string {
 	if x != nil {
 		return x.Email
 	}
-	return nil
+	return ""
 }
 
-func (x *Employee) GetDateOfBirth() []byte {
+func (x *Employee) GetDateOfBirth() string {
 	if x != nil {
 		return x.DateOfBirth
 	}
-	return nil
+	return ""
 }
 
 func (x *Employee) GetDepartment() string {
@@ -169,9 +169,9 @@ func (x *Employee) GetStatus() Status {
 type Hire struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EmployeeId    string                 `protobuf:"bytes,1,opt,name=employee_id,json=employeeId,proto3" json:"employee_id,omitempty"`
-	LegalName     []byte                 `protobuf:"bytes,2,opt,name=legal_name,json=legalName,proto3" json:"legal_name,omitempty"`
-	Email         []byte                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
-	DateOfBirth   []byte                 `protobuf:"bytes,4,opt,name=date_of_birth,json=dateOfBirth,proto3" json:"date_of_birth,omitempty"`
+	LegalName     string                 `protobuf:"bytes,2,opt,name=legal_name,json=legalName,proto3" json:"legal_name,omitempty"`
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	DateOfBirth   string                 `protobuf:"bytes,4,opt,name=date_of_birth,json=dateOfBirth,proto3" json:"date_of_birth,omitempty"`
 	Department    string                 `protobuf:"bytes,5,opt,name=department,proto3" json:"department,omitempty"`
 	InitialRole   string                 `protobuf:"bytes,6,opt,name=initial_role,json=initialRole,proto3" json:"initial_role,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -215,25 +215,25 @@ func (x *Hire) GetEmployeeId() string {
 	return ""
 }
 
-func (x *Hire) GetLegalName() []byte {
+func (x *Hire) GetLegalName() string {
 	if x != nil {
 		return x.LegalName
 	}
-	return nil
+	return ""
 }
 
-func (x *Hire) GetEmail() []byte {
+func (x *Hire) GetEmail() string {
 	if x != nil {
 		return x.Email
 	}
-	return nil
+	return ""
 }
 
-func (x *Hire) GetDateOfBirth() []byte {
+func (x *Hire) GetDateOfBirth() string {
 	if x != nil {
 		return x.DateOfBirth
 	}
-	return nil
+	return ""
 }
 
 func (x *Hire) GetDepartment() string {
@@ -295,8 +295,9 @@ func (x *Promote) GetNewRole() string {
 }
 
 type Terminate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reason        []byte                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Free-form notes often contain PII (manager observations, etc.).
+	Reason        string `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -331,11 +332,11 @@ func (*Terminate) Descriptor() ([]byte, []int) {
 	return file_myapp_employee_v1_employee_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *Terminate) GetReason() []byte {
+func (x *Terminate) GetReason() string {
 	if x != nil {
 		return x.Reason
 	}
-	return nil
+	return ""
 }
 
 type Commands struct {
@@ -439,9 +440,9 @@ func (*Commands_Terminate) isCommands_Variant() {}
 type Hired struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	EmployeeId    string                 `protobuf:"bytes,1,opt,name=employee_id,json=employeeId,proto3" json:"employee_id,omitempty"`
-	LegalName     []byte                 `protobuf:"bytes,2,opt,name=legal_name,json=legalName,proto3" json:"legal_name,omitempty"`
-	Email         []byte                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
-	DateOfBirth   []byte                 `protobuf:"bytes,4,opt,name=date_of_birth,json=dateOfBirth,proto3" json:"date_of_birth,omitempty"`
+	LegalName     string                 `protobuf:"bytes,2,opt,name=legal_name,json=legalName,proto3" json:"legal_name,omitempty"`
+	Email         string                 `protobuf:"bytes,3,opt,name=email,proto3" json:"email,omitempty"`
+	DateOfBirth   string                 `protobuf:"bytes,4,opt,name=date_of_birth,json=dateOfBirth,proto3" json:"date_of_birth,omitempty"`
 	Department    string                 `protobuf:"bytes,5,opt,name=department,proto3" json:"department,omitempty"`
 	InitialRole   string                 `protobuf:"bytes,6,opt,name=initial_role,json=initialRole,proto3" json:"initial_role,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -485,25 +486,25 @@ func (x *Hired) GetEmployeeId() string {
 	return ""
 }
 
-func (x *Hired) GetLegalName() []byte {
+func (x *Hired) GetLegalName() string {
 	if x != nil {
 		return x.LegalName
 	}
-	return nil
+	return ""
 }
 
-func (x *Hired) GetEmail() []byte {
+func (x *Hired) GetEmail() string {
 	if x != nil {
 		return x.Email
 	}
-	return nil
+	return ""
 }
 
-func (x *Hired) GetDateOfBirth() []byte {
+func (x *Hired) GetDateOfBirth() string {
 	if x != nil {
 		return x.DateOfBirth
 	}
-	return nil
+	return ""
 }
 
 func (x *Hired) GetDepartment() string {
@@ -576,7 +577,7 @@ type Terminated struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	EmployeeId string                 `protobuf:"bytes,1,opt,name=employee_id,json=employeeId,proto3" json:"employee_id,omitempty"`
 	// Free-form notes often contain PII (manager observations, etc.).
-	Reason        []byte `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason        string `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -618,11 +619,11 @@ func (x *Terminated) GetEmployeeId() string {
 	return ""
 }
 
-func (x *Terminated) GetReason() []byte {
+func (x *Terminated) GetReason() string {
 	if x != nil {
 		return x.Reason
 	}
-	return nil
+	return ""
 }
 
 type Events struct {
@@ -727,59 +728,59 @@ var File_myapp_employee_v1_employee_proto protoreflect.FileDescriptor
 
 const file_myapp_employee_v1_employee_proto_rawDesc = "" +
 	"\n" +
-	" myapp/employee/v1/employee.proto\x12\x11myapp.employee.v1\x1a\x13es/v1/options.proto\"\xa0\x02\n" +
+	" myapp/employee/v1/employee.proto\x12\x11myapp.employee.v1\x1a\x13es/v1/options.proto\"\xb2\x02\n" +
 	"\bEmployee\x12%\n" +
 	"\vemployee_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\n" +
-	"employeeId\x12\x1d\n" +
+	"employeeId\x12#\n" +
 	"\n" +
-	"legal_name\x18\x02 \x01(\fR\tlegalName\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\fR\x05email\x12\"\n" +
-	"\rdate_of_birth\x18\x04 \x01(\fR\vdateOfBirth\x12$\n" +
+	"legal_name\x18\x02 \x01(\tB\x04\xb8\xb5\x18\x03R\tlegalName\x12\x1a\n" +
+	"\x05email\x18\x03 \x01(\tB\x04\xb8\xb5\x18\x03R\x05email\x12(\n" +
+	"\rdate_of_birth\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x04R\vdateOfBirth\x12$\n" +
 	"\n" +
-	"department\x18\x05 \x01(\tB\x04\x88\xb5\x18\x01R\n" +
+	"department\x18\x05 \x01(\tB\x04\xb8\xb5\x18\x02R\n" +
 	"department\x12'\n" +
-	"\fcurrent_role\x18\x06 \x01(\tB\x04\x88\xb5\x18\x01R\vcurrentRole\x127\n" +
-	"\x06status\x18\a \x01(\x0e2\x19.myapp.employee.v1.StatusB\x04\x88\xb5\x18\x01R\x06status:\f\x82\xb5\x18\bemployee\"\xc3\x01\n" +
+	"\fcurrent_role\x18\x06 \x01(\tB\x04\xb8\xb5\x18\x02R\vcurrentRole\x127\n" +
+	"\x06status\x18\a \x01(\x0e2\x19.myapp.employee.v1.StatusB\x04\xb8\xb5\x18\x02R\x06status:\f\x82\xb5\x18\bemployee\"\xd5\x01\n" +
 	"\x04Hire\x12\x1f\n" +
 	"\vemployee_id\x18\x01 \x01(\tR\n" +
-	"employeeId\x12\x1d\n" +
+	"employeeId\x12#\n" +
 	"\n" +
-	"legal_name\x18\x02 \x01(\fR\tlegalName\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\fR\x05email\x12\"\n" +
-	"\rdate_of_birth\x18\x04 \x01(\fR\vdateOfBirth\x12\x1e\n" +
+	"legal_name\x18\x02 \x01(\tB\x04\xb8\xb5\x18\x03R\tlegalName\x12\x1a\n" +
+	"\x05email\x18\x03 \x01(\tB\x04\xb8\xb5\x18\x03R\x05email\x12(\n" +
+	"\rdate_of_birth\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x04R\vdateOfBirth\x12\x1e\n" +
 	"\n" +
 	"department\x18\x05 \x01(\tR\n" +
 	"department\x12!\n" +
 	"\finitial_role\x18\x06 \x01(\tR\vinitialRole\"$\n" +
 	"\aPromote\x12\x19\n" +
-	"\bnew_role\x18\x01 \x01(\tR\anewRole\"#\n" +
-	"\tTerminate\x12\x16\n" +
-	"\x06reason\x18\x01 \x01(\fR\x06reason\"\xc7\x01\n" +
+	"\bnew_role\x18\x01 \x01(\tR\anewRole\")\n" +
+	"\tTerminate\x12\x1c\n" +
+	"\x06reason\x18\x01 \x01(\tB\x04\xb8\xb5\x18\x03R\x06reason\"\xc7\x01\n" +
 	"\bCommands\x12-\n" +
 	"\x04hire\x18\x01 \x01(\v2\x17.myapp.employee.v1.HireH\x00R\x04hire\x126\n" +
 	"\apromote\x18\x02 \x01(\v2\x1a.myapp.employee.v1.PromoteH\x00R\apromote\x12<\n" +
 	"\tterminate\x18\x03 \x01(\v2\x1c.myapp.employee.v1.TerminateH\x00R\tterminate:\v\x92\xb5\x18\aCommandB\t\n" +
-	"\avariant\"\xd6\x01\n" +
+	"\avariant\"\xe8\x01\n" +
 	"\x05Hired\x12%\n" +
 	"\vemployee_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\n" +
-	"employeeId\x12\x1d\n" +
+	"employeeId\x12#\n" +
 	"\n" +
-	"legal_name\x18\x02 \x01(\fR\tlegalName\x12\x14\n" +
-	"\x05email\x18\x03 \x01(\fR\x05email\x12\"\n" +
-	"\rdate_of_birth\x18\x04 \x01(\fR\vdateOfBirth\x12$\n" +
+	"legal_name\x18\x02 \x01(\tB\x04\xb8\xb5\x18\x03R\tlegalName\x12\x1a\n" +
+	"\x05email\x18\x03 \x01(\tB\x04\xb8\xb5\x18\x03R\x05email\x12(\n" +
+	"\rdate_of_birth\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x04R\vdateOfBirth\x12$\n" +
 	"\n" +
-	"department\x18\x05 \x01(\tB\x04\x88\xb5\x18\x01R\n" +
+	"department\x18\x05 \x01(\tB\x04\xb8\xb5\x18\x02R\n" +
 	"department\x12'\n" +
-	"\finitial_role\x18\x06 \x01(\tB\x04\x88\xb5\x18\x01R\vinitialRole\"R\n" +
+	"\finitial_role\x18\x06 \x01(\tB\x04\xb8\xb5\x18\x02R\vinitialRole\"R\n" +
 	"\bPromoted\x12%\n" +
 	"\vemployee_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\n" +
 	"employeeId\x12\x1f\n" +
-	"\bnew_role\x18\x02 \x01(\tB\x04\x88\xb5\x18\x01R\anewRole\"K\n" +
+	"\bnew_role\x18\x02 \x01(\tB\x04\xb8\xb5\x18\x02R\anewRole\"Q\n" +
 	"\n" +
 	"Terminated\x12%\n" +
 	"\vemployee_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\n" +
-	"employeeId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\fR\x06reason\"\xcc\x01\n" +
+	"employeeId\x12\x1c\n" +
+	"\x06reason\x18\x02 \x01(\tB\x04\xb8\xb5\x18\x03R\x06reason\"\xcc\x01\n" +
 	"\x06Events\x120\n" +
 	"\x05hired\x18\x01 \x01(\v2\x18.myapp.employee.v1.HiredH\x00R\x05hired\x129\n" +
 	"\bpromoted\x18\x02 \x01(\v2\x1b.myapp.employee.v1.PromotedH\x00R\bpromoted\x12?\n" +

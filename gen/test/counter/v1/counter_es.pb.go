@@ -10,6 +10,7 @@ import (
 	es "github.com/laenenai/eventstore/es"
 	projection "github.com/laenenai/eventstore/projection"
 	proto "google.golang.org/protobuf/proto"
+	slog "log/slog"
 )
 
 // Command is the sealed interface for the Commands sum type.
@@ -245,4 +246,291 @@ func isOurType(typeURL string) bool {
 		return true
 	}
 	return false
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Counter.
+func (m *Counter) Clone() *Counter {
+	if m == nil {
+		return nil
+	}
+	out := &Counter{}
+	out.Initialized = m.Initialized
+	out.Count = m.Count
+	out.Min = m.Min
+	out.Max = m.Max
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Counter) View(level es.AccessLevel) *Counter {
+	if m == nil {
+		return nil
+	}
+	out := &Counter{}
+	out.Initialized = m.Initialized
+	out.Count = m.Count
+	out.Min = m.Min
+	out.Max = m.Max
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Counter) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Bool("initialized", m.Initialized),
+		slog.Int64("count", int64(m.Count)),
+		slog.Int64("min", int64(m.Min)),
+		slog.Int64("max", int64(m.Max)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Init.
+func (m *Init) Clone() *Init {
+	if m == nil {
+		return nil
+	}
+	out := &Init{}
+	out.Min = m.Min
+	out.Max = m.Max
+	out.Initial = m.Initial
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Init) View(level es.AccessLevel) *Init {
+	if m == nil {
+		return nil
+	}
+	out := &Init{}
+	out.Min = m.Min
+	out.Max = m.Max
+	out.Initial = m.Initial
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Init) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("min", int64(m.Min)),
+		slog.Int64("max", int64(m.Max)),
+		slog.Int64("initial", int64(m.Initial)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Increment.
+func (m *Increment) Clone() *Increment {
+	if m == nil {
+		return nil
+	}
+	out := &Increment{}
+	out.By = m.By
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Increment) View(level es.AccessLevel) *Increment {
+	if m == nil {
+		return nil
+	}
+	out := &Increment{}
+	out.By = m.By
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Increment) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("by", int64(m.By)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Decrement.
+func (m *Decrement) Clone() *Decrement {
+	if m == nil {
+		return nil
+	}
+	out := &Decrement{}
+	out.By = m.By
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Decrement) View(level es.AccessLevel) *Decrement {
+	if m == nil {
+		return nil
+	}
+	out := &Decrement{}
+	out.By = m.By
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Decrement) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("by", int64(m.By)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Initialized.
+func (m *Initialized) Clone() *Initialized {
+	if m == nil {
+		return nil
+	}
+	out := &Initialized{}
+	out.Min = m.Min
+	out.Max = m.Max
+	out.Value = m.Value
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Initialized) View(level es.AccessLevel) *Initialized {
+	if m == nil {
+		return nil
+	}
+	out := &Initialized{}
+	out.Min = m.Min
+	out.Max = m.Max
+	out.Value = m.Value
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Initialized) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("min", int64(m.Min)),
+		slog.Int64("max", int64(m.Max)),
+		slog.Int64("value", int64(m.Value)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Incremented.
+func (m *Incremented) Clone() *Incremented {
+	if m == nil {
+		return nil
+	}
+	out := &Incremented{}
+	out.By = m.By
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Incremented) View(level es.AccessLevel) *Incremented {
+	if m == nil {
+		return nil
+	}
+	out := &Incremented{}
+	out.By = m.By
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Incremented) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("by", int64(m.By)),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *Decremented.
+func (m *Decremented) Clone() *Decremented {
+	if m == nil {
+		return nil
+	}
+	out := &Decremented{}
+	out.By = m.By
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *Decremented) View(level es.AccessLevel) *Decremented {
+	if m == nil {
+		return nil
+	}
+	out := &Decremented{}
+	out.By = m.By
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *Decremented) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.Int64("by", int64(m.By)),
+	)
 }
