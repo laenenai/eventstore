@@ -3,6 +3,7 @@ go 1.25.10
 use (
 	.
 	./adapters/authz/cedar
+	./adapters/cmdworkflow/dbos
 	./adapters/cmdworkflow/restate
 	./adapters/storage/postgres
 	./adapters/storage/sqlite

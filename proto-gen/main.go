@@ -62,8 +62,12 @@ func main() {
 				if err := generateRestateFile(plugin, file); err != nil {
 					return err
 				}
+			case "dbos":
+				if err := generateDBOSFile(plugin, file); err != nil {
+					return err
+				}
 			default:
-				return fmt.Errorf("protoc-gen-es-go: unknown runtime=%q (supported: restate)", runtime)
+				return fmt.Errorf("protoc-gen-es-go: unknown runtime=%q (supported: restate, dbos)", runtime)
 			}
 		}
 		return nil
