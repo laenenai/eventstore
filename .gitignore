@@ -26,3 +26,6 @@ Thumbs.db
 
 # Vendor (we don't vendor)
 vendor/
+
+# Claude Code tooling (sub-agent worktrees, etc.)
+.claude/
