@@ -14,7 +14,7 @@ import (
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/examples/employee"
 	employeev1 "github.com/laenenai/eventstore/gen/myapp/employee/v1"
-	"github.com/laenenai/eventstore/kms/inproc"
+	"github.com/laenenai/eventstore/adapters/kms/inproc"
 	"github.com/laenenai/eventstore/shred"
 )
 

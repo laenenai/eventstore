@@ -103,6 +103,17 @@ type SubjectKey struct {
 	ShreddedAt *time.Time
 }
 
+type SubscriberDlq struct {
+	SubscriberName string
+	TenantID       string
+	EventID        string
+	StreamID       string
+	TypeUrl        string
+	LastError      string
+	Attempts       int32
+	EnqueuedAt     time.Time
+}
+
 type UniqueClaim struct {
 	TenantID  string
 	Scope     string

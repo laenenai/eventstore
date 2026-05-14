@@ -12,7 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/laenenai/eventstore/es"
-	"github.com/laenenai/eventstore/publisher/restate"
+	"github.com/laenenai/eventstore/adapters/publisher/restate"
 )
 
 func mustStreamID(t *testing.T) es.StreamID {

@@ -10,7 +10,7 @@ require (
 	github.com/laenenai/eventstore v0.0.0-00010101000000-000000000000
 	github.com/pressly/goose/v3 v3.27.1
 	google.golang.org/protobuf v1.36.11
-	modernc.org/sqlite v1.49.1
+	modernc.org/sqlite v1.50.1
 )
 
 require (
@@ -21,9 +21,10 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/sethvargo/go-retry v0.3.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/mod v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
-	modernc.org/libc v1.72.1 // indirect
+	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )

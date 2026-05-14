@@ -100,6 +100,17 @@ type SubjectKey struct {
 	ShreddedAt *string
 }
 
+type SubscriberDlq struct {
+	SubscriberName string
+	TenantID       string
+	EventID        string
+	StreamID       string
+	TypeUrl        string
+	LastError      string
+	Attempts       int64
+	EnqueuedAt     string
+}
+
 type UniqueClaim struct {
 	TenantID  string
 	Scope     string

@@ -14,7 +14,7 @@ import (
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/estest"
 	shredv1 "github.com/laenenai/eventstore/gen/test/shred/v1"
-	"github.com/laenenai/eventstore/kms/inproc"
+	"github.com/laenenai/eventstore/adapters/kms/inproc"
 	"github.com/laenenai/eventstore/shred"
 )
 

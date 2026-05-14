@@ -9,7 +9,7 @@ import (
 
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/outbox"
-	"github.com/laenenai/eventstore/publisher/inproc"
+	"github.com/laenenai/eventstore/adapters/publisher/inproc"
 )
 
 // Integration tests for the outbox drain + inproc publisher.

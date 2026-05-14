@@ -2,13 +2,15 @@ go 1.25.10
 
 use (
 	.
+	./adapters/authz/cedar
+	./adapters/cmdworkflow/restate
 	./adapters/storage/postgres
 	./adapters/storage/sqlite
-	./adapters/authz/cedar
-	./examples/party
+	./examples/cmdworkflow
+	./examples/customerview
+	./examples/employee
 	./examples/invoice
 	./examples/orderfulfillment
-	./examples/employee
-	./examples/customerview
+	./examples/party
 	./examples/statestream
 )

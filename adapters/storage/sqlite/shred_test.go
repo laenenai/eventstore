@@ -10,7 +10,7 @@ import (
 
 	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/es"
-	"github.com/laenenai/eventstore/kms/inproc"
+	"github.com/laenenai/eventstore/adapters/kms/inproc"
 	"github.com/laenenai/eventstore/shred"
 )
 

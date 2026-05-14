@@ -52,6 +52,9 @@ type Querier interface {
 	// than @older_than. Runs in the same scheduled wake-up as the
 	// publish drain.
 	CleanupPublished(ctx context.Context, arg CleanupPublishedParams) error
+	// Operator action: drop every DLQ row for one subscriber (typically
+	// after a state_stream.Drain refresh has caught the subscriber up).
+	ClearSubscriberDLQ(ctx context.Context, arg ClearSubscriberDLQParams) (int64, error)
 	// Count of rows in DLQ state. Gauge metric.
 	CountDLQ(ctx context.Context, arg CountDLQParams) (int64, error)
 	// Rows that have failed at least once but not yet hit DLQ.
@@ -75,6 +78,8 @@ type Querier interface {
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
 	// Cross-tenant variant for full rebuild.
 	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
+	// Delete a single DLQ row after operator-driven replay.
+	DeleteSubscriberDLQRow(ctx context.Context, arg DeleteSubscriberDLQRowParams) error
 	// Crypto-shred a subject. Sets the wrapped DEK to empty bytes and marks
 	// the shred timestamp. The row is retained for compliance audit.
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
@@ -108,6 +113,11 @@ type Querier interface {
 	// (projection, tenant, global_position) overwrites the existing row
 	// (handler error message is the most useful version).
 	InsertProjectionDLQ(ctx context.Context, arg InsertProjectionDLQParams) error
+	// subscriber_dlq queries (ADR 0025).
+	// Capture one exhausted subscriber delivery. INSERT-on-conflict-update
+	// keeps the most recent attempt info if the same (subscriber, tenant,
+	// event) re-DLQs (rare — happens on replay after partial recovery).
+	InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error
 	// ===========================================================================
 	// Admin / dashboard queries
 	// ===========================================================================
@@ -144,6 +154,8 @@ type Querier interface {
 	// payload comes from state_cache (no duplication of state bytes).
 	// Tenant filter: pass @tenant_id = '' for cross-tenant drain.
 	ListStreamsBehind(ctx context.Context, arg ListStreamsBehindParams) ([]ListStreamsBehindRow, error)
+	// Operator dashboard query. Tenant filter: '' = cross-tenant.
+	ListSubscriberDLQ(ctx context.Context, arg ListSubscriberDLQParams) ([]SubscriberDlq, error)
 	// projection_checkpoint queries (ADR 0020 Tier 3, decision 3e).
 	// Returns the cursor for a projector. NULL row → 0 (never run).
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)

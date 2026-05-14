@@ -17,7 +17,7 @@ import (
 	"github.com/laenenai/eventstore/estest"
 	counterv1 "github.com/laenenai/eventstore/gen/test/counter/v1"
 	"github.com/laenenai/eventstore/outbox"
-	"github.com/laenenai/eventstore/publisher/inproc"
+	"github.com/laenenai/eventstore/adapters/publisher/inproc"
 	"github.com/laenenai/eventstore/state_stream"
 )
 

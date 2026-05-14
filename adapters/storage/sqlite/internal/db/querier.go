@@ -16,6 +16,7 @@ type Querier interface {
 	ClaimUnique(ctx context.Context, arg ClaimUniqueParams) error
 	CleanupProcessedEvents(ctx context.Context, arg CleanupProcessedEventsParams) (int64, error)
 	CleanupPublished(ctx context.Context, arg CleanupPublishedParams) error
+	ClearSubscriberDLQ(ctx context.Context, arg ClearSubscriberDLQParams) (int64, error)
 	CountDLQ(ctx context.Context, arg CountDLQParams) (int64, error)
 	CountFailing(ctx context.Context, arg CountFailingParams) (int64, error)
 	CountPending(ctx context.Context, tenantID string) (int64, error)
@@ -25,6 +26,7 @@ type Querier interface {
 	DeleteProjectionDLQ(ctx context.Context, arg DeleteProjectionDLQParams) error
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
 	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
+	DeleteSubscriberDLQRow(ctx context.Context, arg DeleteSubscriberDLQRowParams) error
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
 	GetEventByID(ctx context.Context, arg GetEventByIDParams) (Event, error)
 	GetProjectionStatus(ctx context.Context, arg GetProjectionStatusParams) (ProjectionCheckpoint, error)
@@ -55,6 +57,8 @@ type Querier interface {
 	InsertOutbox(ctx context.Context, arg InsertOutboxParams) error
 	// projection_dlq queries for SQLite (ADR 0020).
 	InsertProjectionDLQ(ctx context.Context, arg InsertProjectionDLQParams) error
+	// subscriber_dlq queries (ADR 0025).
+	InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error
 	// ===========================================================================
 	// Admin / dashboard queries
 	// ===========================================================================
@@ -70,6 +74,7 @@ type Querier interface {
 	// json(state) converts the BLOB JSONB back to text bytes so the Go
 	// side gets the protojson form (ADR 0021).
 	ListStreamsBehind(ctx context.Context, arg ListStreamsBehindParams) ([]ListStreamsBehindRow, error)
+	ListSubscriberDLQ(ctx context.Context, arg ListSubscriberDLQParams) ([]SubscriberDlq, error)
 	// projection_checkpoint queries for SQLite (ADR 0020 Tier 3).
 	// See the Postgres sibling for the canonical doc comments.
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
