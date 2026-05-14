@@ -1,8 +1,9 @@
 // Package employee is the worked example for crypto-shredding
-// (ADR 0010, cookbook 11). PII fields are declared as `string`
-// with (es.v1.pii) = true; the codegen-emitted EncryptPII /
-// DecryptPII methods round-trip them through the framework's
-// Shredder at write and read time (base64'd ciphertext at rest).
+// (ADR 0010, cookbook 11, ADR 0027). PII fields are declared as
+// `string` with (es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL
+// (or higher); the codegen-emitted EncryptPII / DecryptPII methods
+// round-trip them through the framework's Shredder at write and read
+// time (base64'd ciphertext at rest).
 package employee
 
 import (

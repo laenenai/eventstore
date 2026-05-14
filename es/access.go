@@ -1,19 +1,18 @@
 // Access-level view scopes used by codegen-emitted View / LogValue
 // helpers. The annotation (es.v1.data_classification) on each field
-// labels its sensitivity; AccessLevel labels the caller's scope. The
-// generated View(level) returns a deep copy with fields above the
-// caller's level zero-valued; LogValue() implements slog.LogValuer at
-// AccessLevelInternal with [REDACTED:<class>] markers in place of the
-// hidden fields.
+// labels its sensitivity (PERSONAL / SENSITIVE / FINANCIAL / etc.);
+// AccessLevel labels the caller's scope. The generated View(level)
+// returns a deep copy with fields above the caller's level zero-
+// valued; LogValue() implements slog.LogValuer at AccessLevelInternal
+// with [REDACTED:<class>] markers in place of the hidden fields.
 //
-// This pair (annotation + level) is deliberately orthogonal to the
-// crypto-shredding model: (es.v1.non_pii) controls what is encrypted
-// AT REST (ADR 0010); data_classification controls what may leak
-// through LOGS/UIs/EXPORTS even when the bytes are in plaintext in
-// memory. A field can be both encrypted and classified — encryption
-// stops a dropped database from leaking, classification stops a
-// misconfigured slog handler from leaking. Different attackers,
-// different defenses.
+// The same classification drives crypto-shredding at the wire-format
+// boundary (ADR 0010 + ADR 0027): View / LogValue / Clone all operate
+// on plaintext values once the codec has decrypted them at unmarshal
+// time. Encryption stops a dropped database from leaking;
+// classification + AccessLevel stop a misconfigured slog handler or
+// over-permissive UI from leaking. Different attackers, different
+// defenses, single annotation.
 package es
 
 import (

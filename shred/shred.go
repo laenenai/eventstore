@@ -244,10 +244,11 @@ func (s *Shredder) RewrapDEKs(ctx context.Context, tenantID string, pageSize int
 var ErrShredded = errors.New("shred: subject has been shredded")
 
 // PIIEncoder is implemented by codegen-emitted event types that carry
-// at least one PII field (anything not marked (es.v1.non_pii) on a
-// non-subject field). aggregate.Runtime auto-detects this interface
-// and calls EncryptPII/DecryptPII when Runtime.Shredder is configured.
-// See ADR 0010.
+// at least one encrypted field (a non-subject field whose
+// (es.v1.data_classification) is PERSONAL or stricter — see ADR 0027
+// for the full classification matrix). aggregate.Runtime auto-detects
+// this interface and calls EncryptPII/DecryptPII when Runtime.Shredder
+// is configured. See ADR 0010.
 type PIIEncoder interface {
 	// PIIFields returns the field names this event carries under
 	// encryption — the ones EncryptPII/DecryptPII walk. Stable

@@ -54,10 +54,23 @@ message NameChanged {
   bytes  new_display_name = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
 }
 
+// AuthorizedWithSAD models the post-PCI-authorization receipt: the
+// auth_code is PERSONAL and persistable, but the cvv is SAD (PCI-DSS
+// §3.2 — Sensitive Authentication Data) and MUST NOT be persisted.
+// Used by tests to verify codegen emits the runtime SAD reject in
+// EncryptPII / DecryptPII (ADR 0027). Never appears in a decider path;
+// constructed and submitted to EncryptPII directly.
+message AuthorizedWithSAD {
+  string person_id = 1 [(es.v1.subject_field) = true];
+  string auth_code = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string cvv       = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_SAD];
+}
+
 message Events {
   option (es.v1.sum_type) = "Event";
   oneof variant {
-    Registered  registered   = 1;
-    NameChanged name_changed = 2;
+    Registered        registered          = 1;
+    NameChanged       name_changed        = 2;
+    AuthorizedWithSAD authorized_with_sad = 3;
   }
 }

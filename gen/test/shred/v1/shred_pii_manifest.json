@@ -17,6 +17,14 @@
         {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
         {"name": "new_display_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
+    },
+    {
+      "name": "test.shred.v1.AuthorizedWithSAD",
+      "fields": [
+        {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "auth_code", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "cvv", "classification": "DATA_CLASSIFICATION_SAD", "encryption": "rejected_sad", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
+      ]
     }
   ]
 }

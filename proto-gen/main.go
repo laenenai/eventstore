@@ -723,15 +723,6 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 		return nil
 	}
 
-	shredPkg := protogen.GoImportPath("github.com/laenenai/eventstore/shred")
-	contextType := out.QualifiedGoIdent(contextPkg.Ident("Context"))
-	shredderType := out.QualifiedGoIdent(shredPkg.Ident("Shredder"))
-	redactedType := out.QualifiedGoIdent(shredPkg.Ident("RedactedFields"))
-	redactedField := out.QualifiedGoIdent(shredPkg.Ident("RedactedField"))
-	errShredded := out.QualifiedGoIdent(shredPkg.Ident("ErrShredded"))
-	errorsIs := out.QualifiedGoIdent(protogen.GoImportPath("errors").Ident("Is"))
-	fmtErrorf := out.QualifiedGoIdent(fmtPkg.Ident("Errorf"))
-
 	vName := v.GoIdent.GoName
 
 	// Collect just the PII fields.
@@ -741,12 +732,47 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 			piiFields = append(piiFields, f)
 		}
 	}
-	// base64 import is only needed when at least one field is string-PII.
-	var b64Pkg string
+
+	// SAD detection up-front. A variant with any SAD field emits a
+	// short-circuit EncryptPII / DecryptPII that returns a typed error
+	// before touching anything else (ADR 0027). When the variant is
+	// SAD-only the per-field loop never runs, so we must NOT register
+	// the imports that loop would have needed — protogen marks every
+	// QualifiedGoIdent call as a used import, and unused imports fail
+	// the generated package to compile.
+	hasSAD := false
 	for _, pf := range piiFields {
-		if pf.kind == piiKindString {
-			b64Pkg = out.QualifiedGoIdent(protogen.GoImportPath("encoding/base64").Ident("RawStdEncoding"))
+		if pf.kind == piiKindRejected {
+			hasSAD = true
 			break
+		}
+	}
+
+	shredPkg := protogen.GoImportPath("github.com/laenenai/eventstore/shred")
+	contextType := out.QualifiedGoIdent(contextPkg.Ident("Context"))
+	shredderType := out.QualifiedGoIdent(shredPkg.Ident("Shredder"))
+	redactedType := out.QualifiedGoIdent(shredPkg.Ident("RedactedFields"))
+	fmtErrorf := out.QualifiedGoIdent(fmtPkg.Ident("Errorf"))
+
+	// Imports used only by the per-field encrypt/decrypt loops; suppress
+	// when SAD reject preempts those loops, otherwise the generated file
+	// has unused imports.
+	var (
+		redactedField string
+		errShredded   string
+		errorsIs      string
+		b64Pkg        string
+	)
+	if !hasSAD {
+		redactedField = out.QualifiedGoIdent(shredPkg.Ident("RedactedField"))
+		errShredded = out.QualifiedGoIdent(shredPkg.Ident("ErrShredded"))
+		errorsIs = out.QualifiedGoIdent(protogen.GoImportPath("errors").Ident("Is"))
+		// base64 import is only needed when at least one field is string-PII.
+		for _, pf := range piiFields {
+			if pf.kind == piiKindString {
+				b64Pkg = out.QualifiedGoIdent(protogen.GoImportPath("encoding/base64").Ident("RawStdEncoding"))
+				break
+			}
 		}
 	}
 	// Subject field, if any.
@@ -789,49 +815,92 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 	out.P("}")
 	out.P()
 
-	// EncryptPII
-	out.P("// EncryptPII encrypts every PII field in place using s. Called")
-	out.P("// by aggregate.Runtime before Codec.Encode when Runtime.Shredder")
-	out.P("// is configured. The framework passes the resolved subject id;")
-	out.P("// per-field (es.v1.subject) overrides are honored below.")
-	out.P("//")
-	out.P("// `bytes` PII fields hold raw ciphertext after encrypt; `string`")
-	out.P("// PII fields (declared with (es.v1.pii) = true) hold base64-")
-	out.P("// encoded ciphertext so the field remains UTF-8-valid.")
-	out.P("func (e *", vName, ") EncryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) error {")
+	// Names of every SAD field on this variant. Listed in the reject
+	// error so operators see which fields tripped the guard — important
+	// when a mixed-classification message is a design bug masquerading
+	// as one bad annotation.
+	var sadFieldNames []string
 	for _, pf := range piiFields {
-		subjExpr := "subject"
-		if pf.subjectField != "" {
-			subjExpr = `e.Get` + upperGoFieldName(pf.subjectField) + `()`
-		}
-		switch pf.kind {
-		case piiKindBytes:
-			out.P("\tif len(e.", pf.goName, ") > 0 {")
-			out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
-			out.P("\t\tif err != nil {")
-			out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
-			out.P("\t\t}")
-			out.P("\t\te.", pf.goName, " = sealed")
-			out.P("\t}")
-		case piiKindString:
-			out.P("\tif e.", pf.goName, " != \"\" {")
-			out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", []byte(e.", pf.goName, "))")
-			out.P("\t\tif err != nil {")
-			out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
-			out.P("\t\t}")
-			out.P("\t\te.", pf.goName, " = ", b64Pkg, ".EncodeToString(sealed)")
-			out.P("\t}")
+		if pf.kind == piiKindRejected {
+			sadFieldNames = append(sadFieldNames, pf.protoName)
 		}
 	}
-	out.P("\treturn nil")
-	out.P("}")
-	out.P()
+
+	// EncryptPII
+	out.P("// EncryptPII encrypts every classification-PERSONAL+ field in")
+	out.P("// place using s. Called by aggregate.Runtime before Codec.Encode")
+	out.P("// when Runtime.Shredder is configured. The framework passes the")
+	out.P("// resolved subject id; per-field (es.v1.subject) overrides are")
+	out.P("// honored below.")
+	out.P("//")
+	out.P("// `bytes` fields hold raw ciphertext after encrypt; `string` fields")
+	out.P("// classified PERSONAL+ hold base64-encoded ciphertext so the field")
+	out.P("// remains UTF-8-valid. Fields classified")
+	out.P("// (es.v1.data_classification) = DATA_CLASSIFICATION_SAD cause this")
+	out.P("// method to return an error before any field is touched — SAD MUST")
+	out.P("// NOT be persisted (PCI-DSS §3.2). See ADR 0027.")
+	out.P("func (e *", vName, ") EncryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) error {")
+	if hasSAD {
+		// Refuse before touching any field: a message that mixes SAD
+		// with PERSONAL is a design bug, and a half-encrypted message
+		// on the way to storage is strictly worse than a clean reject.
+		out.P("\treturn ", fmtErrorf, "(\"SAD MUST NOT be persisted: ", vName, " contains DATA_CLASSIFICATION_SAD field(s) %q\", []string{")
+		for _, name := range sadFieldNames {
+			out.P("\t\t\"", name, "\",")
+		}
+		out.P("\t})")
+		out.P("}")
+		out.P()
+	} else {
+		for _, pf := range piiFields {
+			subjExpr := "subject"
+			if pf.subjectField != "" {
+				subjExpr = `e.Get` + upperGoFieldName(pf.subjectField) + `()`
+			}
+			switch pf.kind {
+			case piiKindBytes:
+				out.P("\tif len(e.", pf.goName, ") > 0 {")
+				out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", e.", pf.goName, ")")
+				out.P("\t\tif err != nil {")
+				out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
+				out.P("\t\t}")
+				out.P("\t\te.", pf.goName, " = sealed")
+				out.P("\t}")
+			case piiKindString:
+				out.P("\tif e.", pf.goName, " != \"\" {")
+				out.P("\t\tsealed, err := s.EncryptField(ctx, tenantID, ", subjExpr, ", []byte(e.", pf.goName, "))")
+				out.P("\t\tif err != nil {")
+				out.P("\t\t\treturn ", fmtErrorf, "(\"", vName, ".EncryptPII ", pf.protoName, ": %w\", err)")
+				out.P("\t\t}")
+				out.P("\t\te.", pf.goName, " = ", b64Pkg, ".EncodeToString(sealed)")
+				out.P("\t}")
+			}
+		}
+		out.P("\treturn nil")
+		out.P("}")
+		out.P()
+	}
 
 	// DecryptPII
 	out.P("// DecryptPII reverses EncryptPII. Per-field shred → RedactedField;")
 	out.P("// base64 decode failure on string PII fields counts as a corrupt")
-	out.P("// payload and aborts; other errors abort.")
+	out.P("// payload and aborts; other errors abort. Reading a SAD-classified")
+	out.P("// field from persistence is itself corruption (it should never have")
+	out.P("// been written) and returns the same SAD reject error.")
 	out.P("func (e *", vName, ") DecryptPII(ctx ", contextType, ", s *", shredderType, ", tenantID, subject string) (", redactedType, ", error) {")
+	if hasSAD {
+		// Mirror Encrypt: if a SAD payload reached storage anyway, the
+		// stream is in a regulator-reportable state and we fail loudly
+		// rather than decoding it.
+		out.P("\treturn nil, ", fmtErrorf, "(\"SAD MUST NOT be persisted: ", vName, " contains DATA_CLASSIFICATION_SAD field(s) %q\", []string{")
+		for _, name := range sadFieldNames {
+			out.P("\t\t\"", name, "\",")
+		}
+		out.P("\t})")
+		out.P("}")
+		out.P()
+		return nil
+	}
 	out.P("\tvar redacted ", redactedType)
 	for _, pf := range piiFields {
 		subjExpr := "subject"

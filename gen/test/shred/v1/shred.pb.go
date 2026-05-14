@@ -381,12 +381,79 @@ func (x *NameChanged) GetNewDisplayName() []byte {
 	return nil
 }
 
+// AuthorizedWithSAD models the post-PCI-authorization receipt: the
+// auth_code is PERSONAL and persistable, but the cvv is SAD (PCI-DSS
+// §3.2 — Sensitive Authentication Data) and MUST NOT be persisted.
+// Used by tests to verify codegen emits the runtime SAD reject in
+// EncryptPII / DecryptPII (ADR 0027). Never appears in a decider path;
+// constructed and submitted to EncryptPII directly.
+type AuthorizedWithSAD struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	PersonId      string                 `protobuf:"bytes,1,opt,name=person_id,json=personId,proto3" json:"person_id,omitempty"`
+	AuthCode      string                 `protobuf:"bytes,2,opt,name=auth_code,json=authCode,proto3" json:"auth_code,omitempty"`
+	Cvv           string                 `protobuf:"bytes,3,opt,name=cvv,proto3" json:"cvv,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AuthorizedWithSAD) Reset() {
+	*x = AuthorizedWithSAD{}
+	mi := &file_test_shred_v1_shred_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AuthorizedWithSAD) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AuthorizedWithSAD) ProtoMessage() {}
+
+func (x *AuthorizedWithSAD) ProtoReflect() protoreflect.Message {
+	mi := &file_test_shred_v1_shred_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AuthorizedWithSAD.ProtoReflect.Descriptor instead.
+func (*AuthorizedWithSAD) Descriptor() ([]byte, []int) {
+	return file_test_shred_v1_shred_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AuthorizedWithSAD) GetPersonId() string {
+	if x != nil {
+		return x.PersonId
+	}
+	return ""
+}
+
+func (x *AuthorizedWithSAD) GetAuthCode() string {
+	if x != nil {
+		return x.AuthCode
+	}
+	return ""
+}
+
+func (x *AuthorizedWithSAD) GetCvv() string {
+	if x != nil {
+		return x.Cvv
+	}
+	return ""
+}
+
 type Events struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Variant:
 	//
 	//	*Events_Registered
 	//	*Events_NameChanged
+	//	*Events_AuthorizedWithSad
 	Variant       isEvents_Variant `protobuf_oneof:"variant"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -394,7 +461,7 @@ type Events struct {
 
 func (x *Events) Reset() {
 	*x = Events{}
-	mi := &file_test_shred_v1_shred_proto_msgTypes[6]
+	mi := &file_test_shred_v1_shred_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -406,7 +473,7 @@ func (x *Events) String() string {
 func (*Events) ProtoMessage() {}
 
 func (x *Events) ProtoReflect() protoreflect.Message {
-	mi := &file_test_shred_v1_shred_proto_msgTypes[6]
+	mi := &file_test_shred_v1_shred_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -419,7 +486,7 @@ func (x *Events) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Events.ProtoReflect.Descriptor instead.
 func (*Events) Descriptor() ([]byte, []int) {
-	return file_test_shred_v1_shred_proto_rawDescGZIP(), []int{6}
+	return file_test_shred_v1_shred_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Events) GetVariant() isEvents_Variant {
@@ -447,6 +514,15 @@ func (x *Events) GetNameChanged() *NameChanged {
 	return nil
 }
 
+func (x *Events) GetAuthorizedWithSad() *AuthorizedWithSAD {
+	if x != nil {
+		if x, ok := x.Variant.(*Events_AuthorizedWithSad); ok {
+			return x.AuthorizedWithSad
+		}
+	}
+	return nil
+}
+
 type isEvents_Variant interface {
 	isEvents_Variant()
 }
@@ -459,9 +535,15 @@ type Events_NameChanged struct {
 	NameChanged *NameChanged `protobuf:"bytes,2,opt,name=name_changed,json=nameChanged,proto3,oneof"`
 }
 
+type Events_AuthorizedWithSad struct {
+	AuthorizedWithSad *AuthorizedWithSAD `protobuf:"bytes,3,opt,name=authorized_with_sad,json=authorizedWithSad,proto3,oneof"`
+}
+
 func (*Events_Registered) isEvents_Variant() {}
 
 func (*Events_NameChanged) isEvents_Variant() {}
+
+func (*Events_AuthorizedWithSad) isEvents_Variant() {}
 
 var File_test_shred_v1_shred_proto protoreflect.FileDescriptor
 
@@ -493,12 +575,17 @@ const file_test_shred_v1_shred_proto_rawDesc = "" +
 	"referrerId\"`\n" +
 	"\vNameChanged\x12!\n" +
 	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12.\n" +
-	"\x10new_display_name\x18\x02 \x01(\fB\x04\xb8\xb5\x18\x03R\x0enewDisplayName\"\x9c\x01\n" +
+	"\x10new_display_name\x18\x02 \x01(\fB\x04\xb8\xb5\x18\x03R\x0enewDisplayName\"q\n" +
+	"\x11AuthorizedWithSAD\x12!\n" +
+	"\tperson_id\x18\x01 \x01(\tB\x04\x80\xb5\x18\x01R\bpersonId\x12!\n" +
+	"\tauth_code\x18\x02 \x01(\tB\x04\xb8\xb5\x18\x03R\bauthCode\x12\x16\n" +
+	"\x03cvv\x18\x03 \x01(\tB\x04\xb8\xb5\x18\bR\x03cvv\"\xf0\x01\n" +
 	"\x06Events\x12;\n" +
 	"\n" +
 	"registered\x18\x01 \x01(\v2\x19.test.shred.v1.RegisteredH\x00R\n" +
 	"registered\x12?\n" +
-	"\fname_changed\x18\x02 \x01(\v2\x1a.test.shred.v1.NameChangedH\x00R\vnameChanged:\t\x92\xb5\x18\x05EventB\t\n" +
+	"\fname_changed\x18\x02 \x01(\v2\x1a.test.shred.v1.NameChangedH\x00R\vnameChanged\x12R\n" +
+	"\x13authorized_with_sad\x18\x03 \x01(\v2 .test.shred.v1.AuthorizedWithSADH\x00R\x11authorizedWithSad:\t\x92\xb5\x18\x05EventB\t\n" +
 	"\avariantB\xaf\x01\n" +
 	"\x11com.test.shred.v1B\n" +
 	"ShredProtoP\x01Z8github.com/laenenai/eventstore/gen/test/shred/v1;shredv1\xa2\x02\x03TSX\xaa\x02\rTest.Shred.V1\xca\x02\rTest\\Shred\\V1\xe2\x02\x19Test\\Shred\\V1\\GPBMetadata\xea\x02\x0fTest::Shred::V1b\x06proto3"
@@ -515,26 +602,28 @@ func file_test_shred_v1_shred_proto_rawDescGZIP() []byte {
 	return file_test_shred_v1_shred_proto_rawDescData
 }
 
-var file_test_shred_v1_shred_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_test_shred_v1_shred_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_test_shred_v1_shred_proto_goTypes = []any{
-	(*Person)(nil),      // 0: test.shred.v1.Person
-	(*Register)(nil),    // 1: test.shred.v1.Register
-	(*UpdateName)(nil),  // 2: test.shred.v1.UpdateName
-	(*Commands)(nil),    // 3: test.shred.v1.Commands
-	(*Registered)(nil),  // 4: test.shred.v1.Registered
-	(*NameChanged)(nil), // 5: test.shred.v1.NameChanged
-	(*Events)(nil),      // 6: test.shred.v1.Events
+	(*Person)(nil),            // 0: test.shred.v1.Person
+	(*Register)(nil),          // 1: test.shred.v1.Register
+	(*UpdateName)(nil),        // 2: test.shred.v1.UpdateName
+	(*Commands)(nil),          // 3: test.shred.v1.Commands
+	(*Registered)(nil),        // 4: test.shred.v1.Registered
+	(*NameChanged)(nil),       // 5: test.shred.v1.NameChanged
+	(*AuthorizedWithSAD)(nil), // 6: test.shred.v1.AuthorizedWithSAD
+	(*Events)(nil),            // 7: test.shred.v1.Events
 }
 var file_test_shred_v1_shred_proto_depIdxs = []int32{
 	1, // 0: test.shred.v1.Commands.register:type_name -> test.shred.v1.Register
 	2, // 1: test.shred.v1.Commands.update_name:type_name -> test.shred.v1.UpdateName
 	4, // 2: test.shred.v1.Events.registered:type_name -> test.shred.v1.Registered
 	5, // 3: test.shred.v1.Events.name_changed:type_name -> test.shred.v1.NameChanged
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	6, // 4: test.shred.v1.Events.authorized_with_sad:type_name -> test.shred.v1.AuthorizedWithSAD
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_test_shred_v1_shred_proto_init() }
@@ -546,9 +635,10 @@ func file_test_shred_v1_shred_proto_init() {
 		(*Commands_Register)(nil),
 		(*Commands_UpdateName)(nil),
 	}
-	file_test_shred_v1_shred_proto_msgTypes[6].OneofWrappers = []any{
+	file_test_shred_v1_shred_proto_msgTypes[7].OneofWrappers = []any{
 		(*Events_Registered)(nil),
 		(*Events_NameChanged)(nil),
+		(*Events_AuthorizedWithSad)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -556,7 +646,7 @@ func file_test_shred_v1_shred_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_test_shred_v1_shred_proto_rawDesc), len(file_test_shred_v1_shred_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

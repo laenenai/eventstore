@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -191,8 +193,9 @@ func TestShred_E2E_ShredPreventsFurtherWrites(t *testing.T) {
 	}
 }
 
-// TestShred_E2E_NonPIIFieldsStayPlaintext confirms that fields opted
-// out via (es.v1.non_pii) are not encrypted.
+// TestShred_E2E_NonPIIFieldsStayPlaintext confirms that fields whose
+// (es.v1.data_classification) is below PERSONAL (INTERNAL, PUBLIC,
+// UNSPECIFIED) are not encrypted.
 func TestShred_E2E_NonPIIFieldsStayPlaintext(t *testing.T) {
 	a, rt := newShredRuntime(t)
 	ctx := es.WithTenant(context.Background(), "t-nonpii")
@@ -211,5 +214,99 @@ func TestShred_E2E_NonPIIFieldsStayPlaintext(t *testing.T) {
 	// should appear plaintext in the wire payload.
 	if !bytes.Contains(envs[0].Payload, []byte("dave")) {
 		t.Errorf("subject_id (non-PII) should appear plaintext in payload")
+	}
+}
+
+// TestShred_SADRejectedOnEncrypt verifies the codegen-emitted
+// EncryptPII rejects any event variant carrying a
+// DATA_CLASSIFICATION_SAD field (ADR 0027 + cookbook 11). The proto
+// AuthorizedWithSAD has cvv = SAD; the generated method must return a
+// typed error naming every SAD field, AND must not mutate the value
+// (no partial encrypt).
+//
+// Bug demonstrated: before this fix, codegen mapped SAD to
+// piiKindRejected in the manifest but emitPIIMethods only emitted
+// piiKindBytes / piiKindString branches, leaving SAD fields to flow
+// through as plaintext. Run this test against the un-fixed plugin and
+// the generated EncryptPII returns nil with the cvv still set.
+func TestShred_SADRejectedOnEncrypt(t *testing.T) {
+	_, s := newShredder(t)
+	ctx := context.Background()
+
+	const plaintextCVV = "999"
+	const plaintextAuth = "auth-12345"
+	e := &shredv1.AuthorizedWithSAD{
+		PersonId: "frank",
+		AuthCode: plaintextAuth,
+		Cvv:      plaintextCVV,
+	}
+
+	err := e.EncryptPII(ctx, s, "t-sad", "frank")
+	if err == nil {
+		t.Fatalf("EncryptPII on SAD-bearing event: want error, got nil (cvv would persist as plaintext)")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "SAD MUST NOT be persisted") {
+		t.Errorf("error should announce SAD reject, got: %q", msg)
+	}
+	if !strings.Contains(msg, "cvv") {
+		t.Errorf("error should name the SAD field, got: %q", msg)
+	}
+	// No partial-encrypt: auth_code (PERSONAL) must stay plaintext
+	// because the reject fires before any field is touched. If the
+	// fix regresses and SAD detection runs AFTER the per-field loop,
+	// auth_code would already be base64-ciphertext at this point.
+	if e.AuthCode != plaintextAuth {
+		t.Errorf("auth_code mutated despite SAD reject: %q", e.AuthCode)
+	}
+	if e.Cvv != plaintextCVV {
+		t.Errorf("cvv mutated despite SAD reject: %q", e.Cvv)
+	}
+}
+
+// TestShred_SADRejectedOnDecrypt mirrors the encrypt path. If a SAD
+// payload ever reached storage (despite the encrypt guard), reading
+// it back is itself corruption (regulator-reportable). DecryptPII
+// must return the same SAD reject error rather than silently decoding.
+func TestShred_SADRejectedOnDecrypt(t *testing.T) {
+	_, s := newShredder(t)
+	ctx := context.Background()
+
+	e := &shredv1.AuthorizedWithSAD{PersonId: "grace", AuthCode: "auth-xyz", Cvv: "777"}
+	red, err := e.DecryptPII(ctx, s, "t-sad", "grace")
+	if err == nil {
+		t.Fatalf("DecryptPII on SAD-bearing event: want error, got nil")
+	}
+	if red != nil {
+		t.Errorf("redacted fields should be nil on SAD reject, got %v", red)
+	}
+	if !strings.Contains(err.Error(), "SAD MUST NOT be persisted") {
+		t.Errorf("error wording: got %q", err)
+	}
+	if !strings.Contains(err.Error(), "cvv") {
+		t.Errorf("error should name SAD field cvv, got %q", err)
+	}
+}
+
+// TestShred_SADManifestEntry confirms the per-aggregate
+// pii_manifest.json continues to surface SAD fields as
+// "encryption": "rejected_sad" so PCI auditors can grep for them.
+// (The manifest is the contract that ADR 0027 promises.)
+func TestShred_SADManifestEntry(t *testing.T) {
+	// Hand-rolled manifest read so the test stays portable across
+	// adapter modules (no encoding/json import gymnastics needed).
+	b, err := os.ReadFile("../../../gen/test/shred/v1/shred_pii_manifest.json")
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	manifest := string(b)
+	if !strings.Contains(manifest, `"name": "cvv"`) {
+		t.Fatalf("manifest missing cvv entry:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, `"classification": "DATA_CLASSIFICATION_SAD"`) {
+		t.Fatalf("manifest missing SAD classification:\n%s", manifest)
+	}
+	if !strings.Contains(manifest, `"encryption": "rejected_sad"`) {
+		t.Fatalf("manifest missing rejected_sad encryption marker:\n%s", manifest)
 	}
 }

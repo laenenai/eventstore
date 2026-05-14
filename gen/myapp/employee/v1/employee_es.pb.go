@@ -300,14 +300,18 @@ func (e *Hired) Subject() string {
 	return e.GetEmployeeId()
 }
 
-// EncryptPII encrypts every PII field in place using s. Called
-// by aggregate.Runtime before Codec.Encode when Runtime.Shredder
-// is configured. The framework passes the resolved subject id;
-// per-field (es.v1.subject) overrides are honored below.
+// EncryptPII encrypts every classification-PERSONAL+ field in
+// place using s. Called by aggregate.Runtime before Codec.Encode
+// when Runtime.Shredder is configured. The framework passes the
+// resolved subject id; per-field (es.v1.subject) overrides are
+// honored below.
 //
-// `bytes` PII fields hold raw ciphertext after encrypt; `string`
-// PII fields (declared with (es.v1.pii) = true) hold base64-
-// encoded ciphertext so the field remains UTF-8-valid.
+// `bytes` fields hold raw ciphertext after encrypt; `string` fields
+// classified PERSONAL+ hold base64-encoded ciphertext so the field
+// remains UTF-8-valid. Fields classified
+// (es.v1.data_classification) = DATA_CLASSIFICATION_SAD cause this
+// method to return an error before any field is touched — SAD MUST
+// NOT be persisted (PCI-DSS §3.2). See ADR 0027.
 func (e *Hired) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
 	if e.LegalName != "" {
 		sealed, err := s.EncryptField(ctx, tenantID, subject, []byte(e.LegalName))
@@ -335,7 +339,9 @@ func (e *Hired) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, sub
 
 // DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
 // base64 decode failure on string PII fields counts as a corrupt
-// payload and aborts; other errors abort.
+// payload and aborts; other errors abort. Reading a SAD-classified
+// field from persistence is itself corruption (it should never have
+// been written) and returns the same SAD reject error.
 func (e *Hired) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
 	var redacted shred.RedactedFields
 	if e.LegalName != "" {
@@ -406,14 +412,18 @@ func (e *Terminated) Subject() string {
 	return e.GetEmployeeId()
 }
 
-// EncryptPII encrypts every PII field in place using s. Called
-// by aggregate.Runtime before Codec.Encode when Runtime.Shredder
-// is configured. The framework passes the resolved subject id;
-// per-field (es.v1.subject) overrides are honored below.
+// EncryptPII encrypts every classification-PERSONAL+ field in
+// place using s. Called by aggregate.Runtime before Codec.Encode
+// when Runtime.Shredder is configured. The framework passes the
+// resolved subject id; per-field (es.v1.subject) overrides are
+// honored below.
 //
-// `bytes` PII fields hold raw ciphertext after encrypt; `string`
-// PII fields (declared with (es.v1.pii) = true) hold base64-
-// encoded ciphertext so the field remains UTF-8-valid.
+// `bytes` fields hold raw ciphertext after encrypt; `string` fields
+// classified PERSONAL+ hold base64-encoded ciphertext so the field
+// remains UTF-8-valid. Fields classified
+// (es.v1.data_classification) = DATA_CLASSIFICATION_SAD cause this
+// method to return an error before any field is touched — SAD MUST
+// NOT be persisted (PCI-DSS §3.2). See ADR 0027.
 func (e *Terminated) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
 	if e.Reason != "" {
 		sealed, err := s.EncryptField(ctx, tenantID, subject, []byte(e.Reason))
@@ -427,7 +437,9 @@ func (e *Terminated) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID
 
 // DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
 // base64 decode failure on string PII fields counts as a corrupt
-// payload and aborts; other errors abort.
+// payload and aborts; other errors abort. Reading a SAD-classified
+// field from persistence is itself corruption (it should never have
+// been written) and returns the same SAD reject error.
 func (e *Terminated) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
 	var redacted shred.RedactedFields
 	if e.Reason != "" {

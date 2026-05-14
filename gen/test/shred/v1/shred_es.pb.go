@@ -101,8 +101,9 @@ type Event interface {
 	isEvent()
 }
 
-func (*Registered) isEvent()  {}
-func (*NameChanged) isEvent() {}
+func (*Registered) isEvent()        {}
+func (*NameChanged) isEvent()       {}
+func (*AuthorizedWithSAD) isEvent() {}
 
 // CloneSum returns a deep copy of m typed as the sealed Event interface.
 // Delegates to the typed Clone(); exists so generic callers can satisfy a
@@ -114,10 +115,16 @@ func (m *Registered) CloneSum() Event { return m.Clone() }
 // `Cloner[Event]` interface assertion (see aggregate.Runtime).
 func (m *NameChanged) CloneSum() Event { return m.Clone() }
 
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *AuthorizedWithSAD) CloneSum() Event { return m.Clone() }
+
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.
-func (*Registered) Action() string  { return "test.shred.v1.Registered" }
-func (*NameChanged) Action() string { return "test.shred.v1.NameChanged" }
+func (*Registered) Action() string        { return "test.shred.v1.Registered" }
+func (*NameChanged) Action() string       { return "test.shred.v1.NameChanged" }
+func (*AuthorizedWithSAD) Action() string { return "test.shred.v1.AuthorizedWithSAD" }
 
 // EventCodec encodes and decodes Event variants on the wire.
 // Implements aggregate.Codec[Event].
@@ -150,6 +157,16 @@ func (EventCodec) Encode(v Event) (aggregate.EncodedEvent, error) {
 			TypeURL:       "test.shred.v1.NameChanged",
 			SchemaVersion: 1,
 		}, nil
+	case *AuthorizedWithSAD:
+		b, err := proto.Marshal(x)
+		if err != nil {
+			return aggregate.EncodedEvent{}, err
+		}
+		return aggregate.EncodedEvent{
+			Payload:       b,
+			TypeURL:       "test.shred.v1.AuthorizedWithSAD",
+			SchemaVersion: 1,
+		}, nil
 	}
 	return aggregate.EncodedEvent{}, fmt.Errorf("EventCodec.Encode: unknown variant type %T", v)
 }
@@ -171,6 +188,12 @@ func (EventCodec) Decode(typeURL string, _ uint32, payload []byte) (Event, error
 			return nil, err
 		}
 		return x, nil
+	case "test.shred.v1.AuthorizedWithSAD":
+		x := &AuthorizedWithSAD{}
+		if err := proto.Unmarshal(payload, x); err != nil {
+			return nil, err
+		}
+		return x, nil
 	}
 	return nil, fmt.Errorf("EventCodec.Decode: unknown type_url %q", typeURL)
 }
@@ -184,6 +207,7 @@ func (EventCodec) Decode(typeURL string, _ uint32, payload []byte) (Event, error
 type Projection interface {
 	OnRegistered(ctx context.Context, env es.Envelope, e *Registered) error
 	OnNameChanged(ctx context.Context, env es.Envelope, e *NameChanged) error
+	OnAuthorizedWithSAD(ctx context.Context, env es.Envelope, e *AuthorizedWithSAD) error
 }
 
 // NewProjectionDispatcher returns a projection.Handler that decodes
@@ -211,6 +235,8 @@ func NewProjectionDispatcher(p Projection, opts ...projection.DispatcherOption) 
 			return p.OnRegistered(ctx, env, e)
 		case *NameChanged:
 			return p.OnNameChanged(ctx, env, e)
+		case *AuthorizedWithSAD:
+			return p.OnAuthorizedWithSAD(ctx, env, e)
 		}
 		return fmt.Errorf("projection: unreachable variant %T", evt)
 	}
@@ -224,6 +250,8 @@ func isOurType(typeURL string) bool {
 	case "test.shred.v1.Registered":
 		return true
 	case "test.shred.v1.NameChanged":
+		return true
+	case "test.shred.v1.AuthorizedWithSAD":
 		return true
 	}
 	return false
@@ -247,14 +275,18 @@ func (e *Registered) Subject() string {
 	return e.GetPersonId()
 }
 
-// EncryptPII encrypts every PII field in place using s. Called
-// by aggregate.Runtime before Codec.Encode when Runtime.Shredder
-// is configured. The framework passes the resolved subject id;
-// per-field (es.v1.subject) overrides are honored below.
+// EncryptPII encrypts every classification-PERSONAL+ field in
+// place using s. Called by aggregate.Runtime before Codec.Encode
+// when Runtime.Shredder is configured. The framework passes the
+// resolved subject id; per-field (es.v1.subject) overrides are
+// honored below.
 //
-// `bytes` PII fields hold raw ciphertext after encrypt; `string`
-// PII fields (declared with (es.v1.pii) = true) hold base64-
-// encoded ciphertext so the field remains UTF-8-valid.
+// `bytes` fields hold raw ciphertext after encrypt; `string` fields
+// classified PERSONAL+ hold base64-encoded ciphertext so the field
+// remains UTF-8-valid. Fields classified
+// (es.v1.data_classification) = DATA_CLASSIFICATION_SAD cause this
+// method to return an error before any field is touched — SAD MUST
+// NOT be persisted (PCI-DSS §3.2). See ADR 0027.
 func (e *Registered) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
 	if len(e.DisplayName) > 0 {
 		sealed, err := s.EncryptField(ctx, tenantID, subject, e.DisplayName)
@@ -275,7 +307,9 @@ func (e *Registered) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID
 
 // DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
 // base64 decode failure on string PII fields counts as a corrupt
-// payload and aborts; other errors abort.
+// payload and aborts; other errors abort. Reading a SAD-classified
+// field from persistence is itself corruption (it should never have
+// been written) and returns the same SAD reject error.
 func (e *Registered) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
 	var redacted shred.RedactedFields
 	if len(e.DisplayName) > 0 {
@@ -322,14 +356,18 @@ func (e *NameChanged) Subject() string {
 	return e.GetPersonId()
 }
 
-// EncryptPII encrypts every PII field in place using s. Called
-// by aggregate.Runtime before Codec.Encode when Runtime.Shredder
-// is configured. The framework passes the resolved subject id;
-// per-field (es.v1.subject) overrides are honored below.
+// EncryptPII encrypts every classification-PERSONAL+ field in
+// place using s. Called by aggregate.Runtime before Codec.Encode
+// when Runtime.Shredder is configured. The framework passes the
+// resolved subject id; per-field (es.v1.subject) overrides are
+// honored below.
 //
-// `bytes` PII fields hold raw ciphertext after encrypt; `string`
-// PII fields (declared with (es.v1.pii) = true) hold base64-
-// encoded ciphertext so the field remains UTF-8-valid.
+// `bytes` fields hold raw ciphertext after encrypt; `string` fields
+// classified PERSONAL+ hold base64-encoded ciphertext so the field
+// remains UTF-8-valid. Fields classified
+// (es.v1.data_classification) = DATA_CLASSIFICATION_SAD cause this
+// method to return an error before any field is touched — SAD MUST
+// NOT be persisted (PCI-DSS §3.2). See ADR 0027.
 func (e *NameChanged) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
 	if len(e.NewDisplayName) > 0 {
 		sealed, err := s.EncryptField(ctx, tenantID, subject, e.NewDisplayName)
@@ -343,7 +381,9 @@ func (e *NameChanged) EncryptPII(ctx context.Context, s *shred.Shredder, tenantI
 
 // DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
 // base64 decode failure on string PII fields counts as a corrupt
-// payload and aborts; other errors abort.
+// payload and aborts; other errors abort. Reading a SAD-classified
+// field from persistence is itself corruption (it should never have
+// been written) and returns the same SAD reject error.
 func (e *NameChanged) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
 	var redacted shred.RedactedFields
 	if len(e.NewDisplayName) > 0 {
@@ -359,6 +399,53 @@ func (e *NameChanged) DecryptPII(ctx context.Context, s *shred.Shredder, tenantI
 		}
 	}
 	return redacted, nil
+}
+
+// ---- Crypto-shredding for AuthorizedWithSAD (ADR 0010) ----
+
+// PIIFields returns the proto field names of AuthorizedWithSAD's
+// encrypted fields. Stable across regenerations.
+func (*AuthorizedWithSAD) PIIFields() []string {
+	return []string{
+		"auth_code",
+		"cvv",
+	}
+}
+
+// Subject returns the default subject id used to key the DEK
+// for this event's PII fields. Empty when the variant has no
+// (es.v1.subject_field) — caller falls back to the StreamID.
+func (e *AuthorizedWithSAD) Subject() string {
+	return e.GetPersonId()
+}
+
+// EncryptPII encrypts every classification-PERSONAL+ field in
+// place using s. Called by aggregate.Runtime before Codec.Encode
+// when Runtime.Shredder is configured. The framework passes the
+// resolved subject id; per-field (es.v1.subject) overrides are
+// honored below.
+//
+// `bytes` fields hold raw ciphertext after encrypt; `string` fields
+// classified PERSONAL+ hold base64-encoded ciphertext so the field
+// remains UTF-8-valid. Fields classified
+// (es.v1.data_classification) = DATA_CLASSIFICATION_SAD cause this
+// method to return an error before any field is touched — SAD MUST
+// NOT be persisted (PCI-DSS §3.2). See ADR 0027.
+func (e *AuthorizedWithSAD) EncryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) error {
+	return fmt.Errorf("SAD MUST NOT be persisted: AuthorizedWithSAD contains DATA_CLASSIFICATION_SAD field(s) %q", []string{
+		"cvv",
+	})
+}
+
+// DecryptPII reverses EncryptPII. Per-field shred → RedactedField;
+// base64 decode failure on string PII fields counts as a corrupt
+// payload and aborts; other errors abort. Reading a SAD-classified
+// field from persistence is itself corruption (it should never have
+// been written) and returns the same SAD reject error.
+func (e *AuthorizedWithSAD) DecryptPII(ctx context.Context, s *shred.Shredder, tenantID, subject string) (shred.RedactedFields, error) {
+	return nil, fmt.Errorf("SAD MUST NOT be persisted: AuthorizedWithSAD contains DATA_CLASSIFICATION_SAD field(s) %q", []string{
+		"cvv",
+	})
 }
 
 // Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
@@ -585,5 +672,53 @@ func (m *NameChanged) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("person_id", m.PersonId),
 		slog.String("new_display_name", "[REDACTED:PERSONAL]"),
+	)
+}
+
+// Clone returns a deep copy of m. Nil-safe (returns nil for nil m).
+// Nested messages and repeated/map fields are recursively cloned.
+// Faster than proto.Clone and returns the concrete type *AuthorizedWithSAD.
+func (m *AuthorizedWithSAD) Clone() *AuthorizedWithSAD {
+	if m == nil {
+		return nil
+	}
+	out := &AuthorizedWithSAD{}
+	out.PersonId = m.PersonId
+	out.AuthCode = m.AuthCode
+	out.Cvv = m.Cvv
+	return out
+}
+
+// View returns a deep copy of m with fields above the caller's
+// access level zero-valued. Subject fields are always visible —
+// they are opaque key handles, not identifying data on their own.
+// Nested messages recurse at the same level. Returns nil if m is nil.
+func (m *AuthorizedWithSAD) View(level es.AccessLevel) *AuthorizedWithSAD {
+	if m == nil {
+		return nil
+	}
+	out := &AuthorizedWithSAD{}
+	out.PersonId = m.PersonId
+	if level >= es.AccessLevelSubject {
+		out.AuthCode = m.AuthCode
+	}
+	if level >= es.AccessLevelOperator {
+		out.Cvv = m.Cvv
+	}
+	return out
+}
+
+// LogValue implements slog.LogValuer. Returns the structured
+// representation of m filtered at AccessLevelInternal — PII
+// fields are replaced with "[REDACTED:<CLASS>]" markers, so
+// slog.Info("...", "event", e) is safe by default.
+func (m *AuthorizedWithSAD) LogValue() slog.Value {
+	if m == nil {
+		return slog.GroupValue()
+	}
+	return slog.GroupValue(
+		slog.String("person_id", m.PersonId),
+		slog.String("auth_code", "[REDACTED:PERSONAL]"),
+		slog.String("cvv", "[REDACTED:UNKNOWN]"),
 	)
 }

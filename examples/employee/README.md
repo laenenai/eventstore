@@ -14,7 +14,7 @@ like "how many people were in engineering last year?"
 
 | Feature | How |
 | ------- | --- |
-| PII annotations in `.proto` | `legal_name`, `email`, `date_of_birth`, `reason` are `bytes`; `department`, `current_role`, `status` are `string` / `enum` with `(es.v1.non_pii) = true`. |
+| PII annotations in `.proto` | `legal_name`, `email`, `date_of_birth`, `reason` carry `(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL` (or `QUASI_IDENTIFIER` for `date_of_birth`); `department`, `current_role`, `status` use `DATA_CLASSIFICATION_INTERNAL`. See ADR 0027. |
 | `pii_manifest.json` audit artifact | Auto-emitted at `gen/myapp/employee/v1/employee_pii_manifest.json`. Diff-reviewed during privacy review. |
 | Codegen-emitted `EncryptPII`/`DecryptPII` | The framework's `protoc-gen-es-go` plugin recognized the PII fields and produced the methods. `aggregate.Runtime.Shredder` calls them transparently. |
 | `ForgetSubject` | One line of code; zeroes the DEK; all subsequent reads return redacted fields. |

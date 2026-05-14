@@ -285,15 +285,17 @@ message UserRegistered {
   // the key to find the key). See ADR 0010.
   string user_id = 1 [(es.v1.subject_field) = true];
 
-  // Default: encrypted (deny-by-default per ADR 0010).
-  string email = 2;
-  string full_name = 3;
+  // PERSONAL or stricter: codegen emits EncryptPII/DecryptPII so
+  // the field is sealed under the subject's DEK on the wire.
+  string email     = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string full_name = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
 
-  // Opt out for non-PII fields.
-  string status = 4 [(es.v1.non_pii) = true];
+  // INTERNAL / PUBLIC / unset: stays plaintext on disk.
+  string status = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
 
-  // Suppress the lint advisory when a primitive really IS PII.
-  int64 salary_cents = 5 [(es.v1.pii_intentional) = true];
+  // Financial / cardholder / credential — each has its own
+  // retention + DSAR + audit rules (see ADR 0027 + cookbook 11).
+  int64 salary_cents = 5 [(es.v1.data_classification) = DATA_CLASSIFICATION_FINANCIAL];
 }
 ```
 
@@ -303,7 +305,7 @@ Multi-subject events (transfers, shared resources) declare per field:
 message TransferRecorded {
   string from_user = 1 [(es.v1.subject) = "from_user"];
   string to_user   = 2 [(es.v1.subject) = "to_user"];
-  int64  amount    = 3 [(es.v1.non_pii) = true];
+  int64  amount    = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_FINANCIAL];
 }
 ```
 
