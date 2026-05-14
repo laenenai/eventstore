@@ -41,6 +41,7 @@ func setup(t *testing.T) *fixture {
 	dbossdk.RegisterWorkflow(env.DCtx, svc.Create, dbossdk.WithWorkflowName("Invoice.Create"))
 	dbossdk.RegisterWorkflow(env.DCtx, svc.MarkPaid, dbossdk.WithWorkflowName("Invoice.MarkPaid"))
 	dbossdk.RegisterWorkflow(env.DCtx, svc.Void, dbossdk.WithWorkflowName("Invoice.Void"))
+	dbossdk.RegisterWorkflow(env.DCtx, svc.AsyncDispatch, dbossdk.WithWorkflowName("Invoice.AsyncDispatch"))
 
 	if err := env.DCtx.Launch(); err != nil {
 		t.Fatalf("DBOS Launch: %v", err)

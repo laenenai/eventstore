@@ -50,6 +50,12 @@ type Workflow[S, C any] struct {
 	wf          WorkflowRuntime
 	subscribers []Subscriber[C]
 	dlq         SubscriberDLQWriter
+
+	// asyncSend, when set by the codegen-emitted Service constructor,
+	// replaces the goroutine-based Spawn for durable Async fan-out.
+	// Each Async subscriber × event becomes its own runtime workflow
+	// invocation with a deterministic workflowID for dedup.
+	asyncSend AsyncSend
 }
 
 // New constructs a CommandBus. The dlq parameter is wired separately
@@ -86,12 +92,92 @@ func (b *Workflow[S, C]) Register(s Subscriber[C]) {
 	if s.OnExhausted == Compensate && s.Compensate == nil {
 		panic("cmdworkflow: Subscriber " + s.Name + ": OnExhausted=Compensate requires Compensate fn")
 	}
+	if s.Mode == Async && s.OnExhausted == Compensate {
+		// Saga-style compensation only makes sense when the original
+		// caller is waiting on the result. Async subscribers fire
+		// fire-and-forget; "command succeeded but the saga rollback
+		// fired asynchronously" is a confusing semantic with no good
+		// recovery story for the caller. Use Sync+Compensate for
+		// saga steps; DLQ or Drop for async failures.
+		panic("cmdworkflow: Subscriber " + s.Name + ": Async + Compensate is disallowed (saga compensation requires Sync)")
+	}
 	for _, existing := range b.subscribers {
 		if existing.Name == s.Name {
 			panic("cmdworkflow: duplicate Subscriber.Name: " + s.Name)
 		}
 	}
 	b.subscribers = append(b.subscribers, s)
+}
+
+// AsyncPayload is the wire shape carried by durable Async fan-out.
+// Codegen-emitted Service.AsyncDispatch handlers receive it as their
+// input; Service.sendAsync constructs it when invoking the runtime's
+// send primitive. Exported for codegen consumption — application
+// code typically doesn't touch it.
+type AsyncPayload struct {
+	SubscriberName string `json:"subscriberName"`
+	EnvBytes       []byte `json:"envBytes"`
+}
+
+// AsyncSend is the function shape an adapter's Service registers via
+// SetAsyncSend to enable durable Async fan-out. When set, spawnAsync
+// invokes it instead of using the goroutine-based Spawn — the
+// adapter's Service handles the actual workflow invocation
+// (ServiceSend for Restate, RunWorkflow for DBOS) targeting its own
+// pre-registered AsyncDispatch method.
+//
+// The workflowID is the deterministic dedup key:
+// "<streamType>:<subscriberName>:<eventID>". Two Spawn calls with
+// the same id produce one child workflow.
+type AsyncSend func(ctx context.Context, subscriberName string, envBytes []byte, workflowID string) error
+
+// SetAsyncSend wires a durable Async fan-out function. Called by
+// the codegen-emitted Service constructors (NewRestateService,
+// NewDBOSService). If unset, spawnAsync falls back to the goroutine-
+// based Spawn (Phase 2a inproc behavior).
+func (b *Workflow[S, C]) SetAsyncSend(fn AsyncSend) {
+	b.asyncSend = fn
+}
+
+// DispatchAsync is invoked by the codegen-emitted Service's
+// AsyncDispatch workflow when a child invocation fires. Looks up the
+// subscriber by name, decodes the envelope, runs the same
+// retry+exhausted policy as Sync.
+//
+// Returns nil on success or successful policy application
+// (DLQ-written, Drop, etc.). Returns an error only on framework
+// failures (subscriber not found, encoding error). Subscriber
+// Handle errors are absorbed by the retry+policy loop and never
+// propagate up — the parent runtime should consider the child
+// workflow successful regardless of subscriber Handle outcome.
+func (b *Workflow[S, C]) DispatchAsync(ctx context.Context, subscriberName string, envBytes []byte) error {
+	var sub Subscriber[C]
+	found := false
+	for _, s := range b.subscribers {
+		if s.Name == subscriberName {
+			sub = s
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("cmdworkflow: DispatchAsync: subscriber %q not registered", subscriberName)
+	}
+
+	envs, err := decodeEnvelopes(envBytes)
+	if err != nil {
+		return fmt.Errorf("cmdworkflow: DispatchAsync: decode envelope: %w", err)
+	}
+	if len(envs) != 1 {
+		return fmt.Errorf("cmdworkflow: DispatchAsync: expected 1 envelope, got %d", len(envs))
+	}
+	env := envs[0]
+
+	sid := env.StreamID
+	if err := b.runRetries(ctx, env, sub); err != nil {
+		return b.onExhausted(ctx, sid, env, sub, err)
+	}
+	return nil
 }
 
 // With is the fluent counterpart to Register. Returns the workflow so
@@ -294,19 +380,35 @@ func (b *Workflow[S, C]) readEnvelopesStep(
 	return decodeEnvelopes(raw)
 }
 
-// spawnAsync dispatches an Async subscriber as an independent child
-// workflow. Retries run inside the spawned fn; on exhaustion the
-// policy is applied within the same Spawn'd context. (For Restate
-// this means Async + DLQ / Compensate is fire-and-forget durability
-// — the parent invocation has returned by the time policy runs, so
-// nested Run inside the spawned fn is best-effort. inproc handles
-// it fully.)
+// spawnAsync dispatches an Async subscriber. Two paths:
+//
+//   - If asyncSend is set (the codegen-emitted Service has wired it
+//     in via SetAsyncSend), invoke the durable child-workflow path:
+//     encode the envelope, generate a deterministic workflowID, and
+//     hand off to the runtime's ServiceSend / RunWorkflow targeting
+//     the Service's pre-registered AsyncDispatch method.
+//
+//   - Otherwise, fall back to the goroutine-based Spawn (Phase 2a
+//     inproc behavior). Not durable, but correct for tests and
+//     single-process apps.
+//
+// The workflowID format is "<streamType>:<subscriberName>:<eventID>"
+// — deterministic across replays, prefixed with the aggregate so
+// operator dashboards group related child workflows visually.
 func (b *Workflow[S, C]) spawnAsync(
 	ctx context.Context,
 	sid es.StreamID,
 	env es.Envelope,
 	sub Subscriber[C],
 ) error {
+	if b.asyncSend != nil {
+		envBytes := encodeEnvelopes([]es.Envelope{env})
+		workflowID := fmt.Sprintf("%s:%s:%s", env.StreamID.Type, sub.Name, env.EventID.String())
+		return b.asyncSend(ctx, sub.Name, envBytes, workflowID)
+	}
+
+	// Fallback: goroutine-based fire-and-forget. Same retry+policy
+	// logic as Sync, just running on a goroutine.
 	spawnName := sub.Name + ":" + env.EventID.String()
 	return b.wf.Spawn(ctx, spawnName, func(ctx context.Context) error {
 		if err := b.runRetries(ctx, env, sub); err != nil {

@@ -20,8 +20,13 @@ type RestateService struct {
 }
 
 // NewRestateService returns a Restate-bindable service backed by wf.
+// Also wires durable Async fan-out: subsequent Async subscriber
+// dispatches go through restate.ServiceSend targeting AsyncDispatch,
+// keyed by <streamType>:<subscriberName>:<eventID> for dedup.
 func NewRestateService(wf *cmdworkflow.Workflow[*v1.Invoice, v1.Command]) *RestateService {
-	return &RestateService{Workflow: wf}
+	s := &RestateService{Workflow: wf}
+	wf.SetAsyncSend(s.sendAsync)
+	return s
 }
 
 // ServiceName overrides the SDK's default reflection name so
@@ -56,6 +61,31 @@ func (s *RestateService) Void(ctx sdk_go.Context, cmd *v1.Void) (*v1.Invoice, er
 	}
 	stdCtx := restate.WithContext(es.WithTenant(context.Background(), tenant), ctx)
 	return s.Workflow.HandleCmd(stdCtx, sid, cmd)
+}
+
+// AsyncDispatch is the Restate handler that runs an Async
+// subscriber's delivery + retry + exhausted policy. Register
+// it alongside the per-command handlers; the framework's
+// spawnAsync dispatches to it on every Async subscriber × event.
+func (s *RestateService) AsyncDispatch(ctx sdk_go.Context, payload cmdworkflow.AsyncPayload) (struct{}, error) {
+	stdCtx := restate.WithContext(context.Background(), ctx)
+	return struct{}{}, s.Workflow.DispatchAsync(stdCtx, payload.SubscriberName, payload.EnvBytes)
+}
+
+// sendAsync is the AsyncSend wired into the Workflow at construction.
+// Called from spawnAsync when an Async subscriber matches; issues a
+// fire-and-forget ServiceSend to AsyncDispatch with the workflow id
+// as Restate's idempotency-key.
+func (s *RestateService) sendAsync(ctx context.Context, subscriberName string, envBytes []byte, workflowID string) error {
+	rc, ok := restate.FromContext(ctx)
+	if !ok {
+		return restate.ErrNoRestateContext
+	}
+	sdk_go.ServiceSend(rc, "Invoice", "AsyncDispatch").Send(cmdworkflow.AsyncPayload{
+		SubscriberName: subscriberName,
+		EnvBytes:       envBytes,
+	}, sdk_go.WithIdempotencyKey(workflowID))
+	return nil
 }
 
 var _ = context.Context(nil)

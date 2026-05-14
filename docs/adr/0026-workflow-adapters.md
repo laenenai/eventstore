@@ -247,6 +247,38 @@ Two distinct codec choices:
 - **Framework internals** (step results): `BinaryCodec`, opaque bytes.
 - **User-facing types** (commands, return states): `ProtoCodec`.
 
+### 6b. Durable Async fan-out via per-subscriber workflows
+
+Phase 2a wired Async subscribers as in-process goroutines — fire and
+forget, not journaled. A process crash mid-Async lost in-flight
+work. This is replaced with durable child workflows:
+
+- Each (Async subscriber × event) becomes one runtime workflow
+  invocation with the deterministic id
+  `"<streamType>:<subscriberName>:<eventID>"` — globally unique
+  (eventIDs are UUIDv7), retry-safe across replays.
+- Codegen emits an `AsyncDispatch(ctx, payload AsyncPayload)` method
+  on each Service struct (RestateService + DBOSService).
+- The Service constructor wires
+  `wf.SetAsyncSend(s.sendAsync)` — the framework's spawnAsync
+  delegates to it.
+- `sendAsync` invokes the runtime's send primitive:
+  - Restate: `restate.ServiceSend(rc, "Invoice", "AsyncDispatch").Send(payload, WithIdempotencyKey(workflowID))`
+  - DBOS: `dbos.RunWorkflow(dctx, s.AsyncDispatch, payload, WithWorkflowID(workflowID))` with handle discarded
+
+The dispatched workflow runs the full subscriber retry + OnExhausted
+policy under its own durable journal. Failures result in DLQ inserts
+(also journaled steps within the child workflow).
+
+`Async + Compensate` is now panic-on-register at framework level —
+saga compensation only makes sense for Sync subscribers where the
+original caller is waiting. Fire-and-forget compensation has no
+recovery story for the caller. Use Sync+Compensate for saga steps;
+DLQ or Drop for Async failures.
+
+Inproc adapter continues to use a goroutine for Spawn (not durable
+— inproc is test-only anyway).
+
 ### 7. Saga primitives (`Sleep`, `Wait`, `Awakeable`, `Cancel`) deferred
 
 This ADR does not extend `WorkflowRuntime` with the saga primitives

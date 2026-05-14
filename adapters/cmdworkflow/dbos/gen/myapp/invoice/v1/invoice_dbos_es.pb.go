@@ -20,8 +20,13 @@ type DBOSService struct {
 }
 
 // NewDBOSService returns a DBOS-registerable service backed by wf.
+// Also wires durable Async fan-out: subsequent Async subscriber
+// dispatches go through dbos.RunWorkflow targeting AsyncDispatch,
+// keyed by <streamType>:<subscriberName>:<eventID> for dedup.
 func NewDBOSService(wf *cmdworkflow.Workflow[*v1.Invoice, v1.Command]) *DBOSService {
-	return &DBOSService{Workflow: wf}
+	s := &DBOSService{Workflow: wf}
+	wf.SetAsyncSend(s.sendAsync)
+	return s
 }
 
 func (s *DBOSService) Create(ctx dbos1.DBOSContext, cmd *v1.Create) (*v1.Invoice, error) {
@@ -52,4 +57,28 @@ func (s *DBOSService) Void(ctx dbos1.DBOSContext, cmd *v1.Void) (*v1.Invoice, er
 	}
 	stdCtx := dbos.WithContext(es.WithTenant(context.Background(), tenant), ctx)
 	return s.Workflow.HandleCmd(stdCtx, sid, cmd)
+}
+
+// AsyncDispatch is the DBOS workflow that runs an Async subscriber's
+// delivery + retry + exhausted policy. Register it alongside the
+// per-command workflows; the framework's spawnAsync dispatches to
+// it on every Async subscriber × event.
+func (s *DBOSService) AsyncDispatch(ctx dbos1.DBOSContext, payload cmdworkflow.AsyncPayload) (struct{}, error) {
+	stdCtx := dbos.WithContext(context.Background(), ctx)
+	return struct{}{}, s.Workflow.DispatchAsync(stdCtx, payload.SubscriberName, payload.EnvBytes)
+}
+
+// sendAsync is the AsyncSend wired into the Workflow at construction.
+// Issues a fire-and-forget dbos.RunWorkflow to AsyncDispatch with the
+// workflow id as DBOS's WithWorkflowID — dedup against replays.
+func (s *DBOSService) sendAsync(ctx context.Context, subscriberName string, envBytes []byte, workflowID string) error {
+	dctx, ok := dbos.FromContext(ctx)
+	if !ok {
+		return dbos.ErrNoDBOSContext
+	}
+	_, err := dbos1.RunWorkflow(dctx, s.AsyncDispatch, cmdworkflow.AsyncPayload{
+		SubscriberName: subscriberName,
+		EnvBytes:       envBytes,
+	}, dbos1.WithWorkflowID(workflowID))
+	return err
 }

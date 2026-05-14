@@ -274,8 +274,13 @@ func emitRestateService(out *protogen.GeneratedFile, agg *aggregate, variants []
 	out.P("}")
 	out.P()
 	out.P("// New", svcName, " returns a Restate-bindable service backed by wf.")
+	out.P("// Also wires durable Async fan-out: subsequent Async subscriber")
+	out.P("// dispatches go through restate.ServiceSend targeting AsyncDispatch,")
+	out.P("// keyed by <streamType>:<subscriberName>:<eventID> for dedup.")
 	out.P("func New", svcName, "(wf *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, "]) *", svcName, " {")
-	out.P("\treturn &", svcName, "{Workflow: wf}")
+	out.P("\ts := &", svcName, "{Workflow: wf}")
+	out.P("\twf.SetAsyncSend(s.sendAsync)")
+	out.P("\treturn s")
 	out.P("}")
 	out.P()
 	out.P("// ServiceName overrides the SDK's default reflection name so")
@@ -298,6 +303,41 @@ func emitRestateService(out *protogen.GeneratedFile, agg *aggregate, variants []
 		out.P("}")
 		out.P()
 	}
+
+	// AsyncDispatch — registered with Restate as a separate handler.
+	// Each Async subscriber × event becomes one child invocation
+	// targeting this handler; the workflow id (set as Restate's
+	// idempotency-key) ensures dedup across replays.
+	cmdwfAsyncPayload := out.QualifiedGoIdent(cmdwfPkg.Ident("AsyncPayload"))
+	cwRestateFromCtx := out.QualifiedGoIdent(cwrestatePkg.Ident("FromContext"))
+	cwRestateErrNoCtx := out.QualifiedGoIdent(cwrestatePkg.Ident("ErrNoRestateContext"))
+	restateServiceSend := out.QualifiedGoIdent(restateSDK.Ident("ServiceSend"))
+	restateWithIdemKey := out.QualifiedGoIdent(restateSDK.Ident("WithIdempotencyKey"))
+	bgCtx := out.QualifiedGoIdent(contextPkg.Ident("Background"))
+
+	out.P("// AsyncDispatch is the Restate handler that runs an Async")
+	out.P("// subscriber's delivery + retry + exhausted policy. Register")
+	out.P("// it alongside the per-command handlers; the framework's")
+	out.P("// spawnAsync dispatches to it on every Async subscriber × event.")
+	out.P("func (s *", svcName, ") AsyncDispatch(ctx ", restateCtx, ", payload ", cmdwfAsyncPayload, ") (struct{}, error) {")
+	out.P("\tstdCtx := ", withContext, "(", bgCtx, "(), ctx)")
+	out.P("\treturn struct{}{}, s.Workflow.DispatchAsync(stdCtx, payload.SubscriberName, payload.EnvBytes)")
+	out.P("}")
+	out.P()
+	out.P("// sendAsync is the AsyncSend wired into the Workflow at construction.")
+	out.P("// Called from spawnAsync when an Async subscriber matches; issues a")
+	out.P("// fire-and-forget ServiceSend to AsyncDispatch with the workflow id")
+	out.P("// as Restate's idempotency-key.")
+	out.P("func (s *", svcName, ") sendAsync(ctx ", ctxType, ", subscriberName string, envBytes []byte, workflowID string) error {")
+	out.P("\trc, ok := ", cwRestateFromCtx, "(ctx)")
+	out.P("\tif !ok { return ", cwRestateErrNoCtx, " }")
+	out.P("\t", restateServiceSend, "(rc, \"", capitalize(agg.name), "\", \"AsyncDispatch\").Send(", cmdwfAsyncPayload, "{")
+	out.P("\t\tSubscriberName: subscriberName,")
+	out.P("\t\tEnvBytes:       envBytes,")
+	out.P("\t}, ", restateWithIdemKey, "(workflowID))")
+	out.P("\treturn nil")
+	out.P("}")
+	out.P()
 
 	// Suppress unused-import warnings if a particular template branch
 	// didn't reference a package.

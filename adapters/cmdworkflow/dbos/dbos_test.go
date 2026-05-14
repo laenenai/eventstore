@@ -127,6 +127,9 @@ func newFixture(t *testing.T, opts ...fixtureOpt) *fixture {
 	dbossdk.RegisterWorkflow(env.DCtx, svc.Create, dbossdk.WithWorkflowName("Invoice.Create"))
 	dbossdk.RegisterWorkflow(env.DCtx, svc.MarkPaid, dbossdk.WithWorkflowName("Invoice.MarkPaid"))
 	dbossdk.RegisterWorkflow(env.DCtx, svc.Void, dbossdk.WithWorkflowName("Invoice.Void"))
+	// Durable Async fan-out: AsyncDispatch is the workflow that each
+	// Async subscriber × event invokes via dbos.RunWorkflow.
+	dbossdk.RegisterWorkflow(env.DCtx, svc.AsyncDispatch, dbossdk.WithWorkflowName("Invoice.AsyncDispatch"))
 
 	if err := env.DCtx.Launch(); err != nil {
 		t.Fatalf("DBOS Launch: %v", err)
@@ -312,6 +315,69 @@ func TestDBOS_AsyncSubscriberDelivered(t *testing.T) {
 	}
 	if delivered.Load() != 1 {
 		t.Errorf("async delivered: got %d want 1", delivered.Load())
+	}
+}
+
+// TestDBOS_AsyncDurable — verify durable Async fan-out: each Async
+// subscriber × event creates an independent child workflow in
+// dbos.workflow_status with the deterministic workflow id
+// "<streamType>:<subscriberName>:<eventID>".
+func TestDBOS_AsyncDurable(t *testing.T) {
+	var delivered atomic.Int32
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
+		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+			Name:        "audit-async",
+			Mode:        cmdworkflow.Async,
+			MaxRetries:  3,
+			OnExhausted: cmdworkflow.Drop,
+			Handle: func(_ context.Context, _ es.Envelope) error {
+				delivered.Add(1)
+				return nil
+			},
+		})
+	})
+
+	h, err := dbossdk.RunWorkflow(fx.env.DCtx, fx.svc.Create, &invoicev1.Create{
+		TenantId: "acme", InvoiceId: "durable-1",
+		CustomerId: "alice", Currency: "USD",
+		LineItems:   []*invoicev1.LineItem{{Sku: "X", Quantity: 1, UnitCents: 100}},
+		CreatedAtMs: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("RunWorkflow: %v", err)
+	}
+	if _, err := h.GetResult(); err != nil {
+		t.Fatalf("GetResult: %v", err)
+	}
+
+	// Wait for the child workflow's effect to land.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && delivered.Load() == 0 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if delivered.Load() != 1 {
+		t.Fatalf("async delivered: got %d want 1", delivered.Load())
+	}
+
+	// Find the EventID of the Created event we just produced.
+	sid, _ := es.NewStreamID("acme", "invoice", "durable-1")
+	events, err := fx.env.Adapter.ReadStream(context.Background(), sid, 0)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("ReadStream: events=%d err=%v", len(events), err)
+	}
+	childWorkflowID := "invoice:audit-async:" + events[0].EventID.String()
+
+	// Verify the child workflow row exists in DBOS's status table.
+	var status string
+	err = fx.env.Pool.QueryRow(context.Background(),
+		`SELECT status FROM dbos.workflow_status WHERE workflow_uuid = $1`,
+		childWorkflowID,
+	).Scan(&status)
+	if err != nil {
+		t.Fatalf("workflow_status row for %s: %v", childWorkflowID, err)
+	}
+	if status != "SUCCESS" {
+		t.Errorf("child workflow status: got %s want SUCCESS", status)
 	}
 }
 
