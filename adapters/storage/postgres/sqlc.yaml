@@ -13,6 +13,7 @@ sql:
       - migrations/00006_projection_dlq.sql
       - migrations/00007_processed_events.sql
       - migrations/00009_state_cache_schema_version.sql
+      - migrations/00011_state_stream_subscribers.sql
     queries: queries/
     gen:
       go:

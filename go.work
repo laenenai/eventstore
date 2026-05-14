@@ -10,4 +10,5 @@ use (
 	./examples/orderfulfillment
 	./examples/employee
 	./examples/customerview
+	./examples/statestream
 )

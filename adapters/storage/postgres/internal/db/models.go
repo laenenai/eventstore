@@ -86,6 +86,14 @@ type StateCache struct {
 	StateSchemaVersion int32
 }
 
+type StateStreamSubscriber struct {
+	Name                 string
+	TenantID             string
+	StreamID             string
+	LastDeliveredVersion int64
+	UpdatedAt            time.Time
+}
+
 type SubjectKey struct {
 	TenantID   string
 	Subject    string

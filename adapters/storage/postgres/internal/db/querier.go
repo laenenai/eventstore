@@ -60,6 +60,9 @@ type Querier interface {
 	// Total pending (unpublished) rows. Gauge metric.
 	CountPending(ctx context.Context, tenantID string) (int64, error)
 	CountProjectionDLQ(ctx context.Context, arg CountProjectionDLQParams) (int64, error)
+	// How many streams is the subscriber behind on, and what's the largest
+	// gap? Used for operator dashboards / alerting per ADR 0024 § 6.
+	CountStateStreamLag(ctx context.Context, arg CountStateStreamLagParams) (CountStateStreamLagRow, error)
 	// Returns the current version of a stream, or 0 if the stream is empty.
 	// Used for optimistic-concurrency hints; not for primary correctness
 	// (that comes from the PK conflict at append time).
@@ -126,12 +129,21 @@ type Querier interface {
 	// (ADR 0010). Shredded rows are skipped — their DEKs are deliberately
 	// inaccessible.
 	ListStaleSubjectKeys(ctx context.Context, arg ListStaleSubjectKeysParams) ([]SubjectKey, error)
+	// Returns the distinct subscriber names present in the table — used
+	// by Admin.List.
+	ListStateStreamSubscribers(ctx context.Context) ([]string, error)
 	// Paged listing of cached states for a given type_url. Pass the
 	// stream_id of the last row in the previous page as @after_stream_id
 	// to fetch the next page; start with @after_stream_id = ''.
 	ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error)
 	// Cross-tenant variant. Admin/operator-scope use only.
 	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error)
+	// state_stream queries (ADR 0024).
+	// Drain hot path: returns up to @max_rows streams where the named
+	// subscriber's position is behind state_cache.version. The state
+	// payload comes from state_cache (no duplication of state bytes).
+	// Tenant filter: pass @tenant_id = '' for cross-tenant drain.
+	ListStreamsBehind(ctx context.Context, arg ListStreamsBehindParams) ([]ListStreamsBehindRow, error)
 	// projection_checkpoint queries (ADR 0020 Tier 3, decision 3e).
 	// Returns the cursor for a projector. NULL row → 0 (never run).
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
@@ -203,6 +215,14 @@ type Querier interface {
 	// Operator action: set cursor to 0 (or remove the row, equivalent).
 	// Used as step (3) of the truncate-and-replay rebuild workflow.
 	ResetProjectionCheckpoint(ctx context.Context, arg ResetProjectionCheckpointParams) error
+	// Operator action: delete every position for one subscriber. Next
+	// drain will full-backfill (current state of every stream). Returns
+	// the count of rows deleted.
+	ResetStateStreamSubscriber(ctx context.Context, arg ResetStateStreamSubscriberParams) (int64, error)
+	// Single-stream rewind: delete the position row for one stream so the
+	// drain redelivers the current state on its next pass. Used after the
+	// crypto-shred propagation runbook (ADR 0024 § Crypto-shred).
+	ResetStateStreamSubscriberForStream(ctx context.Context, arg ResetStateStreamSubscriberForStreamParams) error
 	// Upsert the cursor. Called after each batch (or each successful
 	// partial-batch, per the fail-stop-with-last-success rule).
 	SaveProjectionCheckpoint(ctx context.Context, arg SaveProjectionCheckpointParams) error
@@ -217,6 +237,10 @@ type Querier interface {
 	// Atomic upsert: insert on first append, update on subsequent. Called
 	// from within the events-append transaction.
 	UpsertStateCache(ctx context.Context, arg UpsertStateCacheParams) error
+	// Advance the subscriber's position for one stream after a successful
+	// delivery. Last-delivered-version is monotonically non-decreasing for
+	// a given (name, tenant_id, stream_id).
+	UpsertStateStreamPosition(ctx context.Context, arg UpsertStateStreamPositionParams) error
 	// Used at first encryption for a subject (create the DEK) and during
 	// KEK rotation (re-wrap the existing DEK under the new KEK version).
 	UpsertSubjectKey(ctx context.Context, arg UpsertSubjectKeyParams) error

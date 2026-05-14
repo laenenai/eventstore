@@ -20,6 +20,7 @@ type Querier interface {
 	CountFailing(ctx context.Context, arg CountFailingParams) (int64, error)
 	CountPending(ctx context.Context, tenantID string) (int64, error)
 	CountProjectionDLQ(ctx context.Context, arg CountProjectionDLQParams) (int64, error)
+	CountStateStreamLag(ctx context.Context, arg CountStateStreamLagParams) (CountStateStreamLagRow, error)
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (interface{}, error)
 	DeleteProjectionDLQ(ctx context.Context, arg DeleteProjectionDLQParams) error
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
@@ -62,8 +63,13 @@ type Querier interface {
 	ListProjectionDLQ(ctx context.Context, arg ListProjectionDLQParams) ([]ProjectionDlq, error)
 	ListShreddedSubjects(ctx context.Context, arg ListShreddedSubjectsParams) ([]ListShreddedSubjectsRow, error)
 	ListStaleSubjectKeys(ctx context.Context, arg ListStaleSubjectKeysParams) ([]SubjectKey, error)
+	ListStateStreamSubscribers(ctx context.Context) ([]string, error)
 	ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error)
 	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error)
+	// state_stream queries for SQLite (ADR 0024).
+	// json(state) converts the BLOB JSONB back to text bytes so the Go
+	// side gets the protojson form (ADR 0021).
+	ListStreamsBehind(ctx context.Context, arg ListStreamsBehindParams) ([]ListStreamsBehindRow, error)
 	// projection_checkpoint queries for SQLite (ADR 0020 Tier 3).
 	// See the Postgres sibling for the canonical doc comments.
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
@@ -95,6 +101,8 @@ type Querier interface {
 	ReplayAllDLQ(ctx context.Context, arg ReplayAllDLQParams) (int64, error)
 	ReplayDLQ(ctx context.Context, arg ReplayDLQParams) error
 	ResetProjectionCheckpoint(ctx context.Context, arg ResetProjectionCheckpointParams) error
+	ResetStateStreamSubscriber(ctx context.Context, arg ResetStateStreamSubscriberParams) (int64, error)
+	ResetStateStreamSubscriberForStream(ctx context.Context, arg ResetStateStreamSubscriberForStreamParams) error
 	SaveProjectionCheckpoint(ctx context.Context, arg SaveProjectionCheckpointParams) error
 	SetProjectionCheckpoint(ctx context.Context, arg SetProjectionCheckpointParams) error
 	// state_cache queries for SQLite (ADR 0020 Tier 1).
@@ -103,6 +111,7 @@ type Querier interface {
 	// to binary on insert (ADR 0021). Reads return the BLOB; protojson
 	// on the Go side decodes either form interchangeably.
 	UpsertStateCache(ctx context.Context, arg UpsertStateCacheParams) error
+	UpsertStateStreamPosition(ctx context.Context, arg UpsertStateStreamPositionParams) error
 	UpsertSubjectKey(ctx context.Context, arg UpsertSubjectKeyParams) error
 }
 
