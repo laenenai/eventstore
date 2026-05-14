@@ -57,21 +57,26 @@ message Invoice {
 // ==========================================================================
 
 message Create {
-  string invoice_id  = 1;
+  string invoice_id  = 1 [(es.v1.stream_id) = true];
   string customer_id = 2;
   string currency    = 3;
   repeated LineItem line_items = 4;
   int64  created_at_ms = 5;
+  string tenant_id   = 6 [(es.v1.tenant_id) = true];
 }
 
 message MarkPaid {
   string payment_ref = 1;
   int64  paid_at_ms  = 2;
+  string tenant_id   = 3 [(es.v1.tenant_id) = true];
+  string invoice_id  = 4 [(es.v1.stream_id) = true];
 }
 
 message Void {
-  string reason     = 1;
+  string reason       = 1;
   int64  voided_at_ms = 2;
+  string tenant_id    = 3 [(es.v1.tenant_id) = true];
+  string invoice_id   = 4 [(es.v1.stream_id) = true];
 }
 
 message Commands {

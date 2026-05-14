@@ -15,142 +15,104 @@ import (
 	"github.com/restatedev/sdk-go/ingress"
 
 	cwrestate "github.com/laenenai/eventstore/adapters/cmdworkflow/restate"
+	invoicev1restate "github.com/laenenai/eventstore/adapters/cmdworkflow/restate/gen/myapp/invoice/v1"
 	"github.com/laenenai/eventstore/adapters/cmdworkflow/restate/testsupport"
 	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/aggregate"
 	"github.com/laenenai/eventstore/cmdworkflow"
 	"github.com/laenenai/eventstore/es"
-	counterv1 "github.com/laenenai/eventstore/gen/test/counter/v1"
+	invoicev1 "github.com/laenenai/eventstore/gen/myapp/invoice/v1"
 )
 
 // Build-tagged `restate` — pulls a real restatedev/restate container
-// via testcontainers. Skip the default `go test ./...` run; opt in with
+// via testcontainers. Skip the default `go test ./...` run; opt in:
 //
 //	go test -tags restate ./adapters/cmdworkflow/restate/...
 
-// counterDecider — mirror of the existing test counter decider so we
-// can reuse counterv1 codegen for state/commands/events.
-var counterDecider = es.Decider[*counterv1.Counter, counterv1.Command, counterv1.Event]{
-	Initial: func() *counterv1.Counter { return &counterv1.Counter{} },
-	Decide: func(s *counterv1.Counter, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
+// invoiceDecider — minimal inline Invoice Decider for the Restate
+// smoke test. Mirrors examples/invoice; duplicated here to keep the
+// test self-contained.
+var invoiceDecider = es.Decider[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
+	Initial: func() *invoicev1.Invoice { return &invoicev1.Invoice{} },
+	Decide: func(s *invoicev1.Invoice, c invoicev1.Command) ([]invoicev1.Event, []es.ConstraintOp, error) {
 		switch cmd := c.(type) {
-		case *counterv1.Init:
-			if s.Initialized {
-				return nil, nil, errors.New("counter: already initialized")
+		case *invoicev1.Create:
+			if s.InvoiceId != "" {
+				return nil, nil, errors.New("invoice: already created")
 			}
-			return []counterv1.Event{
-				&counterv1.Initialized{Min: cmd.Min, Max: cmd.Max, Value: cmd.Initial},
+			var total int64
+			for _, li := range cmd.LineItems {
+				total += li.Quantity * li.UnitCents
+			}
+			return []invoicev1.Event{
+				&invoicev1.Created{
+					InvoiceId: cmd.InvoiceId, CustomerId: cmd.CustomerId,
+					Currency: cmd.Currency, TotalCents: total,
+					LineItems: cmd.LineItems, CreatedAtMs: cmd.CreatedAtMs,
+				},
 			}, nil, nil
-		case *counterv1.Increment:
-			if !s.Initialized {
-				return nil, nil, errors.New("counter: not initialized")
+		case *invoicev1.MarkPaid:
+			if s.InvoiceId == "" {
+				return nil, nil, errors.New("invoice: not created")
 			}
-			return []counterv1.Event{&counterv1.Incremented{By: cmd.By}}, nil, nil
+			return []invoicev1.Event{
+				&invoicev1.Paid{PaymentRef: cmd.PaymentRef, PaidAtMs: cmd.PaidAtMs},
+			}, nil, nil
+		case *invoicev1.Void:
+			if s.InvoiceId == "" {
+				return nil, nil, errors.New("invoice: not created")
+			}
+			return []invoicev1.Event{
+				&invoicev1.Voided{Reason: cmd.Reason, VoidedAtMs: cmd.VoidedAtMs},
+			}, nil, nil
 		}
-		return nil, nil, errors.New("counter: unknown command")
+		return nil, nil, errors.New("invoice: unknown command")
 	},
-	Evolve: func(s *counterv1.Counter, e counterv1.Event) *counterv1.Counter {
-		out := &counterv1.Counter{
-			Initialized: s.Initialized, Count: s.Count, Min: s.Min, Max: s.Max,
+	Evolve: func(s *invoicev1.Invoice, e invoicev1.Event) *invoicev1.Invoice {
+		out := &invoicev1.Invoice{
+			InvoiceId:  s.InvoiceId,
+			CustomerId: s.CustomerId,
+			Currency:   s.Currency,
+			TotalCents: s.TotalCents,
+			Status:     s.Status,
+			LineItems:  s.LineItems,
 		}
 		switch evt := e.(type) {
-		case *counterv1.Initialized:
-			out.Initialized = true
-			out.Min = evt.Min
-			out.Max = evt.Max
-			out.Count = evt.Value
-		case *counterv1.Incremented:
-			out.Count += evt.By
+		case *invoicev1.Created:
+			out.InvoiceId = evt.InvoiceId
+			out.CustomerId = evt.CustomerId
+			out.Currency = evt.Currency
+			out.TotalCents = evt.TotalCents
+			out.LineItems = evt.LineItems
+			out.Status = invoicev1.Status_STATUS_OPEN
+		case *invoicev1.Paid:
+			out.Status = invoicev1.Status_STATUS_PAID
+		case *invoicev1.Voided:
+			out.Status = invoicev1.Status_STATUS_VOIDED
 		}
 		return out
 	},
+	IsTerminal: func(s *invoicev1.Invoice) bool {
+		return s.Status == invoicev1.Status_STATUS_PAID || s.Status == invoicev1.Status_STATUS_VOIDED
+	},
 }
 
-// CounterService is a hand-written Restate service that exposes one
-// handler per command type for the Counter aggregate. Phase 2c
-// codegen will emit this; for Phase 2a it's hand-written so we can
-// validate the bridging.
-type CounterService struct {
-	wf *cmdworkflow.Workflow[*counterv1.Counter, counterv1.Command]
-}
-
-// Init handler — Restate will route POST /CounterService/Init to here.
-func (s *CounterService) Init(ctx restatesdk.Context, req initRequest) (counterResult, error) {
-	tenant := req.Tenant
-	if tenant == "" {
-		tenant = "default"
-	}
-	stdCtx := cwrestate.WithContext(es.WithTenant(context.Background(), tenant), ctx)
-	sid, err := es.NewStreamID(tenant, "counter", req.ID)
-	if err != nil {
-		return counterResult{}, err
-	}
-	state, err := s.wf.HandleCmd(stdCtx, sid, &counterv1.Init{
-		Min: req.Min, Max: req.Max, Initial: req.Initial,
-	})
-	if err != nil {
-		return counterResult{}, err
-	}
-	return counterResultFrom(state), nil
-}
-
-// Increment handler — POST /CounterService/Increment.
-func (s *CounterService) Increment(ctx restatesdk.Context, req incrementRequest) (counterResult, error) {
-	tenant := req.Tenant
-	if tenant == "" {
-		tenant = "default"
-	}
-	stdCtx := cwrestate.WithContext(es.WithTenant(context.Background(), tenant), ctx)
-	sid, err := es.NewStreamID(tenant, "counter", req.ID)
-	if err != nil {
-		return counterResult{}, err
-	}
-	state, err := s.wf.HandleCmd(stdCtx, sid, &counterv1.Increment{By: req.By})
-	if err != nil {
-		return counterResult{}, err
-	}
-	return counterResultFrom(state), nil
-}
-
-// Wire types — JSON-serializable shapes Restate uses on the wire.
-type initRequest struct {
-	Tenant  string `json:"tenant"`
-	ID      string `json:"id"`
-	Min     int64  `json:"min"`
-	Max     int64  `json:"max"`
-	Initial int64  `json:"initial"`
-}
-
-type incrementRequest struct {
-	Tenant string `json:"tenant"`
-	ID     string `json:"id"`
-	By     int64  `json:"by"`
-}
-
-type counterResult struct {
-	Initialized bool  `json:"initialized"`
-	Count       int64 `json:"count"`
-	Min         int64 `json:"min"`
-	Max         int64 `json:"max"`
-}
-
-func counterResultFrom(c *counterv1.Counter) counterResult {
-	return counterResult{
-		Initialized: c.Initialized, Count: c.Count, Min: c.Min, Max: c.Max,
-	}
-}
-
-// testFixture wires SQLite eventstore + Workflow + Restate test env.
+// testFixture wires SQLite eventstore + Workflow + the generated
+// RestateService + Restate testcontainer.
 type testFixture struct {
-	env *testsupport.Env
-	wf  *cmdworkflow.Workflow[*counterv1.Counter, counterv1.Command]
+	env     *testsupport.Env
+	wf      *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]
+	adapter *sqliteadapter.Adapter
 }
 
-func newFixture(t *testing.T) *testFixture {
+// fixtureOpt allows test scenarios to register subscribers before the
+// workflow is wrapped in the Restate service. Multiple opts can be
+// applied; they run in order.
+type fixtureOpt func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command])
+
+func newFixture(t *testing.T, opts ...fixtureOpt) *testFixture {
 	t.Helper()
 
-	// Shared in-memory SQLite — works across the SDK server's
-	// connection pool (see examples/cmdworkflow note).
 	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
@@ -162,46 +124,65 @@ func newFixture(t *testing.T) *testFixture {
 	}
 
 	runtime := cwrestate.New()
-	rt := aggregate.NewProto(a, counterDecider, counterv1.EventCodec{})
-	wf := cmdworkflow.New[*counterv1.Counter, counterv1.Command](rt, a, runtime).WithDLQ(a)
+	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+		aggregate.NewProto(a, invoiceDecider, invoicev1.EventCodec{}),
+		a, runtime,
+	).WithDLQ(a)
 
-	svc := &CounterService{wf: wf}
+	for _, opt := range opts {
+		opt(wf)
+	}
 
-	// testsupport.Start spawns the Restate testcontainer, registers
-	// the SDK server, and tears everything down via t.Cleanup.
+	svc := invoicev1restate.NewRestateService(wf)
 	env := testsupport.Start(t, restatesdk.Reflect(svc))
 
-	return &testFixture{env: env, wf: wf}
+	return &testFixture{env: env, wf: wf, adapter: a}
 }
 
-// TestRestate_Smoke verifies end-to-end: Restate testcontainer +
-// SDK server + our cmdworkflow workflow + SQLite eventstore. One
-// Init + one Increment, verify the returned state reflects both.
+// TestRestate_Smoke verifies end-to-end: Restate container + SDK
+// server + the codegen-emitted RestateService for invoicev1 + our
+// cmdworkflow workflow + SQLite eventstore. One Create + one MarkPaid,
+// verify the returned states reflect both.
 func TestRestate_Smoke(t *testing.T) {
 	fx := newFixture(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	initSvc := ingress.Service[initRequest, counterResult](fx.env.Ingress(), "CounterService", "Init")
-	initResult, err := initSvc.Request(ctx, initRequest{
-		Tenant: "acme", ID: "smoke-1", Min: 0, Max: 100, Initial: 0,
+	// Create.
+	createSvc := ingress.Service[*invoicev1.Create, *invoicev1.Invoice](
+		fx.env.Ingress(), "Invoice", "Create")
+	created, err := createSvc.Request(ctx, &invoicev1.Create{
+		TenantId:    "acme",
+		InvoiceId:   "smoke-1",
+		CustomerId:  "alice",
+		Currency:    "USD",
+		LineItems:   []*invoicev1.LineItem{{Sku: "X", Quantity: 2, UnitCents: 500}},
+		CreatedAtMs: time.Now().UnixMilli(),
 	})
 	if err != nil {
-		t.Fatalf("Init: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
-	if !initResult.Initialized || initResult.Count != 0 {
-		t.Errorf("after Init: got %+v", initResult)
+	if created.Status != invoicev1.Status_STATUS_OPEN {
+		t.Errorf("status after Create: got %v want STATUS_OPEN", created.Status)
+	}
+	if created.TotalCents != 1000 {
+		t.Errorf("total: got %d want 1000", created.TotalCents)
 	}
 
-	incSvc := ingress.Service[incrementRequest, counterResult](fx.env.Ingress(), "CounterService", "Increment")
-	incResult, err := incSvc.Request(ctx, incrementRequest{
-		Tenant: "acme", ID: "smoke-1", By: 7,
+	// MarkPaid.
+	paidSvc := ingress.Service[*invoicev1.MarkPaid, *invoicev1.Invoice](
+		fx.env.Ingress(), "Invoice", "MarkPaid")
+	paid, err := paidSvc.Request(ctx, &invoicev1.MarkPaid{
+		TenantId:   "acme",
+		InvoiceId:  "smoke-1",
+		PaymentRef: "stripe_x",
+		PaidAtMs:   time.Now().UnixMilli(),
 	})
 	if err != nil {
-		t.Fatalf("Increment: %v", err)
+		t.Fatalf("MarkPaid: %v", err)
 	}
-	if incResult.Count != 7 {
-		t.Errorf("after Increment: count=%d want 7", incResult.Count)
+	if paid.Status != invoicev1.Status_STATUS_PAID {
+		t.Errorf("status after MarkPaid: got %v want STATUS_PAID", paid.Status)
 	}
 }

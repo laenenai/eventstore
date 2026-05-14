@@ -16,9 +16,20 @@ plugins:
   # decider stubs (ADRs 0004, 0008, 0013, 0016).
   #
   # Invoked via `go run` so no separate `go install` step is needed —
-  # the workspace (go.work) resolves the cmd/protoc-gen-es-go package
-  # to its local source. Go's build cache handles incremental compiles.
-  - local: ["go", "run", "../cmd/protoc-gen-es-go"]
+  # the workspace (go.work) resolves the proto-gen module to its local
+  # source. Go's build cache handles incremental compiles.
+  - local: ["go", "run", "../proto-gen/protoc-gen-es-go"]
     out: ../gen
     opt:
       - paths=source_relative
+
+  # Same plugin, runtime=restate mode. Emits Restate service handlers
+  # for aggregates whose commands carry (es.v1.stream_id) +
+  # (es.v1.tenant_id) annotations. Output lives in the cmdworkflow/
+  # restate adapter's gen tree so the restate-sdk-go transitive dep
+  # is contained to the adapter (ADR 0026 § 3).
+  - local: ["go", "run", "../proto-gen/protoc-gen-es-go"]
+    out: ../adapters/cmdworkflow/restate/gen
+    opt:
+      - paths=source_relative
+      - runtime=restate

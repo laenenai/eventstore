@@ -61,3 +61,10 @@ tasks:
       - cd {{.ROOT_MOD}} && go clean ./...
       - cd {{.PG_MOD}}   && go clean ./...
       - cd {{.SQ_MOD}}   && go clean ./...
+
+  release:
+    desc: Tag a synchronized release across all published modules (VERSION=vX.Y.Z)
+    requires:
+      vars: [VERSION]
+    cmds:
+      - ./scripts/release.sh {{.VERSION}}

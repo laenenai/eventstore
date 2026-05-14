@@ -121,4 +121,24 @@ extend google.protobuf.FieldOptions {
   // When unset, the subject defaults to whichever field carries
   // (es.v1.subject_field) = true.
   string subject = 50003;
+
+  // Marks this field as the source of the aggregate's StreamID.ID
+  // component when codegen emits workflow handlers. Required on
+  // every command type that participates in a sum_type = "Command"
+  // set — codegen fails at build time otherwise. See ADR 0026 § 3.
+  //
+  // Typically each command targeting one aggregate has exactly one
+  // stream_id field, usually the aggregate's id (invoice_id, etc.).
+  bool stream_id = 50004;
+
+  // Marks this field as the tenant_id source on a command. Required
+  // on every command type that participates in a sum_type = "Command"
+  // set — codegen fails at build time otherwise. See ADR 0026 § 3
+  // and ADR 0007 (first-class multi-tenancy).
+  //
+  // The Connect-go / gRPC layer populates this from a request header
+  // (X-Tenant-Id, JWT claim, etc.) before invoking the workflow.
+  // Having tenant on every command shape keeps it first-class in the
+  // audit trail.
+  bool tenant_id = 50005;
 }

@@ -13,4 +13,5 @@ use (
 	./examples/orderfulfillment
 	./examples/party
 	./examples/statestream
+	./proto-gen
 )

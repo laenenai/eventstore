@@ -265,6 +265,7 @@ type Create struct {
 	Currency      string                 `protobuf:"bytes,3,opt,name=currency,proto3" json:"currency,omitempty"`
 	LineItems     []*LineItem            `protobuf:"bytes,4,rep,name=line_items,json=lineItems,proto3" json:"line_items,omitempty"`
 	CreatedAtMs   int64                  `protobuf:"varint,5,opt,name=created_at_ms,json=createdAtMs,proto3" json:"created_at_ms,omitempty"`
+	TenantId      string                 `protobuf:"bytes,6,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -334,10 +335,19 @@ func (x *Create) GetCreatedAtMs() int64 {
 	return 0
 }
 
+func (x *Create) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
 type MarkPaid struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PaymentRef    string                 `protobuf:"bytes,1,opt,name=payment_ref,json=paymentRef,proto3" json:"payment_ref,omitempty"`
 	PaidAtMs      int64                  `protobuf:"varint,2,opt,name=paid_at_ms,json=paidAtMs,proto3" json:"paid_at_ms,omitempty"`
+	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	InvoiceId     string                 `protobuf:"bytes,4,opt,name=invoice_id,json=invoiceId,proto3" json:"invoice_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -386,10 +396,26 @@ func (x *MarkPaid) GetPaidAtMs() int64 {
 	return 0
 }
 
+func (x *MarkPaid) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *MarkPaid) GetInvoiceId() string {
+	if x != nil {
+		return x.InvoiceId
+	}
+	return ""
+}
+
 type Void struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Reason        string                 `protobuf:"bytes,1,opt,name=reason,proto3" json:"reason,omitempty"`
 	VoidedAtMs    int64                  `protobuf:"varint,2,opt,name=voided_at_ms,json=voidedAtMs,proto3" json:"voided_at_ms,omitempty"`
+	TenantId      string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	InvoiceId     string                 `protobuf:"bytes,4,opt,name=invoice_id,json=invoiceId,proto3" json:"invoice_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -436,6 +462,20 @@ func (x *Void) GetVoidedAtMs() int64 {
 		return x.VoidedAtMs
 	}
 	return 0
+}
+
+func (x *Void) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *Void) GetInvoiceId() string {
+	if x != nil {
+		return x.InvoiceId
+	}
+	return ""
 }
 
 type Commands struct {
@@ -851,25 +891,32 @@ const file_myapp_invoice_v1_invoice_proto_rawDesc = "" +
 	"paymentRef\x12\x1f\n" +
 	"\vvoid_reason\x18\n" +
 	" \x01(\tR\n" +
-	"voidReason:\v\x82\xb5\x18\ainvoice\"\xc3\x01\n" +
-	"\x06Create\x12\x1d\n" +
+	"voidReason:\v\x82\xb5\x18\ainvoice\"\xec\x01\n" +
+	"\x06Create\x12#\n" +
 	"\n" +
-	"invoice_id\x18\x01 \x01(\tR\tinvoiceId\x12\x1f\n" +
+	"invoice_id\x18\x01 \x01(\tB\x04\xa0\xb5\x18\x01R\tinvoiceId\x12\x1f\n" +
 	"\vcustomer_id\x18\x02 \x01(\tR\n" +
 	"customerId\x12\x1a\n" +
 	"\bcurrency\x18\x03 \x01(\tR\bcurrency\x129\n" +
 	"\n" +
 	"line_items\x18\x04 \x03(\v2\x1a.myapp.invoice.v1.LineItemR\tlineItems\x12\"\n" +
-	"\rcreated_at_ms\x18\x05 \x01(\x03R\vcreatedAtMs\"I\n" +
+	"\rcreated_at_ms\x18\x05 \x01(\x03R\vcreatedAtMs\x12!\n" +
+	"\ttenant_id\x18\x06 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\"\x91\x01\n" +
 	"\bMarkPaid\x12\x1f\n" +
 	"\vpayment_ref\x18\x01 \x01(\tR\n" +
 	"paymentRef\x12\x1c\n" +
 	"\n" +
-	"paid_at_ms\x18\x02 \x01(\x03R\bpaidAtMs\"@\n" +
+	"paid_at_ms\x18\x02 \x01(\x03R\bpaidAtMs\x12!\n" +
+	"\ttenant_id\x18\x03 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\x12#\n" +
+	"\n" +
+	"invoice_id\x18\x04 \x01(\tB\x04\xa0\xb5\x18\x01R\tinvoiceId\"\x88\x01\n" +
 	"\x04Void\x12\x16\n" +
 	"\x06reason\x18\x01 \x01(\tR\x06reason\x12 \n" +
 	"\fvoided_at_ms\x18\x02 \x01(\x03R\n" +
-	"voidedAtMs\"\xc4\x01\n" +
+	"voidedAtMs\x12!\n" +
+	"\ttenant_id\x18\x03 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\x12#\n" +
+	"\n" +
+	"invoice_id\x18\x04 \x01(\tB\x04\xa0\xb5\x18\x01R\tinvoiceId\"\xc4\x01\n" +
 	"\bCommands\x122\n" +
 	"\x06create\x18\x01 \x01(\v2\x18.myapp.invoice.v1.CreateH\x00R\x06create\x129\n" +
 	"\tmark_paid\x18\x02 \x01(\v2\x1a.myapp.invoice.v1.MarkPaidH\x00R\bmarkPaid\x121\n" +

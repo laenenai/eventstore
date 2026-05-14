@@ -147,6 +147,22 @@ var file_es_v1_options_proto_extTypes = []protoimpl.ExtensionInfo{
 		Tag:           "bytes,50003,opt,name=subject",
 		Filename:      "es/v1/options.proto",
 	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: (*bool)(nil),
+		Field:         50004,
+		Name:          "es.v1.stream_id",
+		Tag:           "varint,50004,opt,name=stream_id",
+		Filename:      "es/v1/options.proto",
+	},
+	{
+		ExtendedType:  (*descriptorpb.FieldOptions)(nil),
+		ExtensionType: (*bool)(nil),
+		Field:         50005,
+		Name:          "es.v1.tenant_id",
+		Tag:           "varint,50005,opt,name=tenant_id",
+		Filename:      "es/v1/options.proto",
+	},
 }
 
 // Extension fields to descriptorpb.MessageOptions.
@@ -241,6 +257,28 @@ var (
 	//
 	// optional string subject = 50003;
 	E_Subject = &file_es_v1_options_proto_extTypes[7]
+	// Marks this field as the source of the aggregate's StreamID.ID
+	// component when codegen emits workflow handlers. Required on
+	// every command type that participates in a sum_type = "Command"
+	// set — codegen fails at build time otherwise. See ADR 0026 § 3.
+	//
+	// Typically each command targeting one aggregate has exactly one
+	// stream_id field, usually the aggregate's id (invoice_id, etc.).
+	//
+	// optional bool stream_id = 50004;
+	E_StreamId = &file_es_v1_options_proto_extTypes[8]
+	// Marks this field as the tenant_id source on a command. Required
+	// on every command type that participates in a sum_type = "Command"
+	// set — codegen fails at build time otherwise. See ADR 0026 § 3
+	// and ADR 0007 (first-class multi-tenancy).
+	//
+	// The Connect-go / gRPC layer populates this from a request header
+	// (X-Tenant-Id, JWT claim, etc.) before invoking the workflow.
+	// Having tenant on every command shape keeps it first-class in the
+	// audit trail.
+	//
+	// optional bool tenant_id = 50005;
+	E_TenantId = &file_es_v1_options_proto_extTypes[9]
 )
 
 var File_es_v1_options_proto protoreflect.FileDescriptor
@@ -261,7 +299,9 @@ const file_es_v1_options_proto_rawDesc = "" +
 	"\rsubject_field\x12\x1d.google.protobuf.FieldOptions\x18І\x03 \x01(\bR\fsubjectField:8\n" +
 	"\anon_pii\x12\x1d.google.protobuf.FieldOptions\x18ц\x03 \x01(\bR\x06nonPii:H\n" +
 	"\x0fpii_intentional\x12\x1d.google.protobuf.FieldOptions\x18҆\x03 \x01(\bR\x0epiiIntentional:9\n" +
-	"\asubject\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\tR\asubjectB}\n" +
+	"\asubject\x12\x1d.google.protobuf.FieldOptions\x18ӆ\x03 \x01(\tR\asubject:<\n" +
+	"\tstream_id\x12\x1d.google.protobuf.FieldOptions\x18Ԇ\x03 \x01(\bR\bstreamId:<\n" +
+	"\ttenant_id\x12\x1d.google.protobuf.FieldOptions\x18Ն\x03 \x01(\bR\btenantIdB}\n" +
 	"\tcom.es.v1B\fOptionsProtoP\x01Z-github.com/laenenai/eventstore/gen/es/v1;esv1\xa2\x02\x03EXX\xaa\x02\x05Es.V1\xca\x02\x05Es\\V1\xe2\x02\x11Es\\V1\\GPBMetadata\xea\x02\x06Es::V1b\x06proto3"
 
 var (
@@ -283,20 +323,22 @@ var file_es_v1_options_proto_goTypes = []any{
 	(*descriptorpb.FieldOptions)(nil),   // 2: google.protobuf.FieldOptions
 }
 var file_es_v1_options_proto_depIdxs = []int32{
-	1, // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
-	1, // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
-	1, // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
-	1, // 3: es.v1.projection:extendee -> google.protobuf.MessageOptions
-	2, // 4: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
-	2, // 5: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
-	2, // 6: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
-	2, // 7: es.v1.subject:extendee -> google.protobuf.FieldOptions
-	0, // 8: es.v1.projection:type_name -> es.v1.Projection
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	8, // [8:9] is the sub-list for extension type_name
-	0, // [0:8] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	1,  // 0: es.v1.aggregate:extendee -> google.protobuf.MessageOptions
+	1,  // 1: es.v1.schema_version:extendee -> google.protobuf.MessageOptions
+	1,  // 2: es.v1.sum_type:extendee -> google.protobuf.MessageOptions
+	1,  // 3: es.v1.projection:extendee -> google.protobuf.MessageOptions
+	2,  // 4: es.v1.subject_field:extendee -> google.protobuf.FieldOptions
+	2,  // 5: es.v1.non_pii:extendee -> google.protobuf.FieldOptions
+	2,  // 6: es.v1.pii_intentional:extendee -> google.protobuf.FieldOptions
+	2,  // 7: es.v1.subject:extendee -> google.protobuf.FieldOptions
+	2,  // 8: es.v1.stream_id:extendee -> google.protobuf.FieldOptions
+	2,  // 9: es.v1.tenant_id:extendee -> google.protobuf.FieldOptions
+	0,  // 10: es.v1.projection:type_name -> es.v1.Projection
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	10, // [10:11] is the sub-list for extension type_name
+	0,  // [0:10] is the sub-list for extension extendee
+	0,  // [0:0] is the sub-list for field type_name
 }
 
 func init() { file_es_v1_options_proto_init() }
@@ -311,7 +353,7 @@ func file_es_v1_options_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_es_v1_options_proto_rawDesc), len(file_es_v1_options_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   1,
-			NumExtensions: 8,
+			NumExtensions: 10,
 			NumServices:   0,
 		},
 		GoTypes:           file_es_v1_options_proto_goTypes,

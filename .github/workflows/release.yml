@@ -1,0 +1,41 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. v0.1.0 or v0.1.0-rc.1)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: main
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run release script
+        run: ./scripts/release.sh "${{ inputs.version }}"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          generate_release_notes: true

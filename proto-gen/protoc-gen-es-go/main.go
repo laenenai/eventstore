@@ -28,29 +28,82 @@ var (
 )
 
 func main() {
-	protogen.Options{}.Run(func(plugin *protogen.Plugin) error {
-		// Note: buf invokes this plugin once per .proto file (default
-		// strategy=directory). Each invocation's plugin.Files contains
-		// the target file plus its transitive imports. Cross-file
-		// artifacts (e.g., a process-wide type-URL registry) are
-		// assembled at runtime via init() registrations, not emitted as
-		// a single big file at codegen time.
+	var opts protogen.Options
+	opts.ParamFunc = func(name, value string) error {
+		// Accept plugin params from buf.gen.yaml's opt: [k=v] entries.
+		// Currently used: runtime=restate / runtime=dbos. Empty (the
+		// default) means "emit core codegen".
+		return nil
+	}
+	opts.Run(func(plugin *protogen.Plugin) error {
+		// `runtime=restate` (or `=dbos`) selects an alternate emission
+		// path. Parsed from CodeGeneratorRequest.Parameter directly so
+		// we don't need bespoke flag parsing.
+		runtime := pluginParam(plugin, "runtime")
 
 		// Build a cross-file message registry so projection specs
 		// (ADR 0020 v2 codegen) can resolve referenced event types
-		// against their declaring files.
-		registry := buildMessageRegistry(plugin)
+		// against their declaring files. Only needed in core mode.
+		var registry map[string]*protogen.Message
+		if runtime == "" {
+			registry = buildMessageRegistry(plugin)
+		}
 
 		for _, file := range plugin.Files {
 			if !file.Generate {
 				continue
 			}
-			if err := generateFile(plugin, file, registry); err != nil {
-				return err
+			switch runtime {
+			case "":
+				if err := generateFile(plugin, file, registry); err != nil {
+					return err
+				}
+			case "restate":
+				if err := generateRestateFile(plugin, file); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("protoc-gen-es-go: unknown runtime=%q (supported: restate)", runtime)
 			}
 		}
 		return nil
 	})
+}
+
+// pluginParam parses the plugin's `,key=value,…` request parameter
+// string. Returns the value for key, or "" when absent.
+func pluginParam(plugin *protogen.Plugin, key string) string {
+	raw := plugin.Request.GetParameter()
+	for _, p := range splitParams(raw) {
+		if eq := indexByte(p, '='); eq >= 0 && p[:eq] == key {
+			return p[eq+1:]
+		}
+	}
+	return ""
+}
+
+func splitParams(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	return out
+}
+
+func indexByte(s string, b byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return i
+		}
+	}
+	return -1
 }
 
 // buildMessageRegistry indexes every message across plugin.Files by
