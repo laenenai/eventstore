@@ -128,14 +128,19 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 			if p.Terminal {
 				terminal = 1
 			}
+			schema := p.StateSchemaVersion
+			if schema == 0 {
+				schema = 1
+			}
 			if err := q.UpsertStateCache(ctx, db.UpsertStateCacheParams{
-				TenantID:  p.StreamID.Tenant,
-				StreamID:  canonical,
-				TypeUrl:   p.StateTypeURL,
-				State:     string(p.NewStateBytes),
-				Version:   int64(p.ExpectedVersion) + int64(len(p.Events)),
-				Terminal:  terminal,
-				UpdatedAt: recordedAt,
+				TenantID:           p.StreamID.Tenant,
+				StreamID:           canonical,
+				TypeUrl:            p.StateTypeURL,
+				State:              string(p.NewStateBytes),
+				Version:            int64(p.ExpectedVersion) + int64(len(p.Events)),
+				Terminal:           terminal,
+				StateSchemaVersion: int64(schema),
+				UpdatedAt:          recordedAt,
 			}); err != nil {
 				return fmt.Errorf("upsert state_cache: %w", err)
 			}

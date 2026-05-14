@@ -10,6 +10,7 @@ sql:
       - migrations/00005_projection_dlq.sql
       - migrations/00006_processed_events.sql
       - migrations/00007_state_cache_jsonb.sql
+      - migrations/00008_state_cache_schema_version.sql
     queries: queries/
     gen:
       go:

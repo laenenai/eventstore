@@ -54,13 +54,19 @@ type AppendParams struct {
 	Events          []EventToAppend
 	Constraints     []ConstraintOp
 
-	// Optional Tier-1 state_cache write (ADR 0020). When NewStateBytes
-	// is non-nil the adapter upserts a state_cache row for this stream
-	// in the same transaction as the events. Set by aggregate.Runtime
-	// when the caller has wired a StateCodec; left zero otherwise.
-	NewStateBytes []byte
-	StateTypeURL  string
-	Terminal      bool
+	// Optional Tier-1 state_cache write (ADR 0020 + ADR 0023). When
+	// NewStateBytes is non-nil the adapter upserts a state_cache row
+	// for this stream in the same transaction as the events. Set by
+	// aggregate.Runtime when the caller has wired a StateCodec; left
+	// zero otherwise.
+	//
+	// StateSchemaVersion identifies the shape of the marshalled state;
+	// the runtime invalidates cached rows whose stored version differs
+	// from the current one. Default 1 when zero.
+	NewStateBytes      []byte
+	StateTypeURL       string
+	StateSchemaVersion uint32
+	Terminal           bool
 }
 
 // AppendResult reports the outcome of a successful Append.

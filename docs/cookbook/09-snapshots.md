@@ -1,155 +1,155 @@
-# 09: Snapshots
+# 09: Snapshots — Fast Load via `state_cache`
 
-Streams grow. Past a few thousand events, replaying the full history on
-every `Load` becomes the dominant cost of every command. Snapshots
-cache the folded state at a given version so `Load` only has to fold
-`(snapshot) + (events from snapshot.Version + 1 to latest)`.
+Streams grow. Past a few thousand events, replaying the full history
+on every `Load` becomes the dominant cost of every command. The
+framework's answer is **the Tier 1 `state_cache`** (ADR 0020): a
+synchronous, in-transaction state write that doubles as the snapshot
+for `Load`. ADR 0023 documents the consolidation.
 
-The framework's snapshot strategy is defined in **ADR 0011**:
+This recipe explains:
 
-- **Lazy cadence** — written on read after enough events accumulate.
-- **In-DB storage** — same database as events, same backup, same
-  tenant isolation.
-- **Strict schema invalidation** — stale snapshots are silently
-  discarded, replay reconstructs.
+- How `state_cache` makes `Load` constant-time in the steady state.
+- How `StateSchemaVersion` invalidates stale rows when the state
+  proto shape changes.
+- The operator runbook around schema bumps and rebuilds.
 
-This recipe shows how to turn them on and how to operate them.
+> Earlier versions of the framework had a separate `snapshots` table
+> with a lazy "write on read after N events" cadence. ADR 0011
+> defined that strategy; ADR 0023 supersedes it. There is no longer
+> a `SnapshotEvery` field, no separate snapshot table, and no
+> opt-in beyond enabling the state cache.
 
-## Enable for one aggregate
-
-Two fields on `aggregate.Runtime`:
+## Enable: set `StateCodec` and `StateSchemaVersion`
 
 ```go
-rt := &aggregate.Runtime[*invoicev1.State, invoicev1.Command, invoicev1.Event]{
-    Store:      store,
-    Decider:    invoice.Decider,
-    Codec:      invoicev1.EventCodec{},
-    StateCodec: aggregate.ProtoStateCodec[*invoicev1.State]{},
-
-    StateSchemaVersion: 1,    // <-- enables schema-driven invalidation
-    SnapshotEvery:      100,  // <-- enables lazy snapshots; 0 = off
+rt := &aggregate.Runtime[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
+    Store:              store,
+    Decider:            invoice.Decider,
+    Codec:              invoicev1.EventCodec{},
+    StateCodec:         aggregate.ProtoStateCodec[*invoicev1.Invoice]{},
+    StateSchemaVersion: 1, // bump on shape changes; default 1 when unset
 }
 ```
 
-Both adapters implement `es.SnapshotStore` automatically — no extra
-wiring. The same `StateCodec` that powers the Tier 1 state cache
-(ADR 0020) is reused for snapshot serialization.
+Both fields together unlock fast Load:
 
-Behavior when both fields are set:
+- **`StateCodec`** enables the state_cache write on every Append.
+- **`StateSchemaVersion`** tags each row with the current state
+  shape so a future Load can decide whether the bytes still parse.
 
-- **First Load.** No snapshot exists; full replay from version 1.
-- **Periodic Loads while events accumulate.** When `Load` computes a
-  state at version V and `V - lastSnapshotVersion ≥ SnapshotEvery`, a
-  fresh snapshot row is written before `Load` returns.
-- **Later Loads with a snapshot present.** `LoadSnapshot` returns a
-  matching-schema row; `ReadStream` only fetches events with
-  `version > snapshot.Version`. Cold-cache cost drops from O(events)
-  to O(events since last snapshot).
+When the same Runtime later calls `Handle`:
 
-The snapshot write is **best-effort** — if it fails (network blip,
-disk full), `Load` still returns the correct state. The next cycle
-will retry.
+1. `Handle` calls `Load` internally.
+2. `Load` reads the state_cache row for the stream.
+3. If `row.StateSchemaVersion == 1`: decode → use as state, replay
+   only events with `version > row.Version` (in the steady state,
+   zero events).
+4. Decide → events → Append (which writes a fresh state_cache row).
 
-## Tuning `SnapshotEvery`
+In steady state, `Load` reads exactly one row and zero events. The
+worst case — first-ever Handle on a stream, or schema mismatch — is
+the same as before (full replay).
 
-| Value | When to use |
-| ----- | ----------- |
-| `0` (default) | Aggregates with bounded stream lengths (< 100 events lifetime). No reason to spend storage. |
-| `25–50` | Hot, fast-growing streams where `Load` latency matters more than storage. |
-| `100` (recommended) | Most production aggregates. Snapshots cost ~1 row per 100 events; replay stays bounded. |
-| `500+` | Cold streams, archival-style aggregates where reads are rare. |
+## Bumping `StateSchemaVersion`
 
-A useful rule: set `SnapshotEvery` so the worst-case replay length
-(`SnapshotEvery + slack`) reads in well under your Handle latency
-budget. If reading 100 events takes 5 ms and your budget is 50 ms,
-`SnapshotEvery = 500` is fine.
-
-## Schema version: when (and how) to bump
-
-`StateSchemaVersion` identifies the **shape of S**, not the contents.
-Bump it **whenever the state struct changes** in a way that could
-mis-deserialize the old bytes:
+`StateSchemaVersion` tracks the *shape* of `S`, not its contents.
+Bump whenever the state struct changes in a way that would
+mis-deserialize old bytes:
 
 | Change | Bump? |
 | ------ | ----- |
 | Add a new optional proto field | No — proto handles forward compat |
-| Remove a field that contained data | Yes — old snapshots' bytes contain extra fields |
-| Rename a field (proto field number changes) | Yes |
+| Remove a field that held data | Yes — old rows' bytes contain it |
+| Rename / renumber a field | Yes |
 | Change a field type | Yes |
-| Change a field's *semantics* (same shape, new meaning) | Yes — Evolve logic differs |
+| Change semantics (same shape, new meaning) | Yes — Evolve logic differs |
 
-When you bump, the framework silently invalidates all snapshots whose
-`state_schema_version` differs from the new value. The next `Load`
-for each stream runs full replay once, then writes a fresh snapshot
-at the new version. **No operator action required.**
+When you bump:
 
-What if old snapshots survive on disk after a bump? They are
-*dead rows*. Two ways to reclaim:
+- Existing state_cache rows still have the old `state_schema_version`.
+- The next Load for each affected stream sees the mismatch, **silently
+  falls back to full replay**, and writes a fresh row at the new
+  version on the next Append.
+- No operator action is *required*. The transition is
+  self-healing — over time, hot streams get re-cached; cold streams
+  stay un-cached until they're next written.
 
-```sql
--- Either: targeted cleanup for one aggregate's stale snapshots.
-DELETE FROM snapshots
-WHERE state_schema_version < $current_version;
+To force the rebuild proactively (e.g., before a deploy where slow
+first-loads would matter):
 
--- Or: leave them. The next Load on each stream overwrites; cold
--- streams' stale rows linger but cost ~hundreds of bytes each.
+```go
+rb := store.(aggregate.StateCacheRebuilder)
+n, err := aggregate.RebuildStateCache(ctx, rb, rt, tenantID)
+log.Info("state_cache rebuilt", "rows", n)
 ```
 
-## Operator actions
+This replays events for the tenant, applies `Evolve`, and writes
+fresh `state_cache` rows under the current `StateSchemaVersion`.
 
-`es.SnapshotStore.DeleteSnapshot(ctx, tenant, stream)` forces a
-full-replay on the next read. Useful for:
+## Storage and observability
 
-- **Debugging.** "Snapshot is corrupt? Drop it and reload." Cheap.
-- **Forensics.** Want to step through Evolve from the start? Drop the
-  snapshot for that one stream.
-- **Crypto-shredding.** When ADR 0010 ships, shredded streams may
-  have snapshots that hold derived plaintext. Drop the snapshot when
-  you shred. (Until then: deferred work.)
+One row per stream that has been state-cached. Columns:
 
-There's no "drop all snapshots" admin call — `DELETE FROM snapshots`
-is one SQL line and the right primitive for the rare bulk case.
+- `tenant_id`, `stream_id` — PK
+- `type_url` — proto full name of the state
+- `state` — JSONB (Postgres) / JSONB-on-BLOB (SQLite, ADR 0021)
+- `version` — last applied event version
+- `terminal` — whether `IsTerminal(state)` is true
+- `state_schema_version` — runtime invariant for invalidation
+- `updated_at`
 
-## Interaction with state_cache
+Storage cost: ~1 row per active stream, ~few KB each.
 
-`state_cache` (Tier 1, ADR 0020) and `snapshots` (this recipe) serve
-different purposes:
+To see whether state_cache is keeping up with events (useful for
+sanity-checking when troubleshooting):
 
-| | `state_cache` | `snapshots` |
-| --- | ------------- | ----------- |
-| When written | On every Append (in same tx) | Lazy, on read after N events |
-| Storage format | JSONB (Postgres) / JSON TEXT (SQLite) | Same protojson bytes |
-| Purpose | Query-able read model + read-your-writes | Speed up Load |
-| Reads | `GetState` / `ListStates` API | Transparent inside `Load` |
-| Cost | One JSONB write per Append | One BYTEA write per N reads |
+```sql
+SELECT
+    sc.tenant_id,
+    sc.stream_id,
+    sc.version          AS cached_version,
+    MAX(e.version)      AS event_version,
+    sc.state_schema_version,
+    sc.updated_at
+FROM state_cache sc
+JOIN events e
+  ON e.tenant_id = sc.tenant_id
+ AND e.stream_id = sc.stream_id
+GROUP BY sc.tenant_id, sc.stream_id, sc.version, sc.state_schema_version, sc.updated_at
+HAVING sc.version <> MAX(e.version);
+```
 
-You can enable either, both, or neither. The most common production
-setup: **both on**, since they answer different questions and the
-combined write cost is still tiny.
+In a healthy deployment this query returns zero rows: state_cache is
+written in the same transaction as the events.
 
-## Gotchas
+## What about deeply cold streams?
 
-**Snapshot version captures pre-Append state.** `Load` runs *inside*
-`Handle` before the new event is appended. So if `Handle` increments
-state to version 6, the snapshot it might write captures version 5
-(the loaded state). This is correct — snapshots are a cache of "what
-Load saw," not "what Handle produced." Don't expect
-`snapshot.Version == latest version` after a Handle call.
+If a stream hasn't been read since the framework was deployed (or
+since you started enabling state_cache for this aggregate), there's
+no row yet. The first Load full-replays. Subsequent Loads use the
+row written by that first Handle.
 
-**Reads can write.** If your read path must be strictly read-only
-(replica that mustn't write back), set `SnapshotEvery = 0` on that
-read-only `Runtime` and let the writer-side runtime maintain
-snapshots. Same DB, different Runtime configurations.
+To pre-warm: `aggregate.RebuildStateCache` walks events and writes
+rows. Run as a one-off after enabling `StateCodec` for an
+already-deployed aggregate.
 
-**Best-effort on failure.** Snapshot write errors are swallowed. If
-you want to know about them, wrap `Store.SaveSnapshot` in your own
-monitoring shim — or inspect `snapshot.created_at` over time as a
-liveness signal.
+## Disable / read-only deployments
 
-## Reference
+Two situations to leave `StateCodec` unset:
 
-- ADR 0011 — Snapshot Strategy (the decisions this recipe implements)
+1. **Pure event-sourcing.** Some teams want every read to be a
+   replay, full stop. Don't enable state_cache, don't pay the
+   per-Append write.
+2. **Strict read-only replicas.** A Runtime that must never write
+   (cross-region read replica, audit-mode load) should leave
+   `StateCodec` nil. Without it, Load still works via full replay;
+   the read-only replica never tries to write.
+
+## See also
+
+- ADR 0023 — state_cache subsumes snapshots
+- ADR 0011 — Snapshot Strategy (superseded; kept for historical context)
 - ADR 0020 — Projections and Read Models (Tier 1 `state_cache`)
-- [`aggregate/runtime.go`](../../aggregate/runtime.go) — `Load` integration
-- [`es/snapshot.go`](../../es/snapshot.go) — `SnapshotStore` interface
-- [`adapters/storage/postgres/snapshot.go`](../../adapters/storage/postgres/snapshot.go) / [`adapters/storage/sqlite/snapshot.go`](../../adapters/storage/sqlite/snapshot.go) — adapter implementations
+- Cookbook recipe 07 — Read models via materialized views (also reads from `state_cache`)
+- [`aggregate/runtime.go`](../../aggregate/runtime.go) — `Load` reads from `state_cache`
+- [`es/state_cache.go`](../../es/state_cache.go) — `StateCacheReader` API

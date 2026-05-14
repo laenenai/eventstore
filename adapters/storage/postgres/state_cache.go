@@ -23,13 +23,14 @@ func (a *Adapter) GetState(ctx context.Context, tenantID, streamID string) (es.S
 		return es.StateCacheRow{}, err
 	}
 	return es.StateCacheRow{
-		TenantID:  tenantID,
-		StreamID:  streamID,
-		TypeURL:   row.TypeUrl,
-		State:     row.State,
-		Version:   uint64(row.Version),
-		Terminal:  row.Terminal,
-		UpdatedAt: row.UpdatedAt,
+		TenantID:           tenantID,
+		StreamID:           streamID,
+		TypeURL:            row.TypeUrl,
+		State:              row.State,
+		Version:            uint64(row.Version),
+		Terminal:           row.Terminal,
+		StateSchemaVersion: uint32(row.StateSchemaVersion),
+		UpdatedAt:          row.UpdatedAt,
 	}, nil
 }
 
@@ -50,13 +51,14 @@ func (a *Adapter) ListStates(ctx context.Context, tenantID, typeURL, afterStream
 	out := make([]es.StateCacheRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, es.StateCacheRow{
-			TenantID:  r.TenantID,
-			StreamID:  r.StreamID,
-			TypeURL:   r.TypeUrl,
-			State:     r.State,
-			Version:   uint64(r.Version),
-			Terminal:  r.Terminal,
-			UpdatedAt: r.UpdatedAt,
+			TenantID:           r.TenantID,
+			StreamID:           r.StreamID,
+			TypeURL:            r.TypeUrl,
+			State:              r.State,
+			Version:            uint64(r.Version),
+			Terminal:           r.Terminal,
+			StateSchemaVersion: uint32(r.StateSchemaVersion),
+			UpdatedAt:          r.UpdatedAt,
 		})
 	}
 	return out, nil
@@ -76,13 +78,18 @@ func (a *Adapter) WipeStateCacheForType(ctx context.Context, tenantID, typeURL s
 // UpsertCachedState implements es.StateCacheUpserter. Used by
 // aggregate.RebuildStateCache; the normal write path uses Append.
 func (a *Adapter) UpsertCachedState(ctx context.Context, row es.StateCacheRow) error {
+	schema := row.StateSchemaVersion
+	if schema == 0 {
+		schema = 1
+	}
 	return a.queries.UpsertStateCache(ctx, db.UpsertStateCacheParams{
-		TenantID: row.TenantID,
-		StreamID: row.StreamID,
-		TypeUrl:  row.TypeURL,
-		State:    row.State,
-		Version:  int64(row.Version),
-		Terminal: row.Terminal,
+		TenantID:           row.TenantID,
+		StreamID:           row.StreamID,
+		TypeUrl:            row.TypeURL,
+		State:              row.State,
+		Version:            int64(row.Version),
+		Terminal:           row.Terminal,
+		StateSchemaVersion: int32(schema),
 	})
 }
 

@@ -22,14 +22,11 @@ type Querier interface {
 	CountProjectionDLQ(ctx context.Context, arg CountProjectionDLQParams) (int64, error)
 	CurrentStreamVersion(ctx context.Context, arg CurrentStreamVersionParams) (interface{}, error)
 	DeleteProjectionDLQ(ctx context.Context, arg DeleteProjectionDLQParams) error
-	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
 	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
 	ForgetSubject(ctx context.Context, arg ForgetSubjectParams) error
 	GetEventByID(ctx context.Context, arg GetEventByIDParams) (Event, error)
 	GetProjectionStatus(ctx context.Context, arg GetProjectionStatusParams) (ProjectionCheckpoint, error)
-	// Snapshot queries (ADR 0011).
-	GetSnapshot(ctx context.Context, arg GetSnapshotParams) (Snapshot, error)
 	// json(state) converts the BLOB JSONB back to text bytes so the Go
 	// side can unmarshal via protojson without knowing about the binary
 	// form. The framework's StateCacheReader returns these bytes as []byte.
@@ -100,7 +97,6 @@ type Querier interface {
 	ResetProjectionCheckpoint(ctx context.Context, arg ResetProjectionCheckpointParams) error
 	SaveProjectionCheckpoint(ctx context.Context, arg SaveProjectionCheckpointParams) error
 	SetProjectionCheckpoint(ctx context.Context, arg SetProjectionCheckpointParams) error
-	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
 	// state_cache queries for SQLite (ADR 0020 Tier 1).
 	// See the Postgres sibling for the canonical doc comments.
 	// The protojson bytes come in as a TEXT param; jsonb() converts them

@@ -12,6 +12,7 @@ sql:
       - migrations/00005_projection_checkpoint.sql
       - migrations/00006_projection_dlq.sql
       - migrations/00007_processed_events.sql
+      - migrations/00009_state_cache_schema_version.sql
     queries: queries/
     gen:
       go:

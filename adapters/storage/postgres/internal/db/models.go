@@ -76,13 +76,14 @@ type Snapshot struct {
 }
 
 type StateCache struct {
-	TenantID  string
-	StreamID  string
-	TypeUrl   string
-	State     json.RawMessage
-	Version   int64
-	Terminal  bool
-	UpdatedAt time.Time
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              json.RawMessage
+	Version            int64
+	Terminal           bool
+	UpdatedAt          time.Time
+	StateSchemaVersion int32
 }
 
 type SubjectKey struct {

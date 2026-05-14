@@ -21,7 +21,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0008 | [Stream Identity](./0008-stream-identity.md)                                            | Accepted   |
 | 0009 | [Postgres Global Position](./0009-postgres-global-position.md)                          | Accepted   |
 | 0010 | [Crypto-Shredding](./0010-crypto-shredding.md)                                          | Accepted   |
-| 0011 | [Snapshots](./0011-snapshots.md)                                                        | Accepted   |
+| 0011 | [Snapshots](./0011-snapshots.md)                                                        | Superseded by ADR 0023 |
 | 0012 | [Event Delivery and EventPublisher](./0012-event-delivery.md)                           | Accepted   |
 | 0013 | [Schema Evolution and Upcasters](./0013-schema-evolution-upcasters.md)                  | Accepted   |
 | 0014 | [Outbox Table Shape](./0014-outbox-shape.md)                                            | Accepted   |
@@ -33,6 +33,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0020 | [Projections and Read Models](./0020-projections-and-read-models.md)                    | Accepted   |
 | 0021 | [JSONB Storage on SQLite (3.45+)](./0021-sqlite-jsonb-storage.md)                       | Accepted   |
 | 0022 | [Linked Projections (Tier 3.5)](./0022-linked-projections.md)                           | Accepted (runtime; codegen deferred) |
+| 0023 | [state_cache subsumes snapshots](./0023-state-cache-supersedes-snapshots.md)            | Accepted (supersedes 0011) |
 
 ## Conventions
 

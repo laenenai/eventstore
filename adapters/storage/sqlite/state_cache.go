@@ -27,13 +27,14 @@ func (a *Adapter) GetState(ctx context.Context, tenantID, streamID string) (es.S
 		return es.StateCacheRow{}, err
 	}
 	return es.StateCacheRow{
-		TenantID:  tenantID,
-		StreamID:  streamID,
-		TypeURL:   row.TypeUrl,
-		State:     stateBytes(row.State),
-		Version:   uint64(row.Version),
-		Terminal:  row.Terminal != 0,
-		UpdatedAt: updated,
+		TenantID:           tenantID,
+		StreamID:           streamID,
+		TypeURL:            row.TypeUrl,
+		State:              stateBytes(row.State),
+		Version:            uint64(row.Version),
+		Terminal:           row.Terminal != 0,
+		StateSchemaVersion: uint32(row.StateSchemaVersion),
+		UpdatedAt:          updated,
 	}, nil
 }
 
@@ -73,13 +74,14 @@ func (a *Adapter) ListStates(ctx context.Context, tenantID, typeURL, afterStream
 			return nil, err
 		}
 		out = append(out, es.StateCacheRow{
-			TenantID:  r.TenantID,
-			StreamID:  r.StreamID,
-			TypeURL:   r.TypeUrl,
-			State:     stateBytes(r.State),
-			Version:   uint64(r.Version),
-			Terminal:  r.Terminal != 0,
-			UpdatedAt: updated,
+			TenantID:           r.TenantID,
+			StreamID:           r.StreamID,
+			TypeURL:            r.TypeUrl,
+			State:              stateBytes(r.State),
+			Version:            uint64(r.Version),
+			Terminal:           r.Terminal != 0,
+			StateSchemaVersion: uint32(r.StateSchemaVersion),
+			UpdatedAt:          updated,
 		})
 	}
 	return out, nil
@@ -103,15 +105,20 @@ func (a *Adapter) UpsertCachedState(ctx context.Context, row es.StateCacheRow) e
 	if row.Terminal {
 		terminal = 1
 	}
+	schema := row.StateSchemaVersion
+	if schema == 0 {
+		schema = 1
+	}
 	now := formatTime(time.Now().UTC())
 	return a.queries.UpsertStateCache(ctx, db.UpsertStateCacheParams{
-		TenantID:  row.TenantID,
-		StreamID:  row.StreamID,
-		TypeUrl:   row.TypeURL,
-		State:     string(row.State),
-		Version:   int64(row.Version),
-		Terminal:  terminal,
-		UpdatedAt: now,
+		TenantID:           row.TenantID,
+		StreamID:           row.StreamID,
+		TypeUrl:            row.TypeURL,
+		State:              string(row.State),
+		Version:            int64(row.Version),
+		Terminal:           terminal,
+		StateSchemaVersion: int64(schema),
+		UpdatedAt:          now,
 	})
 }
 

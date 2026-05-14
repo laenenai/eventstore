@@ -59,9 +59,4 @@ var (
 	// streams yet — see aggregate.RebuildStateCache).
 	ErrStateNotFound = errors.New("eventstore: state not found")
 
-	// ErrSnapshotNotFound reports that LoadSnapshot found no row for
-	// the given (tenant_id, stream_id). The aggregate runtime treats
-	// this as a normal "fall back to full replay" signal, not an
-	// error. See ADR 0011.
-	ErrSnapshotNotFound = errors.New("eventstore: snapshot not found")
 )

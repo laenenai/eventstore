@@ -69,17 +69,6 @@ type Runtime[S, C, E any] struct {
 	// field in S. Default 1.
 	StateSchemaVersion uint32
 
-	// SnapshotEvery is the lazy-snapshot cadence: after a successful
-	// Load that drove version to >= last-snapshot-version +
-	// SnapshotEvery, the runtime writes a fresh snapshot. Default 0
-	// disables snapshotting for this aggregate. Recommended 100+ for
-	// streams that grow past a few hundred events.
-	//
-	// Requires Store to implement es.SnapshotStore (both shipped
-	// adapters do) and StateCodec to be set (snapshots need to
-	// serialize/deserialize the folded state).
-	SnapshotEvery int
-
 	// Shredder enables crypto-shredding for event PII fields
 	// (ADR 0010). When set, the runtime calls EncryptPII on each
 	// event before Codec.Encode (in Handle) and DecryptPII on each
@@ -108,36 +97,36 @@ type Runtime[S, C, E any] struct {
 // resulting state together with the current stream version. Empty
 // streams return Decider.Initial() and version 0.
 //
-// When snapshots are enabled (StateCodec set and Store implements
-// es.SnapshotStore), Load tries the snapshot first. A snapshot whose
-// stored StateSchemaVersion matches the runtime's version is used as
-// the starting point and only events with version > snapshot.Version
-// are replayed. Stale or missing snapshots fall back to full replay
-// transparently — they're a cache, not data. See ADR 0011.
+// When StateCodec is set and the Store implements
+// es.StateCacheReader, Load reads the state_cache row first and uses
+// it as the replay base (ADR 0023). state_cache is always at the
+// latest version (written transactionally with events), so in the
+// steady state Load reads zero tail events. A row whose stored
+// StateSchemaVersion doesn't match the runtime's current
+// StateSchemaVersion is silently discarded with full-replay fallback
+// — the cache is a cache, not data.
 //
 // On bus consumers and projection rebuilds, upcasting (ADR 0013) is
 // applied per event via the Codec.Decode call.
 func (r *Runtime[S, C, E]) Load(ctx context.Context, sid es.StreamID) (S, uint64, error) {
 	state := r.Decider.Initial()
-	var (
-		fromVersion uint64
-		snapVersion uint64
-	)
+	var fromVersion uint64
 
-	if r.useSnapshots() {
-		snap, err := r.snapshotStore().LoadSnapshot(ctx, sid.Tenant, sid.Canonical())
-		if err == nil {
-			if snap.StateSchemaVersion == r.stateSchemaVersion() {
-				if decoded, derr := r.StateCodec.Decode(snap.State); derr == nil {
-					state = decoded
-					fromVersion = snap.Version
-					snapVersion = snap.Version
+	if r.StateCodec != nil {
+		if reader, ok := r.Store.(es.StateCacheReader); ok {
+			row, err := reader.GetState(ctx, sid.Tenant, sid.Canonical())
+			if err == nil && row.Version > 0 {
+				if row.StateSchemaVersion == r.stateSchemaVersion() {
+					if decoded, derr := r.StateCodec.Decode(row.State); derr == nil {
+						state = decoded
+						fromVersion = row.Version
+					}
+					// Decode error → fall through to full replay.
 				}
-				// Decode failure: treat as stale, fall through to full replay.
+				// Schema mismatch → silent discard, full replay.
 			}
-			// Schema mismatch: full replay, discard silently.
+			// ErrStateNotFound or any read error → full replay.
 		}
-		// ErrSnapshotNotFound or other read error: full replay, ignore.
 	}
 
 	envs, err := r.Store.ReadStream(ctx, sid, fromVersion)
@@ -179,32 +168,7 @@ func (r *Runtime[S, C, E]) Load(ctx context.Context, sid es.StreamID) (S, uint64
 	if r.OnRedacted != nil && len(allRedacted) > 0 {
 		r.OnRedacted(allRedacted)
 	}
-
-	// Lazy snapshot write: if enough events have accumulated since
-	// the last snapshot for this stream, persist a fresh one. Side
-	// effect on read; intentional per ADR 0011.
-	if r.useSnapshots() && version > 0 && int(version-snapVersion) >= r.SnapshotEvery {
-		if err := r.writeSnapshot(ctx, sid, state, version); err != nil {
-			// Best-effort: don't fail the load when snapshot-write fails.
-			// The next read will retry.
-			_ = err
-		}
-	}
 	return state, version, nil
-}
-
-// useSnapshots reports whether snapshot integration is fully wired:
-// SnapshotEvery > 0, StateCodec set, Store implements SnapshotStore.
-func (r *Runtime[S, C, E]) useSnapshots() bool {
-	if r.SnapshotEvery <= 0 || r.StateCodec == nil {
-		return false
-	}
-	_, ok := r.Store.(es.SnapshotStore)
-	return ok
-}
-
-func (r *Runtime[S, C, E]) snapshotStore() es.SnapshotStore {
-	return r.Store.(es.SnapshotStore)
 }
 
 func (r *Runtime[S, C, E]) stateSchemaVersion() uint32 {
@@ -232,21 +196,6 @@ func cloneProtoEvent[E any](e E) (E, error) {
 		return zero, fmt.Errorf("aggregate: proto.Clone(%T) returned %T", e, proto.Clone(pm))
 	}
 	return cloned, nil
-}
-
-// writeSnapshot encodes the current state and upserts the snapshot row.
-func (r *Runtime[S, C, E]) writeSnapshot(ctx context.Context, sid es.StreamID, state S, version uint64) error {
-	bs, _, err := r.StateCodec.Encode(state)
-	if err != nil {
-		return fmt.Errorf("aggregate: snapshot encode: %w", err)
-	}
-	return r.snapshotStore().SaveSnapshot(ctx, es.Snapshot{
-		TenantID:           sid.Tenant,
-		StreamID:           sid.Canonical(),
-		Version:            version,
-		StateSchemaVersion: r.stateSchemaVersion(),
-		State:              bs,
-	})
 }
 
 // Handle is Load + Decide + Append in one transactionally-coherent
@@ -355,6 +304,7 @@ func (r *Runtime[S, C, E]) Handle(
 		}
 		params.NewStateBytes = stateBytes
 		params.StateTypeURL = typeURL
+		params.StateSchemaVersion = r.stateSchemaVersion()
 		if r.Decider.IsTerminal != nil {
 			params.Terminal = r.Decider.IsTerminal(newState)
 		}

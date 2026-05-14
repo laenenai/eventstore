@@ -47,7 +47,7 @@ func (q *Queries) DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl
 }
 
 const getState = `-- name: GetState :one
-SELECT type_url, state, version, terminal, updated_at
+SELECT type_url, state, version, terminal, state_schema_version, updated_at
 FROM state_cache
 WHERE tenant_id = $1
   AND stream_id = $2
@@ -59,11 +59,12 @@ type GetStateParams struct {
 }
 
 type GetStateRow struct {
-	TypeUrl   string
-	State     json.RawMessage
-	Version   int64
-	Terminal  bool
-	UpdatedAt time.Time
+	TypeUrl            string
+	State              json.RawMessage
+	Version            int64
+	Terminal           bool
+	StateSchemaVersion int32
+	UpdatedAt          time.Time
 }
 
 // Tier 1 point lookup. Returns nothing if the stream has no cached
@@ -76,13 +77,14 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (GetStateRow
 		&i.State,
 		&i.Version,
 		&i.Terminal,
+		&i.StateSchemaVersion,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const listStates = `-- name: ListStates :many
-SELECT tenant_id, stream_id, type_url, state, version, terminal, updated_at
+SELECT tenant_id, stream_id, type_url, state, version, terminal, state_schema_version, updated_at
 FROM state_cache
 WHERE tenant_id      = $1
   AND type_url       = $2
@@ -98,10 +100,21 @@ type ListStatesParams struct {
 	MaxRows       int32
 }
 
+type ListStatesRow struct {
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              json.RawMessage
+	Version            int64
+	Terminal           bool
+	StateSchemaVersion int32
+	UpdatedAt          time.Time
+}
+
 // Paged listing of cached states for a given type_url. Pass the
 // stream_id of the last row in the previous page as @after_stream_id
 // to fetch the next page; start with @after_stream_id = ”.
-func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error) {
+func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error) {
 	rows, err := q.db.Query(ctx, listStates,
 		arg.TenantID,
 		arg.TypeUrl,
@@ -112,9 +125,9 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]State
 		return nil, err
 	}
 	defer rows.Close()
-	var items []StateCache
+	var items []ListStatesRow
 	for rows.Next() {
-		var i StateCache
+		var i ListStatesRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.StreamID,
@@ -122,6 +135,7 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]State
 			&i.State,
 			&i.Version,
 			&i.Terminal,
+			&i.StateSchemaVersion,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -135,7 +149,7 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]State
 }
 
 const listStatesAll = `-- name: ListStatesAll :many
-SELECT tenant_id, stream_id, type_url, state, version, terminal, updated_at
+SELECT tenant_id, stream_id, type_url, state, version, terminal, state_schema_version, updated_at
 FROM state_cache
 WHERE type_url      = $1
   AND (tenant_id, stream_id) > ($2, $3)
@@ -150,8 +164,19 @@ type ListStatesAllParams struct {
 	MaxRows       int32
 }
 
+type ListStatesAllRow struct {
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              json.RawMessage
+	Version            int64
+	Terminal           bool
+	StateSchemaVersion int32
+	UpdatedAt          time.Time
+}
+
 // Cross-tenant variant. Admin/operator-scope use only.
-func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error) {
+func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error) {
 	rows, err := q.db.Query(ctx, listStatesAll,
 		arg.TypeUrl,
 		arg.AfterTenantID,
@@ -162,9 +187,9 @@ func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([
 		return nil, err
 	}
 	defer rows.Close()
-	var items []StateCache
+	var items []ListStatesAllRow
 	for rows.Next() {
-		var i StateCache
+		var i ListStatesAllRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.StreamID,
@@ -172,6 +197,7 @@ func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([
 			&i.State,
 			&i.Version,
 			&i.Terminal,
+			&i.StateSchemaVersion,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -187,26 +213,29 @@ func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([
 const upsertStateCache = `-- name: UpsertStateCache :exec
 
 INSERT INTO state_cache (
-    tenant_id, stream_id, type_url, state, version, terminal, updated_at
+    tenant_id, stream_id, type_url, state, version, terminal,
+    state_schema_version, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
-    clock_timestamp()
+    $7, clock_timestamp()
 )
 ON CONFLICT (tenant_id, stream_id) DO UPDATE SET
-    type_url   = EXCLUDED.type_url,
-    state      = EXCLUDED.state,
-    version    = EXCLUDED.version,
-    terminal   = EXCLUDED.terminal,
-    updated_at = EXCLUDED.updated_at
+    type_url             = EXCLUDED.type_url,
+    state                = EXCLUDED.state,
+    version              = EXCLUDED.version,
+    terminal             = EXCLUDED.terminal,
+    state_schema_version = EXCLUDED.state_schema_version,
+    updated_at           = EXCLUDED.updated_at
 `
 
 type UpsertStateCacheParams struct {
-	TenantID string
-	StreamID string
-	TypeUrl  string
-	State    json.RawMessage
-	Version  int64
-	Terminal bool
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              json.RawMessage
+	Version            int64
+	Terminal           bool
+	StateSchemaVersion int32
 }
 
 // state_cache queries (ADR 0020 Tier 1).
@@ -224,6 +253,7 @@ func (q *Queries) UpsertStateCache(ctx context.Context, arg UpsertStateCachePara
 		arg.State,
 		arg.Version,
 		arg.Terminal,
+		arg.StateSchemaVersion,
 	)
 	return err
 }

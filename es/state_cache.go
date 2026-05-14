@@ -9,15 +9,22 @@ import (
 // State carries the codec-marshaled bytes; the caller unmarshals via the
 // aggregate's own StateCodec to recover a typed value.
 //
-// See ADR 0020.
+// StateSchemaVersion identifies the shape of the marshalled state and
+// powers the same invalidation contract that previously lived on
+// snapshots (ADR 0011, superseded by ADR 0023): on Load, a row whose
+// stored schema version doesn't match the runtime's current
+// StateSchemaVersion is silently discarded with full-replay fallback.
+//
+// See ADR 0020 + ADR 0023.
 type StateCacheRow struct {
-	TenantID  string
-	StreamID  string
-	TypeURL   string
-	State     []byte
-	Version   uint64
-	Terminal  bool
-	UpdatedAt time.Time
+	TenantID           string
+	StreamID           string
+	TypeURL            string
+	State              []byte
+	Version            uint64
+	Terminal           bool
+	StateSchemaVersion uint32
+	UpdatedAt          time.Time
 }
 
 // StateCacheReader is the read surface for the Tier 1 state cache.

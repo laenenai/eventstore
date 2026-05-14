@@ -42,7 +42,7 @@ func (q *Queries) DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl
 }
 
 const getState = `-- name: GetState :one
-SELECT type_url, json(state) AS state, version, terminal, updated_at
+SELECT type_url, json(state) AS state, version, terminal, state_schema_version, updated_at
 FROM state_cache
 WHERE tenant_id = ?
   AND stream_id = ?
@@ -54,11 +54,12 @@ type GetStateParams struct {
 }
 
 type GetStateRow struct {
-	TypeUrl   string
-	State     interface{}
-	Version   int64
-	Terminal  int64
-	UpdatedAt string
+	TypeUrl            string
+	State              interface{}
+	Version            int64
+	Terminal           int64
+	StateSchemaVersion int64
+	UpdatedAt          string
 }
 
 // json(state) converts the BLOB JSONB back to text bytes so the Go
@@ -72,13 +73,14 @@ func (q *Queries) GetState(ctx context.Context, arg GetStateParams) (GetStateRow
 		&i.State,
 		&i.Version,
 		&i.Terminal,
+		&i.StateSchemaVersion,
 		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const listStates = `-- name: ListStates :many
-SELECT tenant_id, stream_id, type_url, json(state) AS state, version, terminal, updated_at
+SELECT tenant_id, stream_id, type_url, json(state) AS state, version, terminal, state_schema_version, updated_at
 FROM state_cache
 WHERE tenant_id      = ?1
   AND type_url       = ?2
@@ -95,13 +97,14 @@ type ListStatesParams struct {
 }
 
 type ListStatesRow struct {
-	TenantID  string
-	StreamID  string
-	TypeUrl   string
-	State     interface{}
-	Version   int64
-	Terminal  int64
-	UpdatedAt string
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              interface{}
+	Version            int64
+	Terminal           int64
+	StateSchemaVersion int64
+	UpdatedAt          string
 }
 
 func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error) {
@@ -125,6 +128,7 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]ListS
 			&i.State,
 			&i.Version,
 			&i.Terminal,
+			&i.StateSchemaVersion,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -141,7 +145,7 @@ func (q *Queries) ListStates(ctx context.Context, arg ListStatesParams) ([]ListS
 }
 
 const listStatesAll = `-- name: ListStatesAll :many
-SELECT tenant_id, stream_id, type_url, json(state) AS state, version, terminal, updated_at
+SELECT tenant_id, stream_id, type_url, json(state) AS state, version, terminal, state_schema_version, updated_at
 FROM state_cache
 WHERE type_url    = ?1
   AND (tenant_id > ?2
@@ -158,13 +162,14 @@ type ListStatesAllParams struct {
 }
 
 type ListStatesAllRow struct {
-	TenantID  string
-	StreamID  string
-	TypeUrl   string
-	State     interface{}
-	Version   int64
-	Terminal  int64
-	UpdatedAt string
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              interface{}
+	Version            int64
+	Terminal           int64
+	StateSchemaVersion int64
+	UpdatedAt          string
 }
 
 func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error) {
@@ -188,6 +193,7 @@ func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([
 			&i.State,
 			&i.Version,
 			&i.Terminal,
+			&i.StateSchemaVersion,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -206,7 +212,8 @@ func (q *Queries) ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([
 const upsertStateCache = `-- name: UpsertStateCache :exec
 
 INSERT INTO state_cache (
-    tenant_id, stream_id, type_url, state, version, terminal, updated_at
+    tenant_id, stream_id, type_url, state, version, terminal,
+    state_schema_version, updated_at
 ) VALUES (
     ?1,
     ?2,
@@ -214,24 +221,27 @@ INSERT INTO state_cache (
     jsonb(?4),
     ?5,
     ?6,
-    ?7
+    ?7,
+    ?8
 )
 ON CONFLICT (tenant_id, stream_id) DO UPDATE SET
-    type_url   = excluded.type_url,
-    state      = excluded.state,
-    version    = excluded.version,
-    terminal   = excluded.terminal,
-    updated_at = excluded.updated_at
+    type_url             = excluded.type_url,
+    state                = excluded.state,
+    version              = excluded.version,
+    terminal             = excluded.terminal,
+    state_schema_version = excluded.state_schema_version,
+    updated_at           = excluded.updated_at
 `
 
 type UpsertStateCacheParams struct {
-	TenantID  string
-	StreamID  string
-	TypeUrl   string
-	State     interface{}
-	Version   int64
-	Terminal  int64
-	UpdatedAt string
+	TenantID           string
+	StreamID           string
+	TypeUrl            string
+	State              interface{}
+	Version            int64
+	Terminal           int64
+	StateSchemaVersion int64
+	UpdatedAt          string
 }
 
 // state_cache queries for SQLite (ADR 0020 Tier 1).
@@ -247,6 +257,7 @@ func (q *Queries) UpsertStateCache(ctx context.Context, arg UpsertStateCachePara
 		arg.State,
 		arg.Version,
 		arg.Terminal,
+		arg.StateSchemaVersion,
 		arg.UpdatedAt,
 	)
 	return err

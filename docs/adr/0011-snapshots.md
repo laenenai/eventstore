@@ -1,6 +1,6 @@
 # ADR 0011: Snapshot Strategy
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR 0023 (state_cache absorbs the snapshot role)
 - **Date:** 2026-05-13
 
 ## Context

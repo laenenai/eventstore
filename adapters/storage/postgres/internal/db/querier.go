@@ -67,8 +67,6 @@ type Querier interface {
 	// Operator action: remove a DLQ row (after Replay via ResetTo, or
 	// after Abandon).
 	DeleteProjectionDLQ(ctx context.Context, arg DeleteProjectionDLQParams) error
-	// Operational tool: force a full-replay on next read.
-	DeleteSnapshot(ctx context.Context, arg DeleteSnapshotParams) error
 	// Wipe state_cache rows for a given type before a rebuild. Returns the
 	// number of rows deleted.
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
@@ -81,11 +79,6 @@ type Querier interface {
 	GetEventByID(ctx context.Context, arg GetEventByIDParams) (Event, error)
 	// Single-projector status row (for the admin Status method).
 	GetProjectionStatus(ctx context.Context, arg GetProjectionStatusParams) (ProjectionCheckpoint, error)
-	// Snapshot queries (ADR 0011).
-	//
-	// Lazy snapshots: written on read after N events since the last
-	// snapshot. Latest wins per stream.
-	GetSnapshot(ctx context.Context, arg GetSnapshotParams) (Snapshot, error)
 	// Tier 1 point lookup. Returns nothing if the stream has no cached
 	// state (either never written or the aggregate is not opted in).
 	GetState(ctx context.Context, arg GetStateParams) (GetStateRow, error)
@@ -136,9 +129,9 @@ type Querier interface {
 	// Paged listing of cached states for a given type_url. Pass the
 	// stream_id of the last row in the previous page as @after_stream_id
 	// to fetch the next page; start with @after_stream_id = ''.
-	ListStates(ctx context.Context, arg ListStatesParams) ([]StateCache, error)
+	ListStates(ctx context.Context, arg ListStatesParams) ([]ListStatesRow, error)
 	// Cross-tenant variant. Admin/operator-scope use only.
-	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]StateCache, error)
+	ListStatesAll(ctx context.Context, arg ListStatesAllParams) ([]ListStatesAllRow, error)
 	// projection_checkpoint queries (ADR 0020 Tier 3, decision 3e).
 	// Returns the cursor for a projector. NULL row → 0 (never run).
 	LoadProjectionCheckpoint(ctx context.Context, arg LoadProjectionCheckpointParams) (int64, error)
@@ -216,10 +209,6 @@ type Querier interface {
 	// Operator action: set cursor to a specific position (for partial
 	// replay from a known-good point).
 	SetProjectionCheckpoint(ctx context.Context, arg SetProjectionCheckpointParams) error
-	// Write or replace the snapshot for a stream. state_schema_version is
-	// the decider state's shape version; mismatches at read time are
-	// silently discarded with full-replay fallback.
-	UpsertSnapshot(ctx context.Context, arg UpsertSnapshotParams) error
 	// state_cache queries (ADR 0020 Tier 1).
 	//
 	// One row per (tenant_id, stream_id). Written transactionally with
