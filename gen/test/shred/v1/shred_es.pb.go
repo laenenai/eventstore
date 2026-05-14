@@ -24,6 +24,16 @@ type Command interface {
 func (*Register) isCommand()   {}
 func (*UpdateName) isCommand() {}
 
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Register) CloneSum() Command { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *UpdateName) CloneSum() Command { return m.Clone() }
+
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.
 func (*Register) Action() string   { return "test.shred.v1.Register" }
@@ -93,6 +103,16 @@ type Event interface {
 
 func (*Registered) isEvent()  {}
 func (*NameChanged) isEvent() {}
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Registered) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *NameChanged) CloneSum() Event { return m.Clone() }
 
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.

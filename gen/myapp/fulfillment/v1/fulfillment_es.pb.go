@@ -22,6 +22,16 @@ type Command interface {
 func (*Pick) isCommand()        {}
 func (*MarkShipped) isCommand() {}
 
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Pick) CloneSum() Command { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *MarkShipped) CloneSum() Command { return m.Clone() }
+
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.
 func (*Pick) Action() string        { return "myapp.fulfillment.v1.Pick" }
@@ -92,6 +102,21 @@ type Event interface {
 func (*Created) isEvent() {}
 func (*Picked) isEvent()  {}
 func (*Shipped) isEvent() {}
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Created) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Picked) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Shipped) CloneSum() Event { return m.Clone() }
 
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.

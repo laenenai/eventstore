@@ -23,6 +23,21 @@ func (*Init) isCommand()      {}
 func (*Increment) isCommand() {}
 func (*Decrement) isCommand() {}
 
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Init) CloneSum() Command { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Increment) CloneSum() Command { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Decrement) CloneSum() Command { return m.Clone() }
+
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.
 func (*Init) Action() string      { return "test.counter.v1.Init" }
@@ -110,6 +125,21 @@ type Event interface {
 func (*Initialized) isEvent() {}
 func (*Incremented) isEvent() {}
 func (*Decremented) isEvent() {}
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Initialized) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Incremented) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *Decremented) CloneSum() Event { return m.Clone() }
 
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.

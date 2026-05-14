@@ -86,6 +86,27 @@ func emitOneofClone(out *protogen.GeneratedFile, container *protogen.Message, oo
 	out.P("\t}")
 }
 
+// emitCloneAsSumType writes a CloneSum() <SumIface> method per variant
+// that returns the deep copy through the sealed sum interface. The body
+// is a one-line delegation to the typed Clone() — no extra allocation,
+// no reflection. The point is to give generic callers (the aggregate
+// runtime in particular) a uniformly-typed clone method that satisfies
+// a `Cloner[E]` interface assertion, so the runtime can sidestep
+// proto.Clone for events whose codegen emits this.
+//
+// Method name: CloneSum (not CloneEvent / CloneCommand) — the codegen
+// emits it for every sum type the same way and the runtime asserts the
+// generic shape. Naming it after the specific sum would force the
+// runtime to know which sum type it is dealing with, which it doesn't.
+func emitCloneAsSumType(out *protogen.GeneratedFile, variant *protogen.Message, sumIface string) {
+	mName := variant.GoIdent.GoName
+	out.P()
+	out.P("// CloneSum returns a deep copy of m typed as the sealed ", sumIface, " interface.")
+	out.P("// Delegates to the typed Clone(); exists so generic callers can satisfy a")
+	out.P("// `Cloner[", sumIface, "]` interface assertion (see aggregate.Runtime).")
+	out.P("func (m *", mName, ") CloneSum() ", sumIface, " { return m.Clone() }")
+}
+
 // emitCloneField writes the deep-copy of one field. Same shape as
 // emitFieldCopyImpl from emit_access.go but without level gating —
 // every field is copied unconditionally.

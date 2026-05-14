@@ -23,6 +23,21 @@ func (*PlaceOrder) isCommand() {}
 func (*Ship) isCommand()       {}
 func (*Complete) isCommand()   {}
 
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *PlaceOrder) CloneSum() Command { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Ship) CloneSum() Command { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Command interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Command]` interface assertion (see aggregate.Runtime).
+func (m *Complete) CloneSum() Command { return m.Clone() }
+
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.
 func (*PlaceOrder) Action() string { return "myapp.order.v1.PlaceOrder" }
@@ -110,6 +125,21 @@ type Event interface {
 func (*OrderPlaced) isEvent()    {}
 func (*OrderShipped) isEvent()   {}
 func (*OrderCompleted) isEvent() {}
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *OrderPlaced) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *OrderShipped) CloneSum() Event { return m.Clone() }
+
+// CloneSum returns a deep copy of m typed as the sealed Event interface.
+// Delegates to the typed Clone(); exists so generic callers can satisfy a
+// `Cloner[Event]` interface assertion (see aggregate.Runtime).
+func (m *OrderCompleted) CloneSum() Event { return m.Clone() }
 
 // Stable per-variant identifiers — full proto type names.
 // Useful for authz, metrics, tracing, and audit annotation.

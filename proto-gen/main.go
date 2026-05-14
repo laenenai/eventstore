@@ -321,6 +321,17 @@ func emitSumType(out *protogen.GeneratedFile, st *sumType) {
 	}
 	out.P()
 
+	// ----- CloneSum() <iface> ------------------------------------------
+	// One-line wrappers around each variant's typed Clone(). Lets the
+	// aggregate runtime use a `Cloner[E]` interface assertion to invoke
+	// the codegen-emitted deep-copy without going through reflection-
+	// based proto.Clone. Strictly additive; the typed Clone() *T method
+	// remains the primary API.
+	for _, v := range st.variants {
+		emitCloneAsSumType(out, v, iface)
+	}
+	out.P()
+
 	// ----- Action() string ----------------------------------------------
 	// Stable per-variant identifier — the variant's full proto type
 	// name (e.g., "myapp.party.v1.Approve"). Useful for authz wrappers,
