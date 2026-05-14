@@ -29,7 +29,11 @@ import (
 //
 //   - Public: cross-tenant safe (analytics, billing aggregates).
 //   - Internal: same-org ops dashboards (back-office, support tools).
-//   - Customer: DSAR exports, customer-facing UIs after auth.
+//   - Subject: the data subject viewing their own data — DSAR exports
+//     (GDPR Article 15), self-service UIs, customer/employee/patient/
+//     account-owner screens depending on the domain. Aligns with the
+//     framework's existing (es.v1.subject_field) annotation: the same
+//     natural person is the encryption-subject AND the access-subject.
 //   - Compliance: compliance officers, fraud/risk teams.
 //   - Operator: system internals, full read.
 type AccessLevel int
@@ -44,10 +48,14 @@ const (
 	// dashboards, support consoles. Default for slog.LogValue.
 	AccessLevelInternal
 
-	// AccessLevelCustomer — adds PERSONAL, QUASI_IDENTIFIER, and
-	// UNSTRUCTURED. DSAR exports under GDPR Article 15 and customer
-	// self-service screens belong here.
-	AccessLevelCustomer
+	// AccessLevelSubject — adds PERSONAL, QUASI_IDENTIFIER, and
+	// UNSTRUCTURED. What the data subject (GDPR Art 4(1)) is entitled
+	// to see about themselves: DSAR exports under GDPR Article 15,
+	// self-service screens, "my account" pages. Domain-agnostic: the
+	// subject is the customer in a fintech, the employee in an HR
+	// system, the patient in a healthcare system, the account-holder
+	// in a B2B SaaS.
+	AccessLevelSubject
 
 	// AccessLevelCompliance — adds SENSITIVE (GDPR Article 9),
 	// FINANCIAL, and CARDHOLDER. Compliance officers, fraud
@@ -68,8 +76,8 @@ func (l AccessLevel) String() string {
 		return "public"
 	case AccessLevelInternal:
 		return "internal"
-	case AccessLevelCustomer:
-		return "customer"
+	case AccessLevelSubject:
+		return "subject"
 	case AccessLevelCompliance:
 		return "compliance"
 	case AccessLevelOperator:
@@ -95,7 +103,7 @@ func MinLevelFor(c esv1.DataClassification) AccessLevel {
 	case esv1.DataClassification_DATA_CLASSIFICATION_PERSONAL,
 		esv1.DataClassification_DATA_CLASSIFICATION_QUASI_IDENTIFIER,
 		esv1.DataClassification_DATA_CLASSIFICATION_UNSTRUCTURED:
-		return AccessLevelCustomer
+		return AccessLevelSubject
 	case esv1.DataClassification_DATA_CLASSIFICATION_SENSITIVE,
 		esv1.DataClassification_DATA_CLASSIFICATION_FINANCIAL,
 		esv1.DataClassification_DATA_CLASSIFICATION_CARDHOLDER:

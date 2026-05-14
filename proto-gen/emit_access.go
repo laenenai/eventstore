@@ -140,7 +140,7 @@ func emitAccessHelpers(out *protogen.GeneratedFile, m *protogen.Message) {
 func emitViewMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 	mName := m.GoIdent.GoName
 	accessLvl := out.QualifiedGoIdent(esPkg.Ident("AccessLevel"))
-	accessLvlCustomer := out.QualifiedGoIdent(esPkg.Ident("AccessLevelCustomer"))
+	accessLvlSubject := out.QualifiedGoIdent(esPkg.Ident("AccessLevelSubject"))
 	accessLvlInternal := out.QualifiedGoIdent(esPkg.Ident("AccessLevelInternal"))
 	accessLvlCompliance := out.QualifiedGoIdent(esPkg.Ident("AccessLevelCompliance"))
 	accessLvlOperator := out.QualifiedGoIdent(esPkg.Ident("AccessLevelOperator"))
@@ -157,13 +157,13 @@ func emitViewMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 	out.P("\tout := &", mName, "{}")
 
 	for _, af := range extractAccessFields(m) {
-		emitViewField(out, af, accessLvlCustomer, accessLvlInternal, accessLvlCompliance, accessLvlOperator)
+		emitViewField(out, af, accessLvlSubject, accessLvlInternal, accessLvlCompliance, accessLvlOperator)
 	}
 
 	// Oneofs: copy the oneof field (Go interface) as a single unit.
 	// Per-variant classification differences are conservatively
 	// reduced to the strictest variant's threshold — if ANY variant
-	// requires Customer-level view, the entire oneof is hidden below
+	// requires Subject-level view, the entire oneof is hidden below
 	// that level. This is closed-by-default and easy to reason about;
 	// callers that need finer-grained filtering can View(level) the
 	// individual variant after a type-switch.
@@ -172,7 +172,7 @@ func emitViewMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 			continue
 		}
 		threshold := strictestOneofLevel(oo,
-			accessLvlCustomer, accessLvlInternal, accessLvlCompliance, accessLvlOperator)
+			accessLvlSubject, accessLvlInternal, accessLvlCompliance, accessLvlOperator)
 		if threshold == "" {
 			out.P("\tout.", oo.GoName, " = m.", oo.GoName)
 			continue
@@ -190,7 +190,7 @@ func emitViewMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 // across an oneof's variants. Empty when every variant is
 // PUBLIC/UNSPECIFIED (no gate needed).
 func strictestOneofLevel(oo *protogen.Oneof,
-	customer, internal, compliance, operator string,
+	subjectLvl, internal, compliance, operator string,
 ) string {
 	rank := func(c esv1.DataClassification) int {
 		switch c {
@@ -232,7 +232,7 @@ func strictestOneofLevel(oo *protogen.Oneof,
 	case 1:
 		return internal
 	case 2:
-		return customer
+		return subjectLvl
 	case 3:
 		return compliance
 	default:
@@ -245,7 +245,7 @@ func strictestOneofLevel(oo *protogen.Oneof,
 //   - level threshold    → minimum AccessLevel to see this field
 //   - cardinality / kind → scalar vs message vs repeated vs map
 func emitViewField(out *protogen.GeneratedFile, af accessField,
-	customer, internal, compliance, operator string) {
+	subjectLvl, internal, compliance, operator string) {
 
 	f := af.field
 	goName := af.goName
@@ -260,7 +260,7 @@ func emitViewField(out *protogen.GeneratedFile, af accessField,
 	}
 
 	// Classification determines the minimum level. UNSPECIFIED == PUBLIC.
-	threshold := levelConstName(af.classification, customer, internal, compliance, operator)
+	threshold := levelConstName(af.classification, subjectLvl, internal, compliance, operator)
 
 	if threshold == "" {
 		// Public — always visible.
@@ -277,7 +277,7 @@ func emitViewField(out *protogen.GeneratedFile, af accessField,
 // minimum AccessLevel required to see a field of the given
 // classification. Returns "" for public/unspecified (no gate emitted).
 func levelConstName(c esv1.DataClassification,
-	customer, internal, compliance, operator string,
+	subjectLvl, internal, compliance, operator string,
 ) string {
 	switch c {
 	case esv1.DataClassification_DATA_CLASSIFICATION_UNSPECIFIED,
@@ -288,7 +288,7 @@ func levelConstName(c esv1.DataClassification,
 	case esv1.DataClassification_DATA_CLASSIFICATION_PERSONAL,
 		esv1.DataClassification_DATA_CLASSIFICATION_QUASI_IDENTIFIER,
 		esv1.DataClassification_DATA_CLASSIFICATION_UNSTRUCTURED:
-		return customer
+		return subjectLvl
 	case esv1.DataClassification_DATA_CLASSIFICATION_SENSITIVE,
 		esv1.DataClassification_DATA_CLASSIFICATION_FINANCIAL,
 		esv1.DataClassification_DATA_CLASSIFICATION_CARDHOLDER:
@@ -448,7 +448,7 @@ func emitLogValueMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 			continue
 		}
 		// At AccessLevelInternal, the strictest variant in the oneof
-		// dictates: if any variant is at Customer or stricter, the
+		// dictates: if any variant is at Subject or stricter, the
 		// whole oneof is redacted in the log line.
 		strict := oneofVisibleAtInternal(oo)
 		slogPkgPath := protogen.GoImportPath("log/slog")

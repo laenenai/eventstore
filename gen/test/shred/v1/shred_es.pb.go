@@ -364,7 +364,7 @@ func (m *Person) View(level es.AccessLevel) *Person {
 	}
 	out := &Person{}
 	out.PersonId = m.PersonId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.DisplayName = m.DisplayName
 	}
 	return out
@@ -408,10 +408,10 @@ func (m *Register) View(level es.AccessLevel) *Register {
 	}
 	out := &Register{}
 	out.PersonId = m.PersonId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.DisplayName = m.DisplayName
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Email = m.Email
 	}
 	return out
@@ -453,7 +453,7 @@ func (m *UpdateName) View(level es.AccessLevel) *UpdateName {
 		return nil
 	}
 	out := &UpdateName{}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.NewDisplayName = m.NewDisplayName
 	}
 	return out
@@ -497,10 +497,10 @@ func (m *Registered) View(level es.AccessLevel) *Registered {
 	}
 	out := &Registered{}
 	out.PersonId = m.PersonId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.DisplayName = m.DisplayName
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Email = m.Email
 	}
 	if level >= es.AccessLevelInternal {
@@ -548,7 +548,7 @@ func (m *NameChanged) View(level es.AccessLevel) *NameChanged {
 	}
 	out := &NameChanged{}
 	out.PersonId = m.PersonId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.NewDisplayName = m.NewDisplayName
 	}
 	return out

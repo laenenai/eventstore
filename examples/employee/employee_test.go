@@ -205,7 +205,7 @@ func TestEmployee_TerminatedIsTerminal(t *testing.T) {
 // Access-level View() + LogValue() — ADR 0027 data-governance helpers
 // ============================================================================
 
-func TestHired_ViewRedactsPIIBelowCustomer(t *testing.T) {
+func TestHired_ViewRedactsPIIBelowSubject(t *testing.T) {
 	e := &employeev1.Hired{
 		EmployeeId:  "emp-42",
 		LegalName:   "Alice Smith",
@@ -237,16 +237,16 @@ func TestHired_ViewRedactsPIIBelowCustomer(t *testing.T) {
 		t.Errorf("initial_role (INTERNAL) should be visible at Internal, got %q", view.InitialRole)
 	}
 
-	// At AccessLevelCustomer the PII fields come back.
-	cust := e.View(es.AccessLevelCustomer)
-	if cust.LegalName != "Alice Smith" {
-		t.Errorf("legal_name at Customer: got %q want Alice Smith", cust.LegalName)
+	// At AccessLevelSubject the PII fields come back.
+	subj := e.View(es.AccessLevelSubject)
+	if subj.LegalName != "Alice Smith" {
+		t.Errorf("legal_name at Subject: got %q want Alice Smith", subj.LegalName)
 	}
-	if cust.Email != "alice@example.com" {
-		t.Errorf("email at Customer: got %q", cust.Email)
+	if subj.Email != "alice@example.com" {
+		t.Errorf("email at Subject: got %q", subj.Email)
 	}
-	if cust.DateOfBirth != "1990-04-12" {
-		t.Errorf("date_of_birth at Customer: got %q", cust.DateOfBirth)
+	if subj.DateOfBirth != "1990-04-12" {
+		t.Errorf("date_of_birth at Subject: got %q", subj.DateOfBirth)
 	}
 
 	// AccessLevelPublic strips everything classified, leaves subject.
@@ -459,11 +459,11 @@ func TestEmployee_AccessLevelOrdering(t *testing.T) {
 	if es.AccessLevelPublic >= es.AccessLevelInternal {
 		t.Errorf("Public should be below Internal")
 	}
-	if es.AccessLevelInternal >= es.AccessLevelCustomer {
-		t.Errorf("Internal should be below Customer")
+	if es.AccessLevelInternal >= es.AccessLevelSubject {
+		t.Errorf("Internal should be below Subject")
 	}
-	if es.AccessLevelCustomer >= es.AccessLevelCompliance {
-		t.Errorf("Customer should be below Compliance")
+	if es.AccessLevelSubject >= es.AccessLevelCompliance {
+		t.Errorf("Subject should be below Compliance")
 	}
 	if es.AccessLevelCompliance >= es.AccessLevelOperator {
 		t.Errorf("Compliance should be below Operator")

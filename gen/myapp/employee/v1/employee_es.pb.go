@@ -447,13 +447,13 @@ func (m *Employee) View(level es.AccessLevel) *Employee {
 	}
 	out := &Employee{}
 	out.EmployeeId = m.EmployeeId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.LegalName = m.LegalName
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Email = m.Email
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.DateOfBirth = m.DateOfBirth
 	}
 	if level >= es.AccessLevelInternal {
@@ -514,13 +514,13 @@ func (m *Hire) View(level es.AccessLevel) *Hire {
 	}
 	out := &Hire{}
 	out.EmployeeId = m.EmployeeId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.LegalName = m.LegalName
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Email = m.Email
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.DateOfBirth = m.DateOfBirth
 	}
 	out.Department = m.Department
@@ -605,7 +605,7 @@ func (m *Terminate) View(level es.AccessLevel) *Terminate {
 		return nil
 	}
 	out := &Terminate{}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Reason = m.Reason
 	}
 	return out
@@ -651,13 +651,13 @@ func (m *Hired) View(level es.AccessLevel) *Hired {
 	}
 	out := &Hired{}
 	out.EmployeeId = m.EmployeeId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.LegalName = m.LegalName
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Email = m.Email
 	}
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.DateOfBirth = m.DateOfBirth
 	}
 	if level >= es.AccessLevelInternal {
@@ -753,7 +753,7 @@ func (m *Terminated) View(level es.AccessLevel) *Terminated {
 	}
 	out := &Terminated{}
 	out.EmployeeId = m.EmployeeId
-	if level >= es.AccessLevelCustomer {
+	if level >= es.AccessLevelSubject {
 		out.Reason = m.Reason
 	}
 	return out
