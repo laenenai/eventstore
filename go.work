@@ -5,6 +5,7 @@ use (
 	./adapters/authz/cedar
 	./adapters/cmdworkflow/dbos
 	./adapters/cmdworkflow/restate
+	./adapters/httpedge/connect
 	./adapters/storage/postgres
 	./adapters/storage/sqlite
 	./examples/cmdworkflow
@@ -15,6 +16,7 @@ use (
 	./examples/party
 	./examples/cmdworkflow-dbos
 	./examples/cmdworkflow-restate
+	./examples/connectedge
 	./examples/statestream
 	./proto-gen
 )

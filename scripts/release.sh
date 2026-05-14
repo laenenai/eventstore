@@ -26,6 +26,8 @@ MODULES=(
   "adapters/storage/sqlite"
   "adapters/authz/cedar"
   "adapters/cmdworkflow/restate"
+  "adapters/cmdworkflow/dbos"
+  "adapters/httpedge/connect"
 )
 
 tag_for() {
