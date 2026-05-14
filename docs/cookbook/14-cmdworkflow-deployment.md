@@ -1,21 +1,134 @@
 # 14: Workflow-Orchestrated Command Bus — Deployment
 
 How to deploy `cmdworkflow.Workflow` in production. The framework
-ships three runtime adapters; pick by deployment shape, not by
+ships three runtime adapters. Pick by deployment shape, **not** by
 preference:
 
-| Adapter | When | Notes |
-| ------- | ---- | ----- |
-| `inproc` | Tests, local dev, single-process apps that don't need durability | No journal; crash = lose in-flight Async subscribers |
-| `restate` | Profile B (scale-to-zero DBs) **OR** Profile A with a separate workflow runtime | Restate is a separate process; HTTP/2 cleartext between your app and Restate |
-| `dbos` | Profile A on Postgres; the workflow journal lives in the same PG as the eventstore | One DB, one backup story. SQLite eventstore + DBOS = unsupported. |
+| Adapter | Best for | Operational footprint |
+| ------- | -------- | --------------------- |
+| **`dbos`** | Postgres-first apps. One DB, one backup, one transaction story. Workflow journal in a `dbos.*` schema in your existing PG. | Library — no extra process. App embeds it; `dbos.Launch(ctx)` starts pollers in goroutines. |
+| **`restate`** | Polyglot deployments (Go + TS + Java in one fleet). Scale-to-zero DBs where the workflow runtime must stay alive while the DB sleeps. Managed-runtime preference (Restate Cloud). | Separate cluster — HTTP/2 cleartext between your app and Restate, own journal storage. |
+| `inproc` | Tests, local dev, single-process prototypes that don't need durability | No journal; crash = lose in-flight Async subscribers. |
 
-This recipe covers the production wiring for **Restate** (the v1
-target). DBOS arrives in Phase 2b; the deployment story is mostly
-the same minus the separate-runtime piece — workflows live in a
-`dbos` schema in your existing Postgres.
+**The natural default for Postgres-first apps is DBOS.** One database,
+one backup, one consistency model. Your eventstore and your workflow
+journal commit through the same connection pool. Add Restate when
+you genuinely need a separate runtime (polyglot fleet, managed
+runtime SLA, scale-to-zero pairing).
 
-## The three-step start (production app)
+This recipe shows both paths. Start with the **DBOS topology**
+since it's the simpler shape and the natural fit for most teams;
+the Restate section below is the alternative for the cases above.
+
+## DBOS topology — library embedded in your app
+
+DBOS is a library, not a separate runtime. Your Go service:
+
+1. Builds the `cmdworkflow.Workflow` as usual.
+2. Constructs a `dbos.DBOSContext` against the eventstore's Postgres.
+3. Registers each codegen-emitted `DBOSService.<Command>` workflow.
+4. Calls `dctx.Launch()` — DBOS starts its pollers + recovery
+   goroutines inside your process.
+5. Your Connect-go / gRPC / HTTP handler invokes commands via
+   `dbos.RunWorkflow(dctx, svc.Create, cmd, dbos.WithWorkflowID(reqID))`.
+
+```go
+// main.go — production app, DBOS adapter
+pool, _ := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+store := pgadapter.New(pool)
+store.Migrate(ctx) // eventstore tables
+
+// Workflow: same shape as inproc + restate examples.
+wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+    aggregate.NewProto(store, invoice.Decider, invoicev1.EventCodec{}),
+    store,
+    cwdbos.New(),
+).
+    WithDLQ(store).
+    With(readModel.Subscriber(), searchIndex.Subscriber(), creditCheck.Subscriber())
+
+// DBOS context sharing the pgxpool — one PG, two schemas.
+dctx, _ := dbos.NewDBOSContext(ctx, dbos.Config{
+    DatabaseURL:  os.Getenv("DATABASE_URL"),
+    AppName:      "myapp",
+    SystemDBPool: pool,
+})
+
+// Register the codegen-emitted DBOSService methods as DBOS workflows.
+svc := invoicev1dbos.NewDBOSService(wf)
+dbos.RegisterWorkflow(dctx, svc.Create,   dbos.WithWorkflowName("Invoice.Create"))
+dbos.RegisterWorkflow(dctx, svc.MarkPaid, dbos.WithWorkflowName("Invoice.MarkPaid"))
+dbos.RegisterWorkflow(dctx, svc.Void,     dbos.WithWorkflowName("Invoice.Void"))
+
+if err := dctx.Launch(); err != nil { log.Fatal(err) }
+
+// Now your Connect-go handlers invoke commands directly.
+func (h *InvoiceHandler) Create(ctx context.Context, req *connect.Request[CreateReq]) (...) {
+    cmd := buildCmd(req, h.tenantFromAuth(req))
+    handle, err := dbos.RunWorkflow(dctx, svc.Create, cmd,
+        dbos.WithWorkflowID(req.Header().Get("X-Request-Id")))
+    if err != nil { return nil, err }
+    return handle.GetResult()
+}
+```
+
+That's the whole production deployment. No sidecar, no admin port,
+no HTTP/2 protocol bridge. Backups: one `pg_dump`. Migrations: your
+eventstore migrations + DBOS's auto-migrations on first `Launch`,
+both in the same PG.
+
+### DBOS deployment topology
+
+```
+┌────────────────────────────────────────────────┐
+│  Pod / VM                                      │
+│                                                │
+│  ┌──────────────────────────────────────────┐  │
+│  │  Your Go service                         │  │
+│  │   ┌────────────────┐  ┌────────────────┐ │  │
+│  │   │ Connect/HTTP   │  │ DBOS workers   │ │  │
+│  │   │ handlers       │  │ (in-proc       │ │  │
+│  │   │  ↓             │  │  goroutines)   │ │  │
+│  │   │ dbos.RunWorkflow│ │                │ │  │
+│  │   └────────────────┘  └────────────────┘ │  │
+│  └─────────────────┬────────────────────────┘  │
+└────────────────────│───────────────────────────┘
+                     │ PGX
+                     ▼
+            ┌──────────────────┐
+            │ Postgres         │
+            │  ├─ eventstore   │  (events, state_cache,
+            │  │  tables       │   outbox, subscriber_dlq…)
+            │  └─ dbos schema  │  (workflow_status,
+            │                  │   operation_outputs…)
+            └──────────────────┘
+```
+
+**When**: most production apps. Single binary, one stateful
+dependency, scale by adding app pods.
+
+### DBOS scaling
+
+DBOS coordinates work across N app replicas via the workflow_status
+table. Adding a pod adds another worker. Idempotency keys
+(`WithWorkflowID`) ensure a request-id duplicated across pods runs
+exactly once.
+
+## Restate topology — separate runtime
+
+Reach for Restate when one of these is true:
+
+- **Polyglot service fleet.** Restate orchestrates Go + TS + Java +
+  Python from one cluster.
+- **Scale-to-zero.** Your serverless DB (Neon, Turso, D1) goes
+  cold; Restate's separate runtime keeps invocation journals alive.
+- **Managed runtime preference.** Restate Cloud is a paid managed
+  service; DBOS is library-only.
+
+The Restate setup is more involved: HTTP/2 server, self-register
+with admin API, run a Restate cluster (or use Cloud).
+
+## Restate: the three-step start (production app)
 
 Every production app using the Restate adapter does the same three
 things at startup. The `cmdworkflow/restate/testsupport` package
@@ -98,15 +211,15 @@ at deploy time, then drop the self-registration code.
 ┌──────────────────────────────────────────┐
 │  Pod / VM                                │
 │                                          │
-│  ┌─────────────┐    ┌──────────────────┐│
-│  │ Restate     │◀──▶│  Your Go service ││
-│  │ (sidecar)   │    │  (SDK + cwf)     ││
-│  │ port 8080,  │    │  port 9080       ││
-│  │  9070       │    └────────┬─────────┘│
-│  └─────────────┘             │          │
-│        ▲                     ▼          │
-└────────│─────────────────────│──────────┘
-         │ ingress             │ JDBC
+│  ┌─────────────┐    ┌──────────────────┐ │
+│  │ Restate     │◀──▶│  Your Go service │ │
+│  │ (sidecar)   │    │  (SDK + cwf)     │ │
+│  │ port 8080,  │    │  port 9080       │ │
+│  │  9070       │    └────────┬─────────┘ │
+│  └─────────────┘             │           │
+│        ▲                     ▼           │
+└────────│─────────────────────│───────────┘
+         │ ingress             │ PGX
          │                     ▼
    ┌─────┴─────┐         ┌──────────┐
    │ HTTP API  │         │ Postgres │
