@@ -342,15 +342,11 @@ func TestRestate_AsyncSubscriberDelivered(t *testing.T) {
 // that command appends a Voided event through the bus. The aggregate
 // ends in STATUS_VOIDED, audit trail shows both Created and Voided.
 //
-// KNOWN LIMITATION (Phase 2a): the framework's onExhausted path
-// calls b.wf.Run INSIDE a RunAsync fn for the Compensate roundtrip.
-// Restate's SDK forbids nested Run from a RunContext (the closure's
-// ctx isn't a full restate.Context). This test is expected to fail
-// today; tracked for Phase 2c when onExhausted is restructured to
-// run from the outer context.
+// The compensating HandleCmd runs from the OUTER Restate handler
+// context (not inside RunAsync's fn). Step names are prefixed with
+// "compensate:<sub>:<event>:" to avoid collision with the parent's
+// "append" / "read-envelopes" journal entries.
 func TestRestate_SyncCompensate(t *testing.T) {
-	t.Skip("Phase 2a known limitation: onExhausted issues nested Run inside RunAsync's fn; not allowed by Restate SDK. Fix in Phase 2c.")
-
 	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
 		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
 			Name:        "credit-check",

@@ -200,6 +200,39 @@ one journal entry.
 DBOS adapter does the analogous mapping against DBOS's `StartChildStep`
 primitive.
 
+### 5c. OnExhausted policy runs from the outer HandleCmd context
+
+Two related concerns made the naive "policy inside RunAsync's fn"
+shape impossible for Restate:
+
+1. The SDK's `RunContext` lacks `inner()`; any nested `restate.Run`
+   call from inside a `RunAsync` closure fails with
+   `ErrNoRestateContext`.
+2. A non-nil error return from `RunAsync`'s fn is treated by Restate
+   as step failure → whole-invocation retry. Using fn-error as the
+   "exhausted" signal triggers infinite retry loops on any failed
+   subscriber.
+
+Fix: `runSyncSubscriber`'s fn ALWAYS returns nil error. The
+exhausted-with-lastErr signal travels through the `[]byte` return
+(non-empty = exhausted, message = lastErr). `HandleCmd`'s outer
+loop decodes this and applies OnExhausted policy from the
+top-level context where the real `restate.Context` is in scope.
+
+DLQ insert + Compensate recursion both run as fresh `Run` calls
+issued from `HandleCmd` — not nested inside any closure.
+
+Compensate recursion needs unique step names to avoid journal
+collisions with the parent's "append" / "read-envelopes". The
+framework pushes a `stepPrefix` value on context for nested
+HandleCmd calls; all step names in `appendStep`,
+`readEnvelopesStep`, `runSyncSubscriber`, and `onExhausted` honor
+the prefix. Compensate uses `"compensate:<sub>:<event>:"` —
+deterministic across replays.
+
+All four policy combinations (`Drop` / `DLQ` / `Compensate` × `Sync`
+/ `Async`) are operational on the Restate adapter.
+
 ### 6. Payload encoding — `BinaryCodec`
 
 Restate supports JSON / proto / protojson / binary codecs. The

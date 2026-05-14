@@ -12,6 +12,7 @@ use (
 	./examples/invoice
 	./examples/orderfulfillment
 	./examples/party
+	./examples/cmdworkflow-restate
 	./examples/statestream
 	./proto-gen
 )

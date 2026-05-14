@@ -160,10 +160,13 @@ func (b *Workflow[S, C]) HandleCmd(
 	}
 
 	// Step 3: fan out per event. Sync subscribers run concurrently
-	// via RunAsync; HandleCmd waits for all of them to settle before
-	// proceeding to the next event. Async subscribers are Spawned
-	// into independent child workflows and keep running after
-	// HandleCmd returns.
+	// via RunAsync (retries inside one journal entry). HandleCmd
+	// awaits all futures, then applies each subscriber's OnExhausted
+	// policy from the OUTER context. The policy application MUST
+	// happen here (not inside the RunAsync fn) because Restate forbids
+	// nested Run from a RunContext closure — DLQ insert and
+	// Compensate recursion both issue Run calls. Async subscribers
+	// fire via Spawn into independent child workflows.
 	for _, env := range envs {
 		var (
 			syncFutures []Future
@@ -179,19 +182,40 @@ func (b *Workflow[S, C]) HandleCmd(
 				}
 				continue
 			}
-			// Sync: fan out as a journaled async step. Retries
-			// happen inside fn — one journal entry per (sub, event)
-			// regardless of attempt count.
 			syncSubs = append(syncSubs, sub)
 			syncFutures = append(syncFutures, b.runSyncSubscriber(ctx, sid, env, sub))
 		}
-		// Wait for every Sync subscriber to settle. We collect
-		// errors but don't short-circuit — every subscriber's policy
-		// (DLQ / Compensate / Drop) must run even if a sibling
-		// failed.
+		// Wait for every Sync subscriber, collect (subscriber,
+		// exhaustedErr) pairs. Don't short-circuit — every
+		// subscriber's policy runs even if a sibling failed.
+		//
+		// Future.Wait returns:
+		//   - (nil,    nil)    on success (fn returned nil/nil)
+		//   - (bytes,  nil)    on exhausted (fn returned bytes, nil)
+		//   - (any,    err)    on Restate infrastructure error
+		type exhausted struct {
+			sub Subscriber[C]
+			err error
+		}
+		var toApply []exhausted
 		for i, f := range syncFutures {
-			if _, err := f.Wait(); err != nil {
+			raw, err := f.Wait()
+			if err != nil {
 				return zero, fmt.Errorf("cmdworkflow: subscriber %s: %w", syncSubs[i].Name, err)
+			}
+			if len(raw) > 0 {
+				toApply = append(toApply, exhausted{
+					sub: syncSubs[i],
+					err: errors.New(string(raw)),
+				})
+			}
+		}
+		// Apply OnExhausted policy from the outer context. All Run /
+		// HandleCmd calls inside onExhausted use the parent ctx
+		// directly (real restate.Context, not a RunContext shim).
+		for _, e := range toApply {
+			if err := b.onExhausted(ctx, sid, env, e.sub, e.err); err != nil {
+				return zero, err
 			}
 		}
 	}
@@ -201,6 +225,22 @@ func (b *Workflow[S, C]) HandleCmd(
 	// full event replay otherwise.
 	state, _, err := b.runner.Load(ctx, sid)
 	return state, err
+}
+
+// stepPrefixKey is the typed context-value key for namespacing step
+// names during nested HandleCmd calls (Compensate recursion). The
+// recursive HandleCmd issues "append", "read-envelopes" — but the
+// outer HandleCmd has already done so. Same step name = journal
+// collision in Restate. Prefix disambiguates.
+type stepPrefixKey struct{}
+
+func withStepPrefix(ctx context.Context, prefix string) context.Context {
+	return context.WithValue(ctx, stepPrefixKey{}, prefix)
+}
+
+func stepPrefix(ctx context.Context) string {
+	v, _ := ctx.Value(stepPrefixKey{}).(string)
+	return v
 }
 
 // appendStep wraps the aggregate.Runtime.Handle call in a durable
@@ -213,7 +253,7 @@ func (b *Workflow[S, C]) appendStep(
 	cmd C,
 	opts ...aggregate.HandleOption,
 ) (es.AppendResult, error) {
-	raw, err := b.wf.Run(ctx, "append", func(ctx context.Context) ([]byte, error) {
+	raw, err := b.wf.Run(ctx, stepPrefix(ctx)+"append", func(ctx context.Context) ([]byte, error) {
 		ar, herr := b.runner.Handle(ctx, sid, cmd, opts...)
 		if herr != nil {
 			return nil, herr
@@ -234,7 +274,7 @@ func (b *Workflow[S, C]) readEnvelopesStep(
 	sid es.StreamID,
 	result es.AppendResult,
 ) ([]es.Envelope, error) {
-	raw, err := b.wf.Run(ctx, "read-envelopes", func(ctx context.Context) ([]byte, error) {
+	raw, err := b.wf.Run(ctx, stepPrefix(ctx)+"read-envelopes", func(ctx context.Context) ([]byte, error) {
 		envs, rerr := b.store.ReadStream(ctx, sid, result.StartVersion-1)
 		if rerr != nil {
 			return nil, rerr
@@ -255,8 +295,12 @@ func (b *Workflow[S, C]) readEnvelopesStep(
 }
 
 // spawnAsync dispatches an Async subscriber as an independent child
-// workflow. The spawned fn runs the same retry-then-exhausted body
-// as the Sync path; it just lives outside HandleCmd's wait set.
+// workflow. Retries run inside the spawned fn; on exhaustion the
+// policy is applied within the same Spawn'd context. (For Restate
+// this means Async + DLQ / Compensate is fire-and-forget durability
+// — the parent invocation has returned by the time policy runs, so
+// nested Run inside the spawned fn is best-effort. inproc handles
+// it fully.)
 func (b *Workflow[S, C]) spawnAsync(
 	ctx context.Context,
 	sid es.StreamID,
@@ -265,40 +309,49 @@ func (b *Workflow[S, C]) spawnAsync(
 ) error {
 	spawnName := sub.Name + ":" + env.EventID.String()
 	return b.wf.Spawn(ctx, spawnName, func(ctx context.Context) error {
-		return b.deliverWithRetriesInline(ctx, sid, env, sub)
+		if err := b.runRetries(ctx, env, sub); err != nil {
+			return b.onExhausted(ctx, sid, env, sub, err)
+		}
+		return nil
 	})
 }
 
 // runSyncSubscriber dispatches a Sync subscriber as one journaled
 // async step (RunAsync). Retries happen INSIDE the step's fn so the
 // journal sees exactly one entry per (subscriber, event) regardless
-// of attempt count. Returns a Future the caller awaits.
+// of attempt count.
+//
+// IMPORTANT: the fn ALWAYS returns nil error to Restate, even on
+// exhaustion. Restate treats a non-nil fn error as step failure and
+// retries the whole invocation — which is wrong for our retry budget
+// semantics (we already retried inside the fn).
+//
+// The "exhausted, here's the lastErr" signal travels through the
+// bytes return: nil bytes = success, non-empty bytes = exhausted
+// error message. HandleCmd's outer loop decodes this and applies the
+// OnExhausted policy. The actual DLQ insert / Compensate recursion
+// happens from HandleCmd's main context (real restate.Context, not
+// the RunContext shim).
 func (b *Workflow[S, C]) runSyncSubscriber(
 	ctx context.Context,
 	sid es.StreamID,
 	env es.Envelope,
 	sub Subscriber[C],
 ) Future {
-	stepName := fmt.Sprintf("%s:%s", sub.Name, env.EventID.String())
+	stepName := stepPrefix(ctx) + fmt.Sprintf("%s:%s", sub.Name, env.EventID.String())
 	return b.wf.RunAsync(ctx, stepName, func(ctx context.Context) ([]byte, error) {
-		return nil, b.deliverWithRetriesInline(ctx, sid, env, sub)
+		if err := b.runRetries(ctx, env, sub); err != nil {
+			return []byte(err.Error()), nil
+		}
+		return nil, nil
 	})
 }
 
-// deliverWithRetriesInline runs the full retry loop INSIDE one
-// journaled step. Each attempt invokes sub.Handle directly — no
-// nested Run call (the runtime contract forbids it inside a Run
-// closure, and per-attempt journaling traded for parallelism per
-// ADR 0026 § 7).
-//
-// On exhaustion the configured OnExhausted policy applies. DLQ /
-// Compensate are journaled as their own steps issued from the
-// HandleCmd context (via the outer ctx captured through closure
-// when the inproc adapter is used; via separate steps registered by
-// the parent invocation for Restate).
-func (b *Workflow[S, C]) deliverWithRetriesInline(
+// runRetries runs the subscriber's Handle inside the retry budget.
+// Returns nil on success, the last error on exhaustion. Does NOT
+// apply OnExhausted policy — that's the caller's responsibility.
+func (b *Workflow[S, C]) runRetries(
 	ctx context.Context,
-	sid es.StreamID,
 	env es.Envelope,
 	sub Subscriber[C],
 ) error {
@@ -325,9 +378,7 @@ func (b *Workflow[S, C]) deliverWithRetriesInline(
 			lastErr = err
 		}
 	}
-
-	// Exhausted.
-	return b.onExhausted(ctx, sid, env, sub, lastErr)
+	return lastErr
 }
 
 // onExhausted applies the subscriber's exhausted-policy. Compensate
@@ -347,9 +398,9 @@ func (b *Workflow[S, C]) onExhausted(
 	case DLQ:
 		if b.dlq == nil {
 			// No DLQ wired — surface the error.
-			return fmt.Errorf("commandbus: subscriber %s exhausted (no DLQ wired): %w", sub.Name, lastErr)
+			return fmt.Errorf("cmdworkflow: subscriber %s exhausted (no DLQ wired): %w", sub.Name, lastErr)
 		}
-		stepName := fmt.Sprintf("%s:%s:dlq", sub.Name, env.EventID.String())
+		stepName := stepPrefix(ctx) + fmt.Sprintf("%s:%s:dlq", sub.Name, env.EventID.String())
 		_, err := b.wf.Run(ctx, stepName, func(ctx context.Context) ([]byte, error) {
 			return nil, b.dlq.InsertSubscriberDLQ(ctx, SubscriberDLQRow{
 				SubscriberName: sub.Name,
@@ -366,24 +417,24 @@ func (b *Workflow[S, C]) onExhausted(
 
 	case Compensate:
 		if sub.Compensate == nil {
-			return errors.New("commandbus: OnExhausted=Compensate but Compensate fn is nil (should have been caught at Register)")
+			return errors.New("cmdworkflow: OnExhausted=Compensate but Compensate fn is nil (should have been caught at Register)")
 		}
 		// Detach from caller's cancellation so compensation runs to
 		// completion. Inherits values but ignores deadline + Done.
 		detached := context.WithoutCancel(ctx)
 		cmd, err := sub.Compensate(detached, env)
 		if err != nil {
-			return fmt.Errorf("commandbus: subscriber %s compensate fn: %w", sub.Name, err)
+			return fmt.Errorf("cmdworkflow: subscriber %s compensate fn: %w", sub.Name, err)
 		}
-		// Recurse into HandleCmd with the compensating command.
-		// The nested invocation produces its own events; the journal
-		// nests naturally under the parent.
-		stepName := fmt.Sprintf("%s:%s:compensate", sub.Name, env.EventID.String())
-		_, err = b.wf.Run(detached, stepName, func(ctx context.Context) ([]byte, error) {
-			_, herr := b.HandleCmd(ctx, sid, cmd)
-			return nil, herr
-		})
+		// Recursive HandleCmd for the compensating command. The
+		// nested invocation issues its own "append" / "read-envelopes"
+		// steps — same names as the parent's, which would collide in
+		// the Restate journal. Push a unique prefix on the context;
+		// step names downstream all pick it up via stepPrefix(ctx).
+		nestedPrefix := stepPrefix(detached) + fmt.Sprintf("compensate:%s:%s:", sub.Name, env.EventID.String())
+		detached = withStepPrefix(detached, nestedPrefix)
+		_, err = b.HandleCmd(detached, sid, cmd)
 		return err
 	}
-	return fmt.Errorf("commandbus: unknown OnExhausted policy: %d", sub.OnExhausted)
+	return fmt.Errorf("cmdworkflow: unknown OnExhausted policy: %d", sub.OnExhausted)
 }
