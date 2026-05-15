@@ -36,7 +36,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0023 | [state_cache subsumes snapshots](./0023-state-cache-supersedes-snapshots.md)            | Accepted (supersedes 0011) |
 | 0024 | [state_stream — coalesced state-mirror delivery](./0024-state-stream.md)                | Accepted   |
 | 0025 | [Workflow-Orchestrated Command Bus](./0025-workflow-orchestrated-command-bus.md)        | Accepted (Phase 1: framework + inproc) |
-| 0026 | [Workflow Adapters — Restate and DBOS](./0026-workflow-adapters.md)                     | Accepted (Phase 2a–2d) |
+| 0026 | [Workflow Adapters — Restate and DBOS](./0026-workflow-adapters.md)                     | Accepted   |
 | 0027 | [Data Governance Model — Classification, Access Levels, Codegen](./0027-data-governance-model.md) | Accepted |
 | 0028 | [Tamper-Evident Hash Chain](./0028-tamper-evident-chain.md)                             | Accepted   |
 | 0029 | [Per-Command Subscriber Batch Delivery](./0029-per-command-subscriber-batch-delivery.md) | Accepted (amends 0025) |

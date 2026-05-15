@@ -373,20 +373,29 @@ patterns apply identically:
 
 ## Future direction: spec-driven projections (v2)
 
-A planned v2 enhancement is **spec-driven projection codegen**:
-declare projection event sets in a small YAML (or proto-with-
-custom-options) file, codegen a per-projection typed interface +
-dispatcher that handles only the listed events, plus registration
-glue:
+**v2 enhancement — spec-driven projection codegen — shipped.**
 
-```yaml
-# customer_view.projection.yaml
-name: customer-view
-events:
-  - myapp.invoice.v1.Created
-  - myapp.invoice.v1.Paid
-  - myapp.customer.v1.NameChanged
+The codegen ships via the `(es.v1.projection)` proto option (proto
+extensions won over YAML — already-installed, no separate format
+to learn). Codegen emits a per-projection typed interface +
+dispatcher that handles only the listed events:
+
+```proto
+// myapp/customerview/v1/customerview.proto
+message CustomerView {
+  option (es.v1.projection) = {
+    name: "customer-view"
+    events: [
+      "myapp.invoice.v1.Created",
+      "myapp.invoice.v1.Paid",
+      "myapp.customer.v1.NameChanged",
+    ]
+  };
+}
 ```
+
+Implementation: `proto-gen/main.go` § `emitProjectionSpec`. Working
+example: `proto/myapp/customerview/v1/` + `gen/myapp/customerview/v1/`.
 
 This wins for:
 
@@ -397,14 +406,9 @@ This wins for:
 - **External tooling**: dashboards, lineage tools, CI checks
   consuming the machine-readable spec.
 
-It is deliberately deferred from v1 because:
-
-- v1 (Decisions 3a–3i) is strictly simpler to build and debug.
-- v2 layers cleanly on top — the generated per-projection interface
-  composes existing dispatchers internally; nothing in v1 needs to
-  change.
-- The format choice (yaml vs proto-extensions) benefits from
-  observing real friction in v1.
+A possible v3 (YAML format + external-tooling integration) would
+be a separate ADR if it ever ships — proto extensions cover the
+in-framework use cases.
 
 Documented here so the v1 design is understood as the foundation
 of a longer trajectory, not a final answer.
@@ -439,7 +443,6 @@ of a longer trajectory, not a final answer.
   deployments where state must live elsewhere fall back to Tier 3.
 
 **Deferred to follow-up work:**
-- Spec-driven projection codegen (v2 above).
 - Tier 3 sharding by stream-key hash.
 - Tier 3 DLQ-skip mode (analogue of `AutoResumeAfterDLQ` on the
   drain).

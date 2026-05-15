@@ -1,6 +1,6 @@
 # ADR 0026: Workflow Adapters — Restate and DBOS
 
-- **Status:** Accepted (Phase 2a — Restate runtime; Phase 2b — DBOS; Phase 2c — codegen)
+- **Status:** Accepted (all phases shipped)
 - **Date:** 2026-05-14
 - **Pairs with:** ADR 0012 (event delivery), ADR 0025 (workflow-orchestrated command bus).
 
@@ -369,27 +369,33 @@ extract a shared base. The codegen plugin is single-source-of-truth
 for the shape so generated code stays consistent across adapters
 without sharing types.
 
-## Implementation Plan
+## Implementation history
 
-**Phase 2a (this ADR — first deliverable):**
-1. `adapters/cmdworkflow/restate` package — `Runtime`, `WithContext`,
-   `ServiceBinding[S, C]` helper for manual handler registration.
-2. Restate testcontainer setup using SDK's `testing.Start`.
-3. Four end-to-end tests, build-tagged `restate`.
-4. `examples/cmdworkflow-restate/` — Invoice demo wired through
-   Restate. Same scenarios as `examples/cmdworkflow/`.
+All four phases shipped. Captured here for historical context.
 
-**Phase 2b:**
-5. `adapters/cmdworkflow/dbos` package — same shape, DBOS Go SDK.
-6. DBOS tests against Postgres testcontainer.
-7. `examples/cmdworkflow-dbos/`.
+**Phase 2a (shipped):** Restate runtime adapter.
+- `adapters/cmdworkflow/restate/` — `Runtime`, `WithContext`,
+  service binding helper.
+- `adapters/cmdworkflow/restate/testsupport/` — Restate testcontainer
+  setup using the SDK's `testing.Start`.
+- End-to-end tests in `adapters/cmdworkflow/restate/restate_test.go`.
+- Worked example: `examples/cmdworkflow-restate/`.
 
-**Phase 2c:**
-8. `eventstore/v1/annotations.proto` — `stream_id`, `stream_type`,
-   `stream_id_via` field options.
-9. `protoc-gen-es-go` extension — generate per-command typed
-   handlers for both adapters.
+**Phase 2b (shipped):** DBOS adapter.
+- `adapters/cmdworkflow/dbos/` — same shape as Restate.
+- DBOS testcontainer setup, end-to-end tests.
+- Worked example: `examples/cmdworkflow-dbos/`.
 
-**Phase 2d (cookbook):**
-10. Cookbook recipe 14 — production deployment patterns,
-    Restate vs DBOS trade-offs, observability hooks.
+**Phase 2c (shipped):** Codegen for typed command handlers.
+- `(es.v1.stream_id)` + `(es.v1.tenant_id)` field options
+  (`proto/es/v1/options.proto`).
+- `protoc-gen-es-go` runtime modes `runtime=restate` and
+  `runtime=dbos` emit per-aggregate service stubs.
+- Output trees: `adapters/cmdworkflow/restate/gen/` and
+  `adapters/cmdworkflow/dbos/gen/`.
+- Emitter test coverage: `gen/test/rsspec/v1/` (PR #6 series).
+
+**Phase 2d (shipped):** Cookbook deployment recipe.
+- [Cookbook recipe 14](../cookbook/14-cmdworkflow-deployment.md) —
+  production deployment patterns, Restate-vs-DBOS trade-offs,
+  observability hooks.
