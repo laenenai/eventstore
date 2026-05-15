@@ -34,6 +34,7 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 14 | [cmdworkflow deployment](./14-cmdworkflow-deployment.md) | Production wiring of the workflow-orchestrated command bus on Restate. Three-step start, topologies (sidecar / cluster / managed), idempotency at the edge, observability, common pitfalls. |
 | 15 | [HTTP edge with Connect-go](./15-http-edge-with-connect.md) | Expose `cmdworkflow.Workflow` over HTTP via the `adapters/httpedge/connect` runtime helper. DTO seam, error mapping, idempotency header, async-ack pattern. |
 | 16 | [Sagas at the app layer](./16-sagas-at-the-app-layer.md) | Multi-step orchestration with timers / external callbacks / concurrent waits as user workflow functions calling the framework's command bus. Restate + DBOS variants. Why sagas are deliberately out of framework scope. |
+| 17 | [High-frequency bucketed events](./17-high-frequency-bucketed-events.md) | Login ticks, heartbeats, last-seen updates: Decider-side bucket dedup, when to spin a short-retention firehose stream, when to stay out of ES. Clock-skew + replay edge cases. |
 
 ## Conventions used in these recipes
 
