@@ -6,13 +6,14 @@ field added to the read model. The framework provides the runtime
 surface; the rebuild *plan* depends on whether the projection can
 tolerate downtime.
 
-This recipe covers three patterns, ordered by complexity:
+This recipe covers four patterns:
 
-| Pattern | Downtime | When to use |
-| ------- | -------- | ----------- |
-| 1. Truncate-and-replay | Yes (read model empty during catch-up) | Internal dashboards, ops tools, anywhere a brief stale window is acceptable |
-| 2. Versioned parallel rebuild | None | User-facing read paths where a hole would hurt |
-| 3. State-cache rebuild | None visible | Tier 1 only — repopulate `state_cache` after a state proto change |
+| Pattern | Downtime | Reads | When to use |
+| ------- | -------- | ----- | ----------- |
+| 1. Truncate-and-replay | Yes (read model empty during catch-up) | Events | Internal dashboards, ops tools, anywhere a brief stale window is acceptable |
+| 2. Versioned parallel rebuild | None | Events | User-facing read paths where a hole would hurt |
+| 3. State-cache rebuild | None visible | Events | Tier 1 only — repopulate `state_cache` after a state proto change |
+| 4. State-cache projection rebuild | Yes (read model empty during scan) | `state_cache` | Read models that are a pure function of current state. **O(streams)** instead of O(events). |
 
 ## Pattern 1 — Truncate-and-replay (simple)
 
@@ -170,6 +171,108 @@ completes.
 
 This is the right path for state proto changes specifically — Patterns
 1 and 2 above are for arbitrary Tier 3 projections.
+
+## Pattern 4 — State-cache projection rebuild
+
+When the projection is a pure function of **current state** (no
+event-history dependence), skip event replay and iterate
+`state_cache` directly. This is **O(streams)** instead of
+**O(events)** — for an aggregate with 10k streams averaging 100
+events each, that's 100× faster.
+
+**Works for:**
+- "All active customers" — current state.
+- "Per-region invoice totals" — current state.
+- "Search index of current product catalogue" — current state.
+
+**Does NOT work for:**
+- "Login history feed" — needs per-event timestamps.
+- "Audit ledger" — needs per-event actor / occurred_at.
+- "Daily revenue chart" — needs per-event amounts and dates.
+- Anything that reads `OccurredAt`, `RecordedAt`, or any field that
+  isn't in the marshaled state.
+
+If your projection mixes both styles, fall back to Pattern 1 or 2.
+
+### The pattern
+
+`es.ScanAllStates` is an iterator that pages through `state_cache`
+for one `(tenant_id, type_url)` pair via the underlying
+`ListStates` cursor:
+
+```go
+import "github.com/laenenai/eventstore/es"
+
+// 1. Truncate the read model.
+if _, err := pool.Exec(ctx, "TRUNCATE customer_view"); err != nil {
+    return err
+}
+
+// 2. Iterate every current customer state.
+for row, err := range es.ScanAllStates(ctx, store,
+    tenantID, "myapp.customer.v1.Customer", 1000) {
+    if err != nil {
+        return err
+    }
+    var s customerv1.Customer
+    if err := proto.Unmarshal(row.State, &s); err != nil {
+        return err
+    }
+    // 3. Project current state into the read model.
+    if _, err := pool.Exec(ctx,
+        `INSERT INTO customer_view (id, name, email, region)
+         VALUES ($1, $2, $3, $4)`,
+        s.Id, s.Name, s.Email, s.Region); err != nil {
+        return err
+    }
+}
+
+// 4. Reset the projection's cursor to current head so the live runner
+//    picks up from there instead of replaying events 1..N (which would
+//    double-write everything we just scanned).
+admin.ResetTo(ctx, "customer-view", tenantID, currentGlobalPosition)
+```
+
+### Cross-aggregate projections
+
+When the projection consumes multiple aggregate types (linked
+projections — recipe 12), call `ScanAllStates` once per type:
+
+```go
+for row, err := range es.ScanAllStates(ctx, store, tenantID,
+    "myapp.invoice.v1.Invoice", 1000) {
+    // project Invoice state
+}
+for row, err := range es.ScanAllStates(ctx, store, tenantID,
+    "myapp.order.v1.Order", 1000) {
+    // project Order state
+}
+```
+
+Cursor pagination is per-call; pages from different types don't
+interleave. Order doesn't matter unless your projection has
+cross-aggregate referential constraints — in which case Pattern 1 /
+2 (event-order replay) is probably the right shape anyway.
+
+### When stepping back to event replay is the right move
+
+- The state proto **doesn't carry the field you're projecting**.
+  Add the field to state and bump `state_schema_version` (Pattern 3
+  repopulates `state_cache` from events), then run Pattern 4. Two
+  passes total, both still cheaper than full event replay for hot
+  aggregates.
+- **state_cache hasn't been backfilled** for old streams (their rows
+  are absent). Pattern 4 silently skips those streams. Either
+  rebuild `state_cache` first (Pattern 3) or fall back to Pattern 1.
+
+### Failure modes
+
+| Failure                                            | What happens / what to do                                                                                              |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Scan starts mid-write; some rows pre-update, some post-update | For projection rebuild this is harmless — the live runner advances the cursor past every event written during the scan; nothing is lost. Pattern 4's premise is idempotent over current state. |
+| Mixed `state_schema_version` rows                  | Caller decides — either filter inside the loop (`if row.StateSchemaVersion != currentVersion { continue }`) or upcast in user code. Framework v1 has no state upcaster registry; rebuild state_cache first if you need a uniform version. |
+| Stream terminal between scan and projection apply  | `row.Terminal` indicates the aggregate is closed. Caller decides whether terminal streams belong in the read model.    |
+| `ListStates` returns 0 rows                        | `state_cache` is opt-in per aggregate (set `StateCodec` on the Runtime). If you haven't enabled it, Pattern 4 sees nothing. Pattern 1 is the only option. |
 
 ## Operational notes
 

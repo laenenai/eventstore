@@ -2,6 +2,7 @@ package es
 
 import (
 	"context"
+	"iter"
 	"time"
 )
 
@@ -55,6 +56,62 @@ type StateCacheWriter interface {
 	// given (tenant_id, type_url). When tenantID is "" all tenants
 	// are wiped. Returns the number of rows deleted.
 	WipeStateCacheForType(ctx context.Context, tenantID, typeURL string) (int64, error)
+}
+
+// ScanAllStates returns an iterator over every cached state row for
+// the given (tenantID, typeURL), pulling pages of pageSize via the
+// underlying ListStates cursor. The iteration ends naturally when the
+// store yields a short page; an error from ListStates is yielded once
+// and the iterator stops.
+//
+// Intended use is projection rebuild from state_cache (cookbook 08,
+// Pattern 4) — O(streams) instead of O(events) when the projection is
+// a pure function of current state. The typeURL is exact-match;
+// cross-aggregate projections call ScanAllStates once per aggregate
+// type they consume.
+//
+// pageSize ≤ 0 falls back to 1000. The iterator is single-pass; the
+// underlying store remains read-only during iteration but is not
+// frozen — concurrent writes may or may not appear in later pages
+// (Postgres snapshot semantics; SQLite single-writer makes it the
+// same in practice).
+func ScanAllStates(
+	ctx context.Context,
+	r StateCacheReader,
+	tenantID, typeURL string,
+	pageSize int,
+) iter.Seq2[StateCacheRow, error] {
+	if pageSize <= 0 {
+		pageSize = 1000
+	}
+	return func(yield func(StateCacheRow, error) bool) {
+		after := ""
+		for {
+			if err := ctx.Err(); err != nil {
+				yield(StateCacheRow{}, err)
+				return
+			}
+			rows, err := r.ListStates(ctx, tenantID, typeURL, after, pageSize)
+			if err != nil {
+				yield(StateCacheRow{}, err)
+				return
+			}
+			if len(rows) == 0 {
+				return
+			}
+			for _, row := range rows {
+				if !yield(row, nil) {
+					return
+				}
+			}
+			// A short page means we've exhausted the matching rows;
+			// no point in another round-trip that would return zero.
+			if len(rows) < pageSize {
+				return
+			}
+			after = rows[len(rows)-1].StreamID
+		}
+	}
 }
 
 // StateCacheUpserter is the direct-write surface used by
