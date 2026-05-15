@@ -442,13 +442,44 @@ of a longer trajectory, not a final answer.
 - `state_cache` lives in the same DB as events. Cross-DB
   deployments where state must live elsewhere fall back to Tier 3.
 
-**Deferred to follow-up work:**
-- Tier 3 sharding by stream-key hash.
-- Tier 3 DLQ-skip mode (analogue of `AutoResumeAfterDLQ` on the
-  drain).
-- `projection.WithDedup` middleware for non-idempotent handlers.
-- Concurrent-claim drain mode (`FOR UPDATE SKIP LOCKED`) for
-  projections — same trade-offs as for the outbox.
+**Deferred to follow-up work** (each with an explicit sunset
+criterion so the deferral has a finishing condition, not just a
+"someday" hedge):
+
+- **Tier 3 sharding by stream-key hash.** N independent runner
+  instances, each owning `hash(tenant_id || stream_id) % N`.
+  Sunset: when an adopter measures **≥1,000 events/sec sustained**
+  arrival rate AND single-runner projection lag is growing
+  unboundedly under normal load. Estimated effort: ~5 engineer-days
+  (partitioning strategy, per-partition cursor table, recipe).
+
+- **Tier 3 DLQ-skip mode** (analogue of `AutoResumeAfterDLQ` on
+  the drain). Skip the failing event, record in `projection_dlq`,
+  advance the cursor. Sunset: when an adopter ships a projection
+  that mirrors to **an external system outside the eventstore's
+  transactional boundary** (search index, OpenSearch sink,
+  analytics warehouse) — or when manual `projection_dlq` table
+  writes appear in production and need formalization. Estimated
+  effort: ~2 engineer-days (table + queries already scaffolded;
+  missing the opt-in flag, operator API, recipe section).
+
+- **`projection.WithDedup` middleware** for non-idempotent
+  handlers. Sunset: when an adopter ships a projection that needs
+  at-most-once delivery AND cannot achieve idempotency at the sink
+  (no UPSERT, no idempotency-key support, no natural primary key).
+  Adopters whose sink _could_ UPSERT should fix the projection,
+  not the framework. Estimated effort: ~3 engineer-days (interface
+  + SQL impl piggybacking on `processed_events` + middleware
+  wrapper + recipe).
+
+- **Concurrent-claim drain mode** (`FOR UPDATE SKIP LOCKED`) for
+  projections. Postgres-only intra-runner parallelism; the SQLite
+  adapter is explicitly out of scope (single-writer can't benefit).
+  Sunset: when an adopter measures projection lag that single-runner
+  can't fix by handler optimization (handler profiled, optimized,
+  still bottlenecked). Estimated effort: ~5 engineer-days. The
+  parity break vs SQLite is a deliberate trade-off — documented in
+  the future recipe.
 
 ## Alternatives considered
 

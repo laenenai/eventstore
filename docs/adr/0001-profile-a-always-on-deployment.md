@@ -181,3 +181,17 @@ Estimated effort when prioritized: ~1 engineer-week, plus tests.
   startup if the configured publisher is incompatible with the configured
   storage (e.g., `pgnotify` against SQLite)? Yes — fail loudly at config
   load.
+
+## Sunset criterion
+
+Profile A re-opens — and this ADR is promoted from `Deferred` to
+`Proposed` — when one of:
+
+- A concrete adopter PR (or written RFE) requests `pollingpublisher` or
+  `notifypublisher` adapters with a specific deployment shape, OR
+- The framework ships a real (AWS / GCP / Vault) KMS adapter, at which
+  point regulated-shop adopters who require always-on Postgres become
+  realistic targets.
+
+Until one of those triggers, this ADR sits as Deferred. Re-evaluate at
+v1.0 cut and at each subsequent minor release.

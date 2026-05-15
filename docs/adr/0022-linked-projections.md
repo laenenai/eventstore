@@ -164,20 +164,27 @@ aggregate's pass-through Decider. User implements only:
   to know the full set of linked projections at startup to validate
   no cycles exist. New constraint on initialization order.
 
-**Deferred until a real use case lands:**
+**Codegen sunset criterion.**
 
-The framework already has the building blocks (`projection.Runtime`,
-`aggregate.Runtime`, `Decider`) to express linked projections in user
-code today. Recipe 11 (hypothetical) could document the pattern.
-This ADR proposes promoting it to a first-class feature when:
+The framework already has the runtime building blocks
+(`projection.Runtime`, `aggregate.Runtime`, `Decider`); cookbook
+recipe 12 documents the pattern in user code. What's deferred is
+the **codegen** — a proto annotation that generates the Route /
+Match scaffolding so users don't write `func Route(env es.Envelope)
+(event, dest)` by hand.
 
-- Two or more concrete in-house use cases need it; or
-- Migration from EventStoreDB requires `linkTo` / `emit`
-  compatibility; or
-- A user surfaces friction from hand-rolling the pattern repeatedly.
+Codegen ships when one of:
 
-Until then, the design is captured here so the path is clear when
-the demand appears.
+- **≥2 in-house linked projections** (any pattern — routing,
+  fan-in audit, etc.) exist in the same shop, with the hand-rolled
+  Route / Match boilerplate visibly repetitive across them. The
+  repetition pain is per-projection, not per-aggregate.
+- **EventStoreDB migration** path requires `linkTo` / `emit`
+  wire-protocol compatibility for the bridge.
+- **External adopter request** with a concrete use case.
+
+Estimated effort when triggered: ~4 engineer-days. Proto extension,
+codegen emitter, recipe 12 update.
 
 ## Alternatives considered
 
