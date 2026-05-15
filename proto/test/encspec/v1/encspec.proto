@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package test.encspec.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/encspec/v1;encspecv1";
+
+// Test-only proto covering every PII classification path through the
+// codegen-emitted EncryptPII / DecryptPII methods (ADR 0010 / 0027).
+//
+// EncryptPII/DecryptPII are emitted only for event variants — each
+// test surface lives as a variant inside the Events sum type.
+//
+// Tests at gen/test/encspec/v1/encrypt_test.go:
+//   - Round-trip per classification (PERSONAL → CREDENTIAL × string/bytes)
+//   - PUBLIC / INTERNAL / scalar non-string-bytes fields untouched
+//   - SAD field on a variant → EncryptPII refuses before any field changes
+//   - Per-field (es.v1.subject) overrides honoured
+//   - Post-ForgetSubject → DecryptPII yields RedactedField, not error
+//   - Cross-tenant isolation
+//   - Empty fields skipped
+
+// ---- State -----------------------------------------------------------
+//
+// Required so the file is a coherent aggregate; not the test surface.
+
+message EncState {
+  option (es.v1.aggregate) = "enc";
+  string subject_id = 1 [(es.v1.subject_field) = true];
+}
+
+// ---- Event variants --------------------------------------------------
+
+// CleanPII covers the exhaustive happy path: every PERSONAL+
+// classification on both string and bytes fields. The non-PII fields
+// also live here so we can prove they survive untouched.
+message CleanPII {
+  string subject_id = 1 [(es.v1.subject_field) = true];
+
+  // Non-PII — must stay plaintext after encrypt.
+  string s_public          = 10;
+  string s_public_explicit = 11 [(es.v1.data_classification) = DATA_CLASSIFICATION_PUBLIC];
+  string s_internal        = 12 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  int64  i_public          = 13;
+  int64  i_internal        = 14 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+
+  // PII strings — encrypted, base64-of-ciphertext on disk.
+  string s_personal     = 20 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string s_quasi        = 21 [(es.v1.data_classification) = DATA_CLASSIFICATION_QUASI_IDENTIFIER];
+  string s_sensitive    = 22 [(es.v1.data_classification) = DATA_CLASSIFICATION_SENSITIVE];
+  string s_financial    = 23 [(es.v1.data_classification) = DATA_CLASSIFICATION_FINANCIAL];
+  string s_cardholder   = 24 [(es.v1.data_classification) = DATA_CLASSIFICATION_CARDHOLDER];
+  string s_credential   = 25 [(es.v1.data_classification) = DATA_CLASSIFICATION_CREDENTIAL];
+  string s_unstructured = 26 [(es.v1.data_classification) = DATA_CLASSIFICATION_UNSTRUCTURED];
+
+  // PII bytes — encrypted, raw ciphertext on disk.
+  bytes b_personal   = 30 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  bytes b_credential = 31 [(es.v1.data_classification) = DATA_CLASSIFICATION_CREDENTIAL];
+}
+
+// SADBlocked has SAD alongside PERSONAL. Codegen-emitted EncryptPII
+// must refuse before any field is touched (PCI-DSS §3.2; mixed-class
+// messages are a design bug masquerading as one bad annotation).
+message SADBlocked {
+  string subject_id = 1 [(es.v1.subject_field) = true];
+  string s_personal = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string s_sad      = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_SAD];
+}
+
+// MultiSubject exercises per-field (es.v1.subject) overrides. Each
+// PII field is keyed by a different subject, so codegen must read the
+// override and route to the right DEK.
+message MultiSubject {
+  string from_user_id = 1 [(es.v1.subject_field) = true];
+  string to_user_id   = 2;
+  int64  amount_cents = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_FINANCIAL];
+
+  string from_note = 10 [
+    (es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL,
+    (es.v1.subject)             = "from_user_id"
+  ];
+  string to_note = 11 [
+    (es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL,
+    (es.v1.subject)             = "to_user_id"
+  ];
+}
+
+// ---- Sum type --------------------------------------------------------
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    CleanPII     clean = 1;
+    SADBlocked   sad   = 2;
+    MultiSubject multi = 3;
+  }
+}
