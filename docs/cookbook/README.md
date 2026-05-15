@@ -35,6 +35,7 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 15 | [HTTP edge with Connect-go](./15-http-edge-with-connect.md) | Expose `cmdworkflow.Workflow` over HTTP via the `adapters/httpedge/connect` runtime helper. DTO seam, error mapping, idempotency header, async-ack pattern. |
 | 16 | [Sagas at the app layer](./16-sagas-at-the-app-layer.md) | Multi-step orchestration with timers / external callbacks / concurrent waits as user workflow functions calling the framework's command bus. Restate + DBOS variants. Why sagas are deliberately out of framework scope. |
 | 17 | [High-frequency bucketed events](./17-high-frequency-bucketed-events.md) | Login ticks, heartbeats, last-seen updates: Decider-side bucket dedup, when to spin a short-retention firehose stream, when to stay out of ES. Clock-skew + replay edge cases. |
+| 18 | [Clock injection and time acceleration](./18-clock-and-time-acceleration.md) | `es.Clock` + `ManualClock` for deterministic time-travel in tests. Expiry-window assertions, bucket boundary tests, workflow-sleep substitutes. Anti-patterns: `time.Now()` in Deciders, framework hot paths. |
 
 ## Conventions used in these recipes
 

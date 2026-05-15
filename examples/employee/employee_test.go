@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -452,6 +453,74 @@ func TestEmployee_CloneIsDeepCopy(t *testing.T) {
 	var nilHired *employeev1.Hired
 	if got := nilHired.Clone(); got != nil {
 		t.Errorf("Clone on nil should return nil, got %v", got)
+	}
+}
+
+// TestEmployee_ClockInjection_AcceleratesTime demonstrates the
+// canonical Clock-injection pattern from cookbook 18: a ManualClock
+// makes envelope OccurredAt stamps deterministic and lets a test
+// "advance 30 days" without sleeping. The Employee aggregate has no
+// time-dependent state today, but the framework-level wiring is the
+// same one a KYC refresh window or override-expires-at test would use.
+func TestEmployee_ClockInjection_AcceleratesTime(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	a := sqliteadapter.New(db)
+	if err := a.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	s := shred.New(inproc.New(), a)
+
+	t0 := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := es.NewManualClock(t0)
+
+	rt := &aggregate.Runtime[*employeev1.Employee, employeev1.Command, employeev1.Event]{
+		Store:    a,
+		Decider:  employee.Decider,
+		Codec:    employeev1.EventCodec{},
+		Shredder: s,
+		Clock:    clock,
+	}
+
+	tenant := "t-clock"
+	ctx := es.WithTenant(context.Background(), tenant)
+	sid := mustStream(t, tenant, "emp-clk")
+
+	// Hire on day 1 at t0.
+	if _, err := rt.Handle(ctx, sid, &employeev1.Hire{
+		EmployeeId:  "emp-clk",
+		LegalName:   "Dora Time",
+		Email:       "dora@example.com",
+		DateOfBirth: "1992-02-29",
+		Department:  "engineering",
+		InitialRole: "swe-3",
+	}); err != nil {
+		t.Fatalf("Hire: %v", err)
+	}
+
+	// Fast-forward 30 days, then promote.
+	clock.Advance(30 * 24 * time.Hour)
+	if _, err := rt.Handle(ctx, sid, &employeev1.Promote{NewRole: "swe-4"}); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+
+	envs, err := a.ReadStream(context.Background(), sid, 0)
+	if err != nil {
+		t.Fatalf("ReadStream: %v", err)
+	}
+	if len(envs) != 2 {
+		t.Fatalf("envelope count: got %d want 2", len(envs))
+	}
+	if !envs[0].OccurredAt.Equal(t0) {
+		t.Errorf("Hire OccurredAt: got %v want %v", envs[0].OccurredAt, t0)
+	}
+	want1 := t0.Add(30 * 24 * time.Hour)
+	if !envs[1].OccurredAt.Equal(want1) {
+		t.Errorf("Promote OccurredAt: got %v want %v (30 days after t0)",
+			envs[1].OccurredAt, want1)
 	}
 }
 

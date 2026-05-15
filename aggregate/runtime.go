@@ -91,6 +91,26 @@ type Runtime[S, C, E any] struct {
 	// warning or audit log entry. Other errors (tag mismatch,
 	// real KMS failures) abort Load before this callback runs.
 	OnRedacted func(redacted shred.RedactedFields)
+
+	// Clock is the source of "now" for envelope timestamps. Defaults
+	// to es.RealClock when unset. Tests inject es.NewManualClock(...)
+	// to make expiry windows, last-seen buckets, and other time-bound
+	// invariants deterministic — see cookbook 18.
+	//
+	// Only framework-side stamping goes through this clock. Domain
+	// code (Decider, Evolve) MUST NOT call time.Now() directly either;
+	// pass the timestamp in on the command if the domain needs it.
+	Clock es.Clock
+}
+
+// Now returns the current instant from the runtime's Clock, defaulting
+// to es.RealClock when not wired. Framework-side callers use this for
+// envelope timestamps; domain code receives time via commands.
+func (r *Runtime[S, C, E]) Now() time.Time {
+	if r.Clock != nil {
+		return r.Clock.Now()
+	}
+	return es.RealClock.Now()
 }
 
 // Load reads the stream, folds it via Decider.Evolve, and returns the
@@ -240,7 +260,7 @@ func (r *Runtime[S, C, E]) Handle(
 	cmd C,
 	opts ...HandleOption,
 ) (es.AppendResult, error) {
-	cfg := defaultHandleConfig()
+	cfg := defaultHandleConfig(r.Now())
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -346,13 +366,17 @@ type handleConfig struct {
 	actor         es.Actor
 }
 
-func defaultHandleConfig() handleConfig {
+// defaultHandleConfig seeds a HandleConfig with framework-managed
+// defaults. The occurredAt comes from the runtime's Clock (now) so
+// tests can swap in a ManualClock for deterministic envelope
+// timestamps; production passes RealClock.Now().
+func defaultHandleConfig(now time.Time) handleConfig {
 	cid := uuid.Must(uuid.NewV7())
 	return handleConfig{
 		commandID:     cid,
 		correlationID: cid,
 		causationID:   cid,
-		occurredAt:    time.Now().UTC(),
+		occurredAt:    now.UTC(),
 	}
 }
 
@@ -378,8 +402,9 @@ func WithCausationID(id uuid.UUID) HandleOption {
 	return func(c *handleConfig) { c.causationID = id }
 }
 
-// WithOccurredAt overrides the domain-time stamp. Defaults to
-// time.Now().UTC() at the moment Handle is invoked.
+// WithOccurredAt overrides the domain-time stamp. Defaults to the
+// runtime's Clock.Now() at the moment Handle is invoked (RealClock in
+// production, ManualClock in tests).
 func WithOccurredAt(t time.Time) HandleOption {
 	return func(c *handleConfig) { c.occurredAt = t.UTC() }
 }

@@ -11,14 +11,20 @@ import (
 )
 
 // CommandRunner is the minimal aggregate-runtime surface the bus
-// needs: append a command and load the post-Decide state. Concretely
-// satisfied by *aggregate.Runtime[S, C, E] for any E — the bus
-// deliberately does not surface E, since it never decodes events to
-// typed form (subscribers receive opaque es.Envelope and decode as
-// they choose).
+// needs: append a command, load the post-Decide state, and read the
+// runtime's clock. Concretely satisfied by *aggregate.Runtime[S, C, E]
+// for any E — the bus deliberately does not surface E, since it never
+// decodes events to typed form (subscribers receive opaque es.Envelope
+// and decode as they choose).
+//
+// Now() exists on the interface so the bus stamps DLQ rows and other
+// framework-managed timestamps through the SAME clock the aggregate
+// runtime uses for envelopes. Tests injecting a ManualClock into the
+// runtime get consistent timestamps across the whole pipeline.
 type AggregateRunner[S, C any] interface {
 	Handle(ctx context.Context, sid es.StreamID, cmd C, opts ...aggregate.HandleOption) (es.AppendResult, error)
 	Load(ctx context.Context, sid es.StreamID) (S, uint64, error)
+	Now() time.Time
 }
 
 // Workflow is the generic command handler + subscriber registry
@@ -512,7 +518,7 @@ func (b *Workflow[S, C]) onExhausted(
 				TypeURL:        env.TypeURL,
 				LastError:      lastErr.Error(),
 				Attempts:       sub.MaxRetries + 1,
-				EnqueuedAt:     time.Now().UTC(),
+				EnqueuedAt:     b.runner.Now(),
 			})
 		})
 		return err
