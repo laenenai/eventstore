@@ -68,6 +68,8 @@ needs rather than around library users.
 
 ### Hybrid (library plus official runtime)
 
-Deferred. A thin host can be added later, layered over the same library
-primitives. Until the library API is stable, building a runtime in parallel
-would constrain library design in ways that hurt both.
+Rejected. A "thin host" wrapping the library was considered as a future
+add-on, but absent concrete demand it is not on the roadmap. If a
+platform-shaped product opportunity appears with a real customer and
+real shape, that's a new ADR — not a continuation of this one. The
+library API is the deliberate commitment.

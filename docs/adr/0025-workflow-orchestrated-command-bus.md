@@ -338,8 +338,14 @@ extension.
 
 **Phase 3 (separate ADR if needed):**
 
-9. Codegen extension — typed `RegisterFor[*EventType](handler)`.
-10. Connect-go service stubs from `protoc-gen-es-go`.
+9. ~~Codegen extension — typed `RegisterFor[*EventType](handler)`.~~
+   **Rejected.** The 5-line type-switch is idiomatic Go; the runtime
+   and maintenance cost (scattered registration, type-list bookkeeping,
+   codegen drift against the sum-type set) outweighs the boilerplate
+   saving. If concrete demand surfaces — three or more separate adopter
+   teams asking for it — a new ADR can capture the shape.
+10. Connect-go service stubs from `protoc-gen-es-go`. See ADR 0025
+    Sunset § for the kept-with-criteria disposition.
 
 **Future (if it ever needs to be in-framework):**
 
