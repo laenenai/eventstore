@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package test.idspec.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/idspec/v1;idspecv1";
+
+// Test-only proto covering the per-variant identity helpers emitted
+// by the codegen plugin: sealed-interface markers (isCommand /
+// isEvent), Action() (stable per-variant proto-type-name identifier),
+// and the event-only Subject() / PIIFields() helpers tied to ADR 0010.
+//
+// Each variant isolates one aspect:
+//
+//   Commands (no Subject() / PIIFields() — those are event-only):
+//     CreateCmd  — plain command, no PII
+//     UpdateCmd  — plain command, no PII
+//
+//   Events:
+//     CreatedEv         — has subject_field + 2 PII fields → Subject()
+//                         returns subject_id, PIIFields() returns the
+//                         two field names in proto-declaration order
+//     RenamedEv         — has subject_field + 1 PII field
+//     CleanedEv         — no PII at all → no PIIFields()/Subject()
+//                         emitted (read tests assert this contract
+//                         via lack of method, not the method itself)
+//     SubjectLessEv     — has PII but no (es.v1.subject_field) → Subject()
+//                         returns "" so caller falls back to StreamID
+
+// ---- State -----------------------------------------------------------
+
+message IdState {
+  option (es.v1.aggregate) = "id";
+  string id = 1 [(es.v1.subject_field) = true];
+}
+
+// ---- Command variants (sealed-interface marker + Action only) --------
+
+message CreateCmd {
+  string id      = 1;
+  string label   = 2;
+}
+
+message UpdateCmd {
+  string id          = 1;
+  string new_label   = 2;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    CreateCmd create = 1;
+    UpdateCmd update = 2;
+  }
+}
+
+// ---- Event variants --------------------------------------------------
+
+message CreatedEv {
+  string id    = 1 [(es.v1.subject_field) = true];
+  string name  = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string email = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  // Non-PII tail; should NOT appear in PIIFields().
+  string region = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+}
+
+message RenamedEv {
+  string id       = 1 [(es.v1.subject_field) = true];
+  string new_name = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+}
+
+message CleanedEv {
+  string id     = 1 [(es.v1.subject_field) = true];
+  string reason = 2;  // PUBLIC, no PII anywhere on this variant
+}
+
+// SubjectLessEv has a PII field but no subject_field annotation —
+// codegen-emitted Subject() should return "". (Real-world example:
+// system-generated events where the stream id is the subject.)
+message SubjectLessEv {
+  string trace_id = 1;
+  string note     = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    CreatedEv     created      = 1;
+    RenamedEv     renamed      = 2;
+    CleanedEv     cleaned      = 3;
+    SubjectLessEv subject_less = 4;
+  }
+}
