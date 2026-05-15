@@ -12,6 +12,7 @@ vars:
     ./adapters/cmdworkflow/restate
     ./adapters/cmdworkflow/dbos
     ./adapters/httpedge/connect
+    ./cmd/esctl
 
   # Example modules (not published, but tested in CI to catch
   # regressions in the framework-consumer contract).

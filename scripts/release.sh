@@ -28,6 +28,7 @@ MODULES=(
   "adapters/cmdworkflow/restate"
   "adapters/cmdworkflow/dbos"
   "adapters/httpedge/connect"
+  "cmd/esctl"
 )
 
 tag_for() {

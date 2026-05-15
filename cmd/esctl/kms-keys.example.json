@@ -1,0 +1,4 @@
+{
+  "_comment": "Local-dev KMS keyfile. Copy to ../../kms-keys.json (or kms-keys.local.json — gitignored). Generate a real key with: openssl rand -base64 32. Each tenant's array is [v1, v2, ...] matching the inproc KMS rotation order. NEVER commit a real key.",
+  "default": ["REPLACE_WITH_BASE64_OF_32_RANDOM_BYTES="]
+}
