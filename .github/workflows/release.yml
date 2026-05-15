@@ -21,9 +21,8 @@ jobs:
           fetch-tags: true
           ref: main
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      # Pinned toolchain from .mise.toml — same as CI.
+      - uses: jdx/mise-action@v2
 
       - name: Configure git identity
         run: |

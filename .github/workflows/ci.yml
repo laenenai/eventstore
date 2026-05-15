@@ -38,22 +38,11 @@ jobs:
           # history that it resolves on a feature-branch checkout.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install buf
-        run: go install github.com/bufbuild/buf/cmd/buf@latest
-
-      - name: Install sqlc
-        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
-
-      - name: Install task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # mise installs every tool pinned in .mise.toml (go, buf, sqlc,
+      # task) at the exact version devs use locally. Without pinning,
+      # `task generate:check` flakes when a new sqlc release changes
+      # generated output between dev and CI environments.
+      - uses: jdx/mise-action@v2
 
       - run: task ci
 
@@ -68,10 +57,7 @@ jobs:
           fetch-tags: true
           ref: main
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
+      - uses: jdx/mise-action@v2
 
       - name: Compute next version
         id: version

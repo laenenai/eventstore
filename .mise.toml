@@ -2,10 +2,13 @@
 # Run `mise install` (or `mise i`) on a fresh checkout to install everything.
 
 [tools]
+# Pinned versions so dev environments and CI produce byte-identical
+# codegen output. Bumping a version: update here, run `mise install`,
+# `task generate`, commit the regenerated files together.
 go    = "1.25.10"
-buf   = "latest"
-sqlc  = "latest"
-task  = "latest"
+buf   = "1.65.0"
+sqlc  = "1.30.0"
+task  = "3.48.0"
 
 [env]
 # Forces go.work to be the source of truth for cross-module dev.
