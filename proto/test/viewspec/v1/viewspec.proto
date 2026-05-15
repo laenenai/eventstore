@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package test.viewspec.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/viewspec/v1;viewspecv1";
+
+// Test-only proto used to validate the codegen-emitted View(level)
+// and LogValue() methods. Covers every (data_classification ×
+// cardinality × oneof) combination that drives different emission
+// paths in proto-gen/emit_access.go.
+//
+// Hand-written tests in gen/test/viewspec/v1/{view,logvalue}_test.go
+// exercise each level and assert visibility / redaction. If a new
+// classification or cardinality is added to the framework, extend
+// this proto and add the matching test.
+
+// Inner is a nested message exercising View/LogValue recursion at
+// the same level. The "secret" field is PERSONAL so we can prove the
+// parent's View(level) gates the child's PII at every depth.
+message Inner {
+  string name   = 1;
+  string secret = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+}
+
+// ViewSpec — every annotation × cardinality combination relevant to
+// View / LogValue emission. NOT a real aggregate; no (es.v1.aggregate)
+// option. Subject is declared so we can prove subject_field is always
+// visible regardless of level.
+message ViewSpec {
+  string subject_id = 1 [(es.v1.subject_field) = true];
+
+  // ---- Singular scalars at each classification ---------------------
+  // PUBLIC by absence (UNSPECIFIED → treated as PUBLIC) and by
+  // explicit declaration — both paths matter.
+  string s_public_implicit = 10;
+  string s_public          = 11 [(es.v1.data_classification) = DATA_CLASSIFICATION_PUBLIC];
+  string s_internal        = 12 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  string s_personal        = 13 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string s_quasi           = 14 [(es.v1.data_classification) = DATA_CLASSIFICATION_QUASI_IDENTIFIER];
+  string s_sensitive       = 15 [(es.v1.data_classification) = DATA_CLASSIFICATION_SENSITIVE];
+  string s_financial       = 16 [(es.v1.data_classification) = DATA_CLASSIFICATION_FINANCIAL];
+  string s_cardholder      = 17 [(es.v1.data_classification) = DATA_CLASSIFICATION_CARDHOLDER];
+  string s_credential      = 18 [(es.v1.data_classification) = DATA_CLASSIFICATION_CREDENTIAL];
+  string s_unstructured    = 19 [(es.v1.data_classification) = DATA_CLASSIFICATION_UNSTRUCTURED];
+
+  // ---- bytes singular, PII (the live encrypt path uses bytes too) --
+  bytes b_personal = 20 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+
+  // ---- Numeric / bool / enum scalars -------------------------------
+  // Different slog renderer branches per kind.
+  int64 i_public   = 21;
+  int64 i_personal = 22 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  bool  bool_public   = 23;
+  bool  bool_personal = 24 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+
+  // ---- Repeated ----------------------------------------------------
+  repeated string r_public   = 30;
+  repeated string r_internal = 31 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  repeated string r_personal = 32 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  repeated bytes  r_b_personal = 33 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+
+  // ---- Map (values at varying classification) ----------------------
+  map<string, string> m_public   = 40;
+  map<string, string> m_personal = 41 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+
+  // ---- Singular + repeated messages — recursion contract -----------
+  Inner          s_nested = 50;
+  repeated Inner r_nested = 51;
+
+  // ---- Oneof: strictest-variant-level gating -----------------------
+  // strictestOneofLevel reduces the whole oneof to the strictest
+  // variant's threshold. Mix PUBLIC/INTERNAL/PERSONAL so:
+  //   - AccessLevelPublic   → entire oneof hidden (s_personal forces Subject)
+  //   - AccessLevelInternal → entire oneof hidden
+  //   - AccessLevelSubject  → entire oneof visible (its variant carried).
+  oneof mixed_variant {
+    string mv_public   = 60;
+    string mv_internal = 61 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+    string mv_personal = 62 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  }
+
+  // ---- Oneof all-public — no gating, always visible ----------------
+  oneof allpublic_variant {
+    string ap_one = 70;
+    string ap_two = 71;
+  }
+}
