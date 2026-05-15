@@ -457,7 +457,9 @@ func (m *Person) Clone() *Person {
 	}
 	out := &Person{}
 	out.PersonId = m.PersonId
-	out.DisplayName = m.DisplayName
+	if len(m.DisplayName) > 0 {
+		out.DisplayName = append([]byte(nil), m.DisplayName...)
+	}
 	return out
 }
 
@@ -472,7 +474,9 @@ func (m *Person) View(level es.AccessLevel) *Person {
 	out := &Person{}
 	out.PersonId = m.PersonId
 	if level >= es.AccessLevelSubject {
-		out.DisplayName = m.DisplayName
+		if len(m.DisplayName) > 0 {
+			out.DisplayName = append([]byte(nil), m.DisplayName...)
+		}
 	}
 	return out
 }
@@ -500,8 +504,12 @@ func (m *Register) Clone() *Register {
 	}
 	out := &Register{}
 	out.PersonId = m.PersonId
-	out.DisplayName = m.DisplayName
-	out.Email = m.Email
+	if len(m.DisplayName) > 0 {
+		out.DisplayName = append([]byte(nil), m.DisplayName...)
+	}
+	if len(m.Email) > 0 {
+		out.Email = append([]byte(nil), m.Email...)
+	}
 	return out
 }
 
@@ -516,10 +524,14 @@ func (m *Register) View(level es.AccessLevel) *Register {
 	out := &Register{}
 	out.PersonId = m.PersonId
 	if level >= es.AccessLevelSubject {
-		out.DisplayName = m.DisplayName
+		if len(m.DisplayName) > 0 {
+			out.DisplayName = append([]byte(nil), m.DisplayName...)
+		}
 	}
 	if level >= es.AccessLevelSubject {
-		out.Email = m.Email
+		if len(m.Email) > 0 {
+			out.Email = append([]byte(nil), m.Email...)
+		}
 	}
 	return out
 }
@@ -547,7 +559,9 @@ func (m *UpdateName) Clone() *UpdateName {
 		return nil
 	}
 	out := &UpdateName{}
-	out.NewDisplayName = m.NewDisplayName
+	if len(m.NewDisplayName) > 0 {
+		out.NewDisplayName = append([]byte(nil), m.NewDisplayName...)
+	}
 	return out
 }
 
@@ -561,7 +575,9 @@ func (m *UpdateName) View(level es.AccessLevel) *UpdateName {
 	}
 	out := &UpdateName{}
 	if level >= es.AccessLevelSubject {
-		out.NewDisplayName = m.NewDisplayName
+		if len(m.NewDisplayName) > 0 {
+			out.NewDisplayName = append([]byte(nil), m.NewDisplayName...)
+		}
 	}
 	return out
 }
@@ -588,8 +604,12 @@ func (m *Registered) Clone() *Registered {
 	}
 	out := &Registered{}
 	out.PersonId = m.PersonId
-	out.DisplayName = m.DisplayName
-	out.Email = m.Email
+	if len(m.DisplayName) > 0 {
+		out.DisplayName = append([]byte(nil), m.DisplayName...)
+	}
+	if len(m.Email) > 0 {
+		out.Email = append([]byte(nil), m.Email...)
+	}
 	out.ReferrerId = m.ReferrerId
 	return out
 }
@@ -605,10 +625,14 @@ func (m *Registered) View(level es.AccessLevel) *Registered {
 	out := &Registered{}
 	out.PersonId = m.PersonId
 	if level >= es.AccessLevelSubject {
-		out.DisplayName = m.DisplayName
+		if len(m.DisplayName) > 0 {
+			out.DisplayName = append([]byte(nil), m.DisplayName...)
+		}
 	}
 	if level >= es.AccessLevelSubject {
-		out.Email = m.Email
+		if len(m.Email) > 0 {
+			out.Email = append([]byte(nil), m.Email...)
+		}
 	}
 	if level >= es.AccessLevelInternal {
 		out.ReferrerId = m.ReferrerId
@@ -641,7 +665,9 @@ func (m *NameChanged) Clone() *NameChanged {
 	}
 	out := &NameChanged{}
 	out.PersonId = m.PersonId
-	out.NewDisplayName = m.NewDisplayName
+	if len(m.NewDisplayName) > 0 {
+		out.NewDisplayName = append([]byte(nil), m.NewDisplayName...)
+	}
 	return out
 }
 
@@ -656,7 +682,9 @@ func (m *NameChanged) View(level es.AccessLevel) *NameChanged {
 	out := &NameChanged{}
 	out.PersonId = m.PersonId
 	if level >= es.AccessLevelSubject {
-		out.NewDisplayName = m.NewDisplayName
+		if len(m.NewDisplayName) > 0 {
+			out.NewDisplayName = append([]byte(nil), m.NewDisplayName...)
+		}
 	}
 	return out
 }

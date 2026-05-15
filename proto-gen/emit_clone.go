@@ -71,13 +71,24 @@ func emitOneofClone(out *protogen.GeneratedFile, container *protogen.Message, oo
 	for _, f := range oo.Fields {
 		wrapperName := containerName + "_" + f.GoName
 		out.P("\tcase *", wrapperName, ":")
-		if f.Message != nil {
+		switch {
+		case f.Message != nil:
 			// Message variant — deep-clone the inner value.
 			out.P("\t\tif v != nil {")
 			out.P("\t\t\tout.", ooGoName, " = &", wrapperName, "{", f.GoName, ": v.", f.GoName, ".Clone()}")
 			out.P("\t\t}")
-		} else {
-			// Scalar variant — copy by value.
+		case f.Desc.Kind() == protoreflect.BytesKind:
+			// Bytes variant — []byte needs a deep copy; direct
+			// assignment aliases the backing array.
+			out.P("\t\tif v != nil {")
+			out.P("\t\t\tcp := &", wrapperName, "{}")
+			out.P("\t\t\tif len(v.", f.GoName, ") > 0 {")
+			out.P("\t\t\t\tcp.", f.GoName, " = append([]byte(nil), v.", f.GoName, "...)")
+			out.P("\t\t\t}")
+			out.P("\t\t\tout.", ooGoName, " = cp")
+			out.P("\t\t}")
+		default:
+			// Scalar variant (string/int/bool/enum/float) — copy by value.
 			out.P("\t\tif v != nil {")
 			out.P("\t\t\tout.", ooGoName, " = &", wrapperName, "{", f.GoName, ": v.", f.GoName, "}")
 			out.P("\t\t}")
@@ -110,24 +121,36 @@ func emitCloneAsSumType(out *protogen.GeneratedFile, variant *protogen.Message, 
 // emitCloneField writes the deep-copy of one field. Same shape as
 // emitFieldCopyImpl from emit_access.go but without level gating —
 // every field is copied unconditionally.
+//
+// bytes (BytesKind) is the load-bearing edge case: a proto `bytes`
+// field becomes `[]byte` in Go, so direct assignment aliases the
+// backing array. Both the singular and repeated forms need an
+// explicit append-into-fresh-slice. Strings stay safe (Go strings
+// are immutable); other scalar kinds are value types.
 func emitCloneField(out *protogen.GeneratedFile, af accessField) {
 	f := af.field
 	goName := af.goName
 	isMap := f.Desc.IsMap()
 	isRepeated := f.Desc.Cardinality() == protoreflect.Repeated && !isMap
 	isMessage := f.Message != nil && !isMap
+	isBytes := f.Desc.Kind() == protoreflect.BytesKind
 
 	switch {
 	case isMap:
-		// map<K, V>: recurse values when message-typed, shallow-copy
-		// when scalar-typed. Keys are always scalar.
+		// map<K, V>: recurse values when message-typed; for bytes
+		// values, deep-copy each []byte; otherwise shallow.
 		mapVal := f.Message.Fields[1] // entry: key=0, value=1
 		out.P("\tif len(m.", goName, ") > 0 {")
 		out.P("\t\tout.", goName, " = make(", qualifiedMapType(out, f), ", len(m.", goName, "))")
 		out.P("\t\tfor k, v := range m.", goName, " {")
-		if mapVal.Message != nil {
+		switch {
+		case mapVal.Message != nil:
 			out.P("\t\t\tout.", goName, "[k] = v.Clone()")
-		} else {
+		case mapVal.Desc.Kind() == protoreflect.BytesKind:
+			out.P("\t\t\tif v != nil {")
+			out.P("\t\t\t\tout.", goName, "[k] = append([]byte(nil), v...)")
+			out.P("\t\t\t}")
+		default:
 			out.P("\t\t\tout.", goName, "[k] = v")
 		}
 		out.P("\t\t}")
@@ -141,6 +164,16 @@ func emitCloneField(out *protogen.GeneratedFile, af accessField) {
 		out.P("\t\t\tout.", goName, "[i] = e.Clone()")
 		out.P("\t\t}")
 		out.P("\t}")
+	case isRepeated && isBytes:
+		// [][]byte — outer slice cloned + each inner []byte deep-copied.
+		out.P("\tif len(m.", goName, ") > 0 {")
+		out.P("\t\tout.", goName, " = make([][]byte, len(m.", goName, "))")
+		out.P("\t\tfor i, b := range m.", goName, " {")
+		out.P("\t\t\tif b != nil {")
+		out.P("\t\t\t\tout.", goName, "[i] = append([]byte(nil), b...)")
+		out.P("\t\t\t}")
+		out.P("\t\t}")
+		out.P("\t}")
 	case isRepeated:
 		// []scalar — copy the slice contents so the clone owns its own backing array.
 		out.P("\tif len(m.", goName, ") > 0 {")
@@ -149,8 +182,17 @@ func emitCloneField(out *protogen.GeneratedFile, af accessField) {
 	case isMessage:
 		// Singular message — recurse.
 		out.P("\tout.", goName, " = m.", goName, ".Clone()")
+	case isBytes:
+		// Singular []byte — deep copy. Preserves nil-ness: a nil source
+		// produces a nil clone field; an empty (len 0, non-nil) source
+		// produces a nil clone field, which is equivalent on the wire
+		// (proto3 emits neither).
+		out.P("\tif len(m.", goName, ") > 0 {")
+		out.P("\t\tout.", goName, " = append([]byte(nil), m.", goName, "...)")
+		out.P("\t}")
 	default:
-		// Scalar — direct assignment (immutable).
+		// Scalar (string/int/bool/enum/float) — direct assignment.
+		// Strings are immutable in Go; numeric/bool/enum are value types.
 		out.P("\tout.", goName, " = m.", goName)
 	}
 }

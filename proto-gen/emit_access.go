@@ -160,13 +160,17 @@ func emitViewMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 		emitViewField(out, af, accessLvlSubject, accessLvlInternal, accessLvlCompliance, accessLvlOperator)
 	}
 
-	// Oneofs: copy the oneof field (Go interface) as a single unit.
-	// Per-variant classification differences are conservatively
-	// reduced to the strictest variant's threshold — if ANY variant
-	// requires Subject-level view, the entire oneof is hidden below
-	// that level. This is closed-by-default and easy to reason about;
-	// callers that need finer-grained filtering can View(level) the
-	// individual variant after a type-switch.
+	// Oneofs: type-switch over every variant and deep-copy each one so
+	// the View result owns its data. Per-variant classification
+	// differences are conservatively reduced to the strictest variant's
+	// threshold — if ANY variant requires Subject-level view, the
+	// entire oneof is hidden below that level. Callers that need
+	// finer-grained filtering can View(level) the individual variant
+	// after a type-switch.
+	//
+	// The deep copy is load-bearing: a direct `out.X = m.X` would copy
+	// the Go interface header, leaving the wrapper struct (and any
+	// []byte / *Message it holds) aliased between source and clone.
 	for _, oo := range m.Oneofs {
 		if oo.Desc.IsSynthetic() {
 			continue
@@ -174,11 +178,11 @@ func emitViewMethod(out *protogen.GeneratedFile, m *protogen.Message) {
 		threshold := strictestOneofLevel(oo,
 			accessLvlSubject, accessLvlInternal, accessLvlCompliance, accessLvlOperator)
 		if threshold == "" {
-			out.P("\tout.", oo.GoName, " = m.", oo.GoName)
+			emitOneofView(out, m, oo, "\t")
 			continue
 		}
 		out.P("\tif level >= ", threshold, " {")
-		out.P("\t\tout.", oo.GoName, " = m.", oo.GoName)
+		emitOneofView(out, m, oo, "\t\t")
 		out.P("\t}")
 	}
 
@@ -238,6 +242,49 @@ func strictestOneofLevel(oo *protogen.Oneof,
 	default:
 		return operator
 	}
+}
+
+// emitOneofView writes a type-switch over an oneof's wrapper structs
+// and deep-copies each variant's contents into out. Mirrors
+// emitOneofClone in emit_clone.go but recurses through .View(level)
+// for message variants so per-variant classification gates are
+// honored.
+//
+// indent is the leading whitespace (tabs) for each emitted line —
+// "\t" for unconditional copy, "\t\t" when nested under an
+// `if level >= threshold` block.
+func emitOneofView(out *protogen.GeneratedFile, container *protogen.Message, oo *protogen.Oneof, indent string) {
+	containerName := container.GoIdent.GoName
+	ooGoName := oo.GoName
+
+	out.P(indent, "switch v := m.", ooGoName, ".(type) {")
+	for _, f := range oo.Fields {
+		wrapperName := containerName + "_" + f.GoName
+		out.P(indent, "case *", wrapperName, ":")
+		switch {
+		case f.Message != nil:
+			// Message variant — recurse View(level) so nested
+			// classification gates apply.
+			out.P(indent, "\tif v != nil {")
+			out.P(indent, "\t\tout.", ooGoName, " = &", wrapperName, "{", f.GoName, ": v.", f.GoName, ".View(level)}")
+			out.P(indent, "\t}")
+		case f.Desc.Kind() == protoreflect.BytesKind:
+			// Bytes variant — []byte needs explicit deep copy.
+			out.P(indent, "\tif v != nil {")
+			out.P(indent, "\t\tcp := &", wrapperName, "{}")
+			out.P(indent, "\t\tif len(v.", f.GoName, ") > 0 {")
+			out.P(indent, "\t\t\tcp.", f.GoName, " = append([]byte(nil), v.", f.GoName, "...)")
+			out.P(indent, "\t\t}")
+			out.P(indent, "\t\tout.", ooGoName, " = cp")
+			out.P(indent, "\t}")
+		default:
+			// Scalar (string/int/bool/enum/float) — copy by value.
+			out.P(indent, "\tif v != nil {")
+			out.P(indent, "\t\tout.", ooGoName, " = &", wrapperName, "{", f.GoName, ": v.", f.GoName, "}")
+			out.P(indent, "\t}")
+		}
+	}
+	out.P(indent, "}")
 }
 
 // emitViewField writes one field's View-copy logic. Branches on:
@@ -320,28 +367,30 @@ func emitFieldCopyIndented(out *protogen.GeneratedFile, dst, src, goName string,
 func emitFieldCopyImpl(out *protogen.GeneratedFile, indent, dst, src, goName string,
 	f *protogen.Field, isMap, isRepeated, isMessage bool,
 ) {
+	// bytes (BytesKind) needs explicit deep-copy: a proto `bytes` field
+	// is `[]byte` in Go, so direct assignment aliases the backing array
+	// and View would leak mutations into the source. Both singular and
+	// repeated bytes need it; map<K, bytes> too.
+	isBytes := f.Desc.Kind() == protoreflect.BytesKind
+
 	switch {
 	case isMap:
-		// map<K, V>: shallow copy keys, recurse values when message-typed.
-		// MapValue's Message is nil for scalar-valued maps; we copy as-is.
 		mapVal := f.Message.Fields[1] // entry: key=0, value=1
-		if mapVal.Message != nil {
-			// Map of messages — recurse each value via View(level).
-			out.P(indent, "if len(", src, ".", goName, ") > 0 {")
-			out.P(indent, "\t", dst, ".", goName, " = make(", qualifiedMapType(out, f), ", len(", src, ".", goName, "))")
-			out.P(indent, "\tfor k, v := range ", src, ".", goName, " {")
+		out.P(indent, "if len(", src, ".", goName, ") > 0 {")
+		out.P(indent, "\t", dst, ".", goName, " = make(", qualifiedMapType(out, f), ", len(", src, ".", goName, "))")
+		out.P(indent, "\tfor k, v := range ", src, ".", goName, " {")
+		switch {
+		case mapVal.Message != nil:
 			out.P(indent, "\t\t", dst, ".", goName, "[k] = v.View(level)")
-			out.P(indent, "\t}")
-			out.P(indent, "}")
-		} else {
-			// Scalar-valued map — shallow copy.
-			out.P(indent, "if len(", src, ".", goName, ") > 0 {")
-			out.P(indent, "\t", dst, ".", goName, " = make(", qualifiedMapType(out, f), ", len(", src, ".", goName, "))")
-			out.P(indent, "\tfor k, v := range ", src, ".", goName, " {")
+		case mapVal.Desc.Kind() == protoreflect.BytesKind:
+			out.P(indent, "\t\tif v != nil {")
+			out.P(indent, "\t\t\t", dst, ".", goName, "[k] = append([]byte(nil), v...)")
+			out.P(indent, "\t\t}")
+		default:
 			out.P(indent, "\t\t", dst, ".", goName, "[k] = v")
-			out.P(indent, "\t}")
-			out.P(indent, "}")
 		}
+		out.P(indent, "\t}")
+		out.P(indent, "}")
 	case isRepeated && isMessage:
 		// []*Inner — recurse per element.
 		elemIdent := out.QualifiedGoIdent(f.Message.GoIdent)
@@ -349,6 +398,16 @@ func emitFieldCopyImpl(out *protogen.GeneratedFile, indent, dst, src, goName str
 		out.P(indent, "\t", dst, ".", goName, " = make([]*", elemIdent, ", len(", src, ".", goName, "))")
 		out.P(indent, "\tfor i, e := range ", src, ".", goName, " {")
 		out.P(indent, "\t\t", dst, ".", goName, "[i] = e.View(level)")
+		out.P(indent, "\t}")
+		out.P(indent, "}")
+	case isRepeated && isBytes:
+		// [][]byte — outer slice cloned + each inner []byte deep-copied.
+		out.P(indent, "if len(", src, ".", goName, ") > 0 {")
+		out.P(indent, "\t", dst, ".", goName, " = make([][]byte, len(", src, ".", goName, "))")
+		out.P(indent, "\tfor i, b := range ", src, ".", goName, " {")
+		out.P(indent, "\t\tif b != nil {")
+		out.P(indent, "\t\t\t", dst, ".", goName, "[i] = append([]byte(nil), b...)")
+		out.P(indent, "\t\t}")
 		out.P(indent, "\t}")
 		out.P(indent, "}")
 	case isRepeated:
@@ -360,8 +419,13 @@ func emitFieldCopyImpl(out *protogen.GeneratedFile, indent, dst, src, goName str
 	case isMessage:
 		// Singular message — recurse.
 		out.P(indent, dst, ".", goName, " = ", src, ".", goName, ".View(level)")
+	case isBytes:
+		// Singular []byte — deep copy.
+		out.P(indent, "if len(", src, ".", goName, ") > 0 {")
+		out.P(indent, "\t", dst, ".", goName, " = append([]byte(nil), ", src, ".", goName, "...)")
+		out.P(indent, "}")
 	default:
-		// Scalar — direct assignment.
+		// Scalar (string/int/bool/enum/float) — direct assignment.
 		out.P(indent, dst, ".", goName, " = ", src, ".", goName)
 	}
 }

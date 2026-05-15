@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package test.clonespec.v1;
+
+option go_package = "github.com/laenenai/eventstore/gen/test/clonespec/v1;clonespecv1";
+
+// Test-only proto used to validate that the codegen-emitted Clone()
+// method produces a deep copy in every cardinality × kind combination.
+//
+// Hand-written tests in gen/test/clonespec/v1/clone_test.go mutate the
+// clone and assert the original is unchanged. The test surface is
+// kept in one place so future codegen changes can be regression-tested
+// without touching domain protos.
+//
+// No es.v1 options are used — Clone is emitted unconditionally for
+// every emittable message (see proto-gen/main.go § emitAccessHelpers).
+
+message Inner {
+  string name  = 1;
+  bytes  blob  = 2;
+  int64  value = 3;
+}
+
+message Spec {
+  // ---- Singular scalars (immutable / value types) -----------------------
+  string s_string = 1;
+  int64  s_int    = 2;
+  bool   s_bool   = 3;
+  double s_float  = 4;
+
+  // ---- Singular bytes — the bug-prone case (Go []byte is a slice) -------
+  bytes s_bytes = 10;
+
+  // ---- Singular message — recursive clone ------------------------------
+  Inner s_msg = 20;
+
+  // ---- Repeated scalars ------------------------------------------------
+  repeated string r_strings = 30;
+  repeated int64  r_ints    = 31;
+
+  // ---- Repeated bytes ([][]byte; inner slices also need copying) -------
+  repeated bytes r_bytes = 40;
+
+  // ---- Repeated messages -----------------------------------------------
+  repeated Inner r_msgs = 50;
+
+  // ---- Maps -----------------------------------------------------------
+  map<string, string> m_string  = 60;
+  map<string, int64>  m_int     = 61;
+  map<string, bytes>  m_bytes   = 62;  // value is []byte — needs copy
+  map<string, Inner>  m_msg     = 63;  // recursive clone
+
+  // ---- Oneof with mixed kinds -----------------------------------------
+  oneof variant {
+    string o_str   = 70;
+    bytes  o_bytes = 71;
+    Inner  o_msg   = 72;
+  }
+}

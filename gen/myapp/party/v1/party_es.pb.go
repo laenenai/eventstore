@@ -1006,7 +1006,20 @@ func (m *PendingChange) View(level es.AccessLevel) *PendingChange {
 		out.ProposedBy = m.ProposedBy
 	}
 	out.Reason = m.Reason
-	out.Proposed = m.Proposed
+	switch v := m.Proposed.(type) {
+	case *PendingChange_Name:
+		if v != nil {
+			out.Proposed = &PendingChange_Name{Name: v.Name.View(level)}
+		}
+	case *PendingChange_Email:
+		if v != nil {
+			out.Proposed = &PendingChange_Email{Email: v.Email}
+		}
+	case *PendingChange_DateOfBirth:
+		if v != nil {
+			out.Proposed = &PendingChange_DateOfBirth{DateOfBirth: v.DateOfBirth}
+		}
+	}
 	return out
 }
 
