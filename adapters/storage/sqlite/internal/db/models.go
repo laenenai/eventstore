@@ -65,15 +65,6 @@ type ProjectionDlq struct {
 	EnqueuedAt     string
 }
 
-type Snapshot struct {
-	TenantID           string
-	StreamID           string
-	Version            int64
-	StateSchemaVersion int64
-	State              []byte
-	CreatedAt          string
-}
-
 type StateCache struct {
 	TenantID           string
 	StreamID           string
