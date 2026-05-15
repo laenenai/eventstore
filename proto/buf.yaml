@@ -8,6 +8,15 @@ lint:
   use:
     - STANDARD
     - PACKAGE_VERSION_SUFFIX
+  # The framework's codegen reads (es.v1.projection).events as
+  # fully-qualified type-name strings, not as direct proto references.
+  # buf lint's IMPORT_USED check doesn't see this and flags the imports
+  # as unused — but protoc-gen-es-go fails without them, so the rule
+  # is wrong for these specific files.
+  ignore_only:
+    IMPORT_USED:
+      - myapp/customerview/v1/customerview.proto
+      - test/projection/v1/projection.proto
 
 breaking:
   use:

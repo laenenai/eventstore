@@ -10,6 +10,7 @@ buf   = "1.65.0"
 sqlc  = "1.30.0"
 task  = "3.48.0"
 
-[env]
-# Forces go.work to be the source of truth for cross-module dev.
-GOFLAGS = "-mod=mod"
+# No [env] block. Earlier versions of this file set GOFLAGS=-mod=mod
+# but that's incompatible with workspace mode in Go 1.25+ ("-mod may
+# only be set to readonly or vendor when in workspace mode"). go.work
+# is picked up automatically when it exists — no env flag needed.

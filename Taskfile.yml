@@ -80,7 +80,9 @@ tasks:
     desc: Run buf lint and buf breaking
     cmds:
       - cd proto && buf lint
-      - cd proto && buf breaking --against '.git#branch=main'
+      # buf breaking resolves git refs relative to its working dir, so
+      # point at the parent's .git from inside proto/.
+      - cd proto && buf breaking --against '../.git#branch=main,subdir=proto'
 
   ci:
     desc: CI gate — vet, tests, examples, generated-code freshness, proto lint
