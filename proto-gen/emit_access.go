@@ -380,6 +380,8 @@ func emitFieldCopyImpl(out *protogen.GeneratedFile, indent, dst, src, goName str
 		out.P(indent, "\t", dst, ".", goName, " = make(", qualifiedMapType(out, f), ", len(", src, ".", goName, "))")
 		out.P(indent, "\tfor k, v := range ", src, ".", goName, " {")
 		switch {
+		case mapVal.Message != nil && isWellKnownType(mapVal.Message):
+			out.P(indent, "\t\t", dst, ".", goName, "[k] = v")
 		case mapVal.Message != nil:
 			out.P(indent, "\t\t", dst, ".", goName, "[k] = v.View(level)")
 		case mapVal.Desc.Kind() == protoreflect.BytesKind:
@@ -392,13 +394,17 @@ func emitFieldCopyImpl(out *protogen.GeneratedFile, indent, dst, src, goName str
 		out.P(indent, "\t}")
 		out.P(indent, "}")
 	case isRepeated && isMessage:
-		// []*Inner — recurse per element.
+		// []*Inner — recurse per element. WKTs shallow-copied.
 		elemIdent := out.QualifiedGoIdent(f.Message.GoIdent)
 		out.P(indent, "if len(", src, ".", goName, ") > 0 {")
 		out.P(indent, "\t", dst, ".", goName, " = make([]*", elemIdent, ", len(", src, ".", goName, "))")
-		out.P(indent, "\tfor i, e := range ", src, ".", goName, " {")
-		out.P(indent, "\t\t", dst, ".", goName, "[i] = e.View(level)")
-		out.P(indent, "\t}")
+		if isWellKnownType(f.Message) {
+			out.P(indent, "\tcopy(", dst, ".", goName, ", ", src, ".", goName, ")")
+		} else {
+			out.P(indent, "\tfor i, e := range ", src, ".", goName, " {")
+			out.P(indent, "\t\t", dst, ".", goName, "[i] = e.View(level)")
+			out.P(indent, "\t}")
+		}
 		out.P(indent, "}")
 	case isRepeated && isBytes:
 		// [][]byte — outer slice cloned + each inner []byte deep-copied.
@@ -417,8 +423,13 @@ func emitFieldCopyImpl(out *protogen.GeneratedFile, indent, dst, src, goName str
 		out.P(indent, "\t", dst, ".", goName, " = append(", dst, ".", goName, "[:0:0], ", src, ".", goName, "...)")
 		out.P(indent, "}")
 	case isMessage:
-		// Singular message — recurse.
-		out.P(indent, dst, ".", goName, " = ", src, ".", goName, ".View(level)")
+		if isWellKnownType(f.Message) {
+			// WKT — no generated View(). Shallow pointer copy.
+			out.P(indent, dst, ".", goName, " = ", src, ".", goName)
+		} else {
+			// Singular framework-generated message — recurse.
+			out.P(indent, dst, ".", goName, " = ", src, ".", goName, ".View(level)")
+		}
 	case isBytes:
 		// Singular []byte — deep copy.
 		out.P(indent, "if len(", src, ".", goName, ") > 0 {")

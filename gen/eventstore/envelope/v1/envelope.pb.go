@@ -121,8 +121,21 @@ type Envelope struct {
 	// Per-field key references used by crypto-shredding. NULL when no
 	// field is encrypted. JSONB in storage (ADR 0010).
 	EncryptionKeyRefs []byte `protobuf:"bytes,21,opt,name=encryption_key_refs,json=encryptionKeyRefs,proto3" json:"encryption_key_refs,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// ---- Tamper-evidence (ADR 0028) ----
+	//
+	// Per-stream SHA-256 hash chain. Computed by the storage adapter at
+	// append time over the deterministic proto serialization of the
+	// envelope with `hash` and `prev_hash` cleared, prepended with
+	// prev_hash. Auditors recompute and compare via
+	// es.VerifyStreamChain.
+	//
+	// Excluded from hash input — these would chase themselves. The
+	// remainder of the envelope (including payload + encryption_key_refs)
+	// is included.
+	Hash          []byte `protobuf:"bytes,22,opt,name=hash,proto3" json:"hash,omitempty"`
+	PrevHash      []byte `protobuf:"bytes,23,opt,name=prev_hash,json=prevHash,proto3" json:"prev_hash,omitempty"` // 32 zero bytes for the genesis event (version 1).
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Envelope) Reset() {
@@ -260,6 +273,20 @@ func (x *Envelope) GetEncryptionKeyRefs() []byte {
 	return nil
 }
 
+func (x *Envelope) GetHash() []byte {
+	if x != nil {
+		return x.Hash
+	}
+	return nil
+}
+
+func (x *Envelope) GetPrevHash() []byte {
+	if x != nil {
+		return x.PrevHash
+	}
+	return nil
+}
+
 // Actor describes who or what initiated an action. Stored as proto
 // bytes on the events row; the actor.principal denormalization is
 // indexed separately for audit queries.
@@ -351,7 +378,7 @@ var File_eventstore_envelope_v1_envelope_proto protoreflect.FileDescriptor
 
 const file_eventstore_envelope_v1_envelope_proto_rawDesc = "" +
 	"\n" +
-	"%eventstore/envelope/v1/envelope.proto\x12\x16eventstore.envelope.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc6\x04\n" +
+	"%eventstore/envelope/v1/envelope.proto\x12\x16eventstore.envelope.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf7\x04\n" +
 	"\bEnvelope\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1b\n" +
@@ -371,7 +398,9 @@ const file_eventstore_envelope_v1_envelope_proto_rawDesc = "" +
 	"command_id\x18\f \x01(\tR\tcommandId\x123\n" +
 	"\x05actor\x18\r \x01(\v2\x1d.eventstore.envelope.v1.ActorR\x05actor\x12\x18\n" +
 	"\apayload\x18\x14 \x01(\fR\apayload\x12.\n" +
-	"\x13encryption_key_refs\x18\x15 \x01(\fR\x11encryptionKeyRefs\"\x91\x03\n" +
+	"\x13encryption_key_refs\x18\x15 \x01(\fR\x11encryptionKeyRefs\x12\x12\n" +
+	"\x04hash\x18\x16 \x01(\fR\x04hash\x12\x1b\n" +
+	"\tprev_hash\x18\x17 \x01(\fR\bprevHash\"\x91\x03\n" +
 	"\x05Actor\x126\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\".eventstore.envelope.v1.Actor.KindR\x04kind\x12\x1c\n" +
 	"\tprincipal\x18\x02 \x01(\tR\tprincipal\x12 \n" +

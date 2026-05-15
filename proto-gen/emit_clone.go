@@ -118,6 +118,28 @@ func emitCloneAsSumType(out *protogen.GeneratedFile, variant *protogen.Message, 
 	out.P("func (m *", mName, ") CloneSum() ", sumIface, " { return m.Clone() }")
 }
 
+// isWellKnownType reports whether a message is one of protobuf's
+// google.protobuf.* Well-Known Types (Timestamp, Duration, Any,
+// Struct, FieldMask, Value, ListValue, NullValue, Empty, wrappers).
+// WKTs do NOT have framework-emitted Clone/View/LogValue methods —
+// they're declared in the standard protobuf-go library. Codegen
+// recursion has to special-case them: shallow pointer copy for the
+// effectively-immutable ones (Timestamp, Duration, wrappers), or
+// proto.Clone for the mutable ones (Any, Struct, Value, etc.).
+//
+// For simplicity we shallow-copy all WKTs. Timestamp/Duration are
+// immutable in practice (the Go struct has Seconds/Nanos as plain
+// fields; nothing the framework hands out mutates them). If a future
+// caller mutates a Timestamp on a Cloned message, both clone and
+// source see the change — but proto.Clone has the same caveat
+// against deliberate field-level mutation of WKTs in practice.
+func isWellKnownType(m *protogen.Message) bool {
+	if m == nil || m.Desc == nil {
+		return false
+	}
+	return string(m.Desc.ParentFile().Package()) == "google.protobuf"
+}
+
 // emitCloneField writes the deep-copy of one field. Same shape as
 // emitFieldCopyImpl from emit_access.go but without level gating —
 // every field is copied unconditionally.
@@ -156,13 +178,18 @@ func emitCloneField(out *protogen.GeneratedFile, af accessField) {
 		out.P("\t\t}")
 		out.P("\t}")
 	case isRepeated && isMessage:
-		// []*Inner — recurse per element.
+		// []*Inner — recurse per element. WKTs shallow-copied (no
+		// Clone() method).
 		elemIdent := out.QualifiedGoIdent(f.Message.GoIdent)
 		out.P("\tif len(m.", goName, ") > 0 {")
 		out.P("\t\tout.", goName, " = make([]*", elemIdent, ", len(m.", goName, "))")
-		out.P("\t\tfor i, e := range m.", goName, " {")
-		out.P("\t\t\tout.", goName, "[i] = e.Clone()")
-		out.P("\t\t}")
+		if isWellKnownType(f.Message) {
+			out.P("\t\tcopy(out.", goName, ", m.", goName, ")")
+		} else {
+			out.P("\t\tfor i, e := range m.", goName, " {")
+			out.P("\t\t\tout.", goName, "[i] = e.Clone()")
+			out.P("\t\t}")
+		}
 		out.P("\t}")
 	case isRepeated && isBytes:
 		// [][]byte — outer slice cloned + each inner []byte deep-copied.
@@ -180,8 +207,15 @@ func emitCloneField(out *protogen.GeneratedFile, af accessField) {
 		out.P("\t\tout.", goName, " = append(out.", goName, "[:0:0], m.", goName, "...)")
 		out.P("\t}")
 	case isMessage:
-		// Singular message — recurse.
-		out.P("\tout.", goName, " = m.", goName, ".Clone()")
+		if isWellKnownType(f.Message) {
+			// WKT (Timestamp, Duration, etc.) — no generated Clone().
+			// Shallow pointer assignment. See isWellKnownType for the
+			// safety argument.
+			out.P("\tout.", goName, " = m.", goName)
+		} else {
+			// Singular framework-generated message — recurse.
+			out.P("\tout.", goName, " = m.", goName, ".Clone()")
+		}
 	case isBytes:
 		// Singular []byte — deep copy. Preserves nil-ness: a nil source
 		// produces a nil clone field; an empty (len 0, non-nil) source
