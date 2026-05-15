@@ -36,7 +36,9 @@ INSERT INTO events (
     actor_principal,
     payload,
     payload_json,
-    encryption_key_refs
+    encryption_key_refs,
+    hash,
+    prev_hash
 ) VALUES (
     @event_id,
     @tenant_id,
@@ -53,9 +55,19 @@ INSERT INTO events (
     @actor_principal,
     @payload,
     @payload_json,
-    @encryption_key_refs
+    @encryption_key_refs,
+    @hash,
+    @prev_hash
 )
 RETURNING global_position, recorded_at;
+
+-- name: LastStreamHash :one
+-- Returns the hash of the most recent event in a stream, used to
+-- chain the next append. Empty result for streams with no events.
+SELECT hash FROM events
+WHERE tenant_id = @tenant_id AND stream_id = @stream_id
+ORDER BY version DESC
+LIMIT 1;
 
 -- name: InsertOutbox :exec
 -- Insert the outbox row for an event. The drain process polls

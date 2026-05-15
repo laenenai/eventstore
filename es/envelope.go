@@ -37,4 +37,11 @@ type Envelope struct {
 	Payload     []byte // canonical proto bytes
 	PayloadJSON []byte // optional ops sidecar; nil when not enabled or shredded
 	KeyRefs     []byte // crypto-shredding per-field key references; nil when no field is encrypted
+
+	// Tamper-evidence (ADR 0028). Computed by the storage adapter at
+	// append time. Hash is SHA-256 over the deterministic proto
+	// serialization of this envelope with Hash and PrevHash cleared,
+	// prepended with PrevHash. Verify via VerifyStreamChain.
+	Hash     []byte // 32 bytes; empty pre-append, populated on Append/Read.
+	PrevHash []byte // 32 zero bytes for version 1; predecessor's Hash otherwise.
 }

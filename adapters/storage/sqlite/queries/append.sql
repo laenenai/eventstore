@@ -30,8 +30,18 @@ INSERT INTO events (
     actor_principal,
     payload,
     payload_json,
-    encryption_key_refs
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    encryption_key_refs,
+    hash,
+    prev_hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: LastStreamHash :one
+-- Returns the hash of the most recent event in a stream, used to
+-- chain the next append. Empty result for streams with no events.
+SELECT hash FROM events
+WHERE tenant_id = ? AND stream_id = ?
+ORDER BY version DESC
+LIMIT 1;
 
 -- name: InsertOutbox :exec
 INSERT INTO outbox (tenant_id, global_position, event_id)

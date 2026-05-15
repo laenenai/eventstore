@@ -38,6 +38,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0025 | [Workflow-Orchestrated Command Bus](./0025-workflow-orchestrated-command-bus.md)        | Accepted (Phase 1: framework + inproc) |
 | 0026 | [Workflow Adapters — Restate and DBOS](./0026-workflow-adapters.md)                     | Accepted (Phase 2a–2d) |
 | 0027 | [Data Governance Model — Classification, Access Levels, Codegen](./0027-data-governance-model.md) | Accepted |
+| 0028 | [Tamper-Evident Hash Chain](./0028-tamper-evident-chain.md)                             | Accepted   |
 
 ## Conventions
 

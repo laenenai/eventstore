@@ -73,6 +73,20 @@ message Envelope {
   // Per-field key references used by crypto-shredding. NULL when no
   // field is encrypted. JSONB in storage (ADR 0010).
   bytes encryption_key_refs = 21;
+
+  // ---- Tamper-evidence (ADR 0028) ----
+  //
+  // Per-stream SHA-256 hash chain. Computed by the storage adapter at
+  // append time over the deterministic proto serialization of the
+  // envelope with `hash` and `prev_hash` cleared, prepended with
+  // prev_hash. Auditors recompute and compare via
+  // es.VerifyStreamChain.
+  //
+  // Excluded from hash input — these would chase themselves. The
+  // remainder of the envelope (including payload + encryption_key_refs)
+  // is included.
+  bytes hash      = 22;
+  bytes prev_hash = 23;  // 32 zero bytes for the genesis event (version 1).
 }
 
 // Actor describes who or what initiated an action. Stored as proto

@@ -15,6 +15,7 @@ sql:
       - migrations/00009_state_cache_schema_version.sql
       - migrations/00011_state_stream_subscribers.sql
       - migrations/00012_subscriber_dlq.sql
+      - migrations/00013_tamper_evident_chain.sql
     queries: queries/
     gen:
       go:
