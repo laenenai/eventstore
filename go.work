@@ -8,6 +8,7 @@ use (
 	./adapters/httpedge/connect
 	./adapters/storage/postgres
 	./adapters/storage/sqlite
+	./cmd/esctl
 	./examples/cmdworkflow
 	./examples/customerview
 	./examples/employee

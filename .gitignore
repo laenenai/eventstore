@@ -10,6 +10,9 @@
 coverage.txt
 *.prof
 
+# Env vars
+.env
+
 # IDE
 .idea/
 .vscode/
@@ -29,3 +32,5 @@ vendor/
 
 # Claude Code tooling (sub-agent worktrees, etc.)
 .claude/
+kms-keys.json
+kms-keys.local.json
