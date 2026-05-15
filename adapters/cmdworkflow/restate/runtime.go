@@ -3,7 +3,6 @@ package restate
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	restatesdk "github.com/restatedev/sdk-go"
 
@@ -165,16 +164,14 @@ func (f errFuture) Wait() ([]byte, error) { return nil, f.err }
 // primitive sends a typed payload to a named handler, not an
 // arbitrary Go closure.
 //
-// Phase 2a ships a simple variant: Spawn invokes fn synchronously on
-// a goroutine, returning immediately. Restate's durability is NOT
-// engaged — the spawned work is best-effort within the process. For
-// real durable async fan-out, the application registers per-async-
-// subscriber Restate services and the framework's Async dispatcher
-// uses ServiceSend directly (Phase 2c codegen wires this).
-//
-// Until codegen lands, applications that need durable async fan-out
-// should use Sync subscribers (which DO go through Run) until the
-// per-subscriber ServiceSend codegen is available.
+// The simple variant: Spawn invokes fn on a goroutine and returns
+// immediately. Restate's durability is NOT engaged at this layer —
+// the spawned work is best-effort within the process. Durable
+// async fan-out is provided by the codegen-emitted AsyncDispatch
+// handler in `adapters/cmdworkflow/restate/gen/<aggregate>/...`
+// (see `runtime=restate` mode in `proto-gen/main.go`); the
+// framework's `cmdworkflow.Workflow.SetAsyncSend` wires the codegen
+// service's `sendAsync` to issue durable `ServiceSend` calls.
 func (r *Runtime) Spawn(
 	ctx context.Context,
 	name string,
@@ -188,8 +185,10 @@ func (r *Runtime) Spawn(
 		// Best-effort fire-and-forget. The framework's CommandBus
 		// applies the subscriber's retry/exhausted policy inside fn,
 		// so even non-durable Spawn is correct under happy-path
-		// semantics. ADR 0026 § 7 documents the Phase 2 limitation.
-		_ = rc // suppress unused; we keep the handle for future codegen-driven ServiceSend
+		// semantics. Durable async fan-out goes through the codegen-
+		// emitted AsyncDispatch handler (see runtime=restate mode);
+		// this Spawn is for cases where the codegen path is not wired.
+		_ = rc // handle retained for symmetry with sendAsync's FromContext path
 		_ = fn(ctx)
 	}()
 	return nil
@@ -223,7 +222,3 @@ func (r *Runtime) resolvedSpawnHandler() string {
 	return r.SpawnHandler
 }
 
-// unusedPrintReferenceToAvoidImportTrim is a no-op to silence the
-// unused-import warning until Phase 2c wires the fmt-using
-// codegen helpers in.
-var _ = fmt.Sprint
