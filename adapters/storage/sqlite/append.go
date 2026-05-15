@@ -69,6 +69,21 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 		now := time.Now().UTC()
 		recordedAt := formatTime(now)
 
+		// Tamper-evident chain (ADR 0028). Read the predecessor's hash
+		// in-tx so a concurrent appender on the same stream — blocked
+		// by SQLite's writer lock — can't slip an event between the
+		// read and our writes. New streams start from ZeroHash.
+		prevHash, err := q.LastStreamHash(ctx, db.LastStreamHashParams{
+			TenantID: p.StreamID.Tenant,
+			StreamID: canonical,
+		})
+		if err != nil && err != sql.ErrNoRows {
+			return fmt.Errorf("read last hash: %w", err)
+		}
+		if len(prevHash) == 0 {
+			prevHash = es.ZeroHash
+		}
+
 		var startPos, endPos int64
 		for i, ev := range p.Events {
 			actorStr, err := encodeActor(ev.Actor)
@@ -86,11 +101,35 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 				keyRefs = &s
 			}
 
+			// Compute this event's chain hash. Build the minimal envelope
+			// shape that ComputeChainHash hashes over (excludes commit-
+			// time fields + the hash fields themselves; see ADR 0028 § 2).
+			version := uint64(int64(p.ExpectedVersion) + int64(i) + 1)
+			chainEnv := es.Envelope{
+				EventID:       ev.EventID,
+				TenantID:      p.StreamID.Tenant,
+				StreamID:      p.StreamID,
+				Version:       version,
+				TypeURL:       ev.TypeURL,
+				SchemaVersion: ev.SchemaVersion,
+				OccurredAt:    ev.OccurredAt,
+				CorrelationID: ev.CorrelationID,
+				CausationID:   ev.CausationID,
+				CommandID:     ev.CommandID,
+				Actor:         ev.Actor,
+				Payload:       ev.Payload,
+				KeyRefs:       ev.KeyRefs,
+			}
+			hash, err := es.ComputeChainHash(prevHash, &chainEnv)
+			if err != nil {
+				return fmt.Errorf("compute chain hash: %w", err)
+			}
+
 			gp, err := q.InsertEvent(ctx, db.InsertEventParams{
 				EventID:           ev.EventID,
 				TenantID:          p.StreamID.Tenant,
 				StreamID:          canonical,
-				Version:           int64(p.ExpectedVersion) + int64(i) + 1,
+				Version:           int64(version),
 				TypeUrl:           ev.TypeURL,
 				SchemaVersion:     int64(ev.SchemaVersion),
 				OccurredAt:        formatTime(ev.OccurredAt),
@@ -103,10 +142,13 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 				Payload:           ev.Payload,
 				PayloadJson:       payloadJSON,
 				EncryptionKeyRefs: keyRefs,
+				Hash:              hash,
+				PrevHash:          prevHash,
 			})
 			if err != nil {
 				return mapErr(err)
 			}
+			prevHash = hash
 			if i == 0 {
 				startPos = gp
 			}

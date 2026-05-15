@@ -59,6 +59,9 @@ type Querier interface {
 	InsertProjectionDLQ(ctx context.Context, arg InsertProjectionDLQParams) error
 	// subscriber_dlq queries (ADR 0025).
 	InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error
+	// Returns the hash of the most recent event in a stream, used to
+	// chain the next append. Empty result for streams with no events.
+	LastStreamHash(ctx context.Context, arg LastStreamHashParams) ([]byte, error)
 	// ===========================================================================
 	// Admin / dashboard queries
 	// ===========================================================================

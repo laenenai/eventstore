@@ -78,8 +78,22 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 			}
 		}
 
-		// 3. Insert each event with caller-supplied version. PK
-		//    violation on (tenant, stream, version) → ErrConflict.
+		// 3a. Tamper-evident chain (ADR 0028). Read predecessor hash in
+		//     the same transaction so the store-wide advisory lock plus
+		//     PK uniqueness keep the chain serializable on this stream.
+		prevHash, err := q.LastStreamHash(ctx, db.LastStreamHashParams{
+			TenantID: p.StreamID.Tenant,
+			StreamID: canonical,
+		})
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read last hash: %w", err)
+		}
+		if len(prevHash) == 0 {
+			prevHash = es.ZeroHash
+		}
+
+		// 3b. Insert each event with caller-supplied version. PK
+		//     violation on (tenant, stream, version) → ErrConflict.
 		var (
 			startPos int64
 			endPos   int64
@@ -90,11 +104,33 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 			if err != nil {
 				return err
 			}
+
+			version := uint64(int64(p.ExpectedVersion) + int64(i) + 1)
+			chainEnv := es.Envelope{
+				EventID:       ev.EventID,
+				TenantID:      p.StreamID.Tenant,
+				StreamID:      p.StreamID,
+				Version:       version,
+				TypeURL:       ev.TypeURL,
+				SchemaVersion: ev.SchemaVersion,
+				OccurredAt:    ev.OccurredAt,
+				CorrelationID: ev.CorrelationID,
+				CausationID:   ev.CausationID,
+				CommandID:     ev.CommandID,
+				Actor:         ev.Actor,
+				Payload:       ev.Payload,
+				KeyRefs:       ev.KeyRefs,
+			}
+			hash, err := es.ComputeChainHash(prevHash, &chainEnv)
+			if err != nil {
+				return fmt.Errorf("compute chain hash: %w", err)
+			}
+
 			row, err := q.InsertEvent(ctx, db.InsertEventParams{
 				EventID:           ev.EventID,
 				TenantID:          p.StreamID.Tenant,
 				StreamID:          canonical,
-				Version:           int64(p.ExpectedVersion) + int64(i) + 1,
+				Version:           int64(version),
 				TypeUrl:           ev.TypeURL,
 				SchemaVersion:     int32(ev.SchemaVersion),
 				OccurredAt:        ev.OccurredAt,
@@ -106,6 +142,8 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 				Payload:           ev.Payload,
 				PayloadJson:       ev.PayloadJSON,
 				EncryptionKeyRefs: ev.KeyRefs,
+				Hash:              hash,
+				PrevHash:          prevHash,
 			})
 			if err != nil {
 				return mapErr(err)
@@ -115,6 +153,7 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 			}
 			endPos = row.GlobalPosition
 			recAt = row.RecordedAt
+			prevHash = hash
 
 			// 4. Outbox row pointing at the just-inserted event.
 			if err := q.InsertOutbox(ctx, db.InsertOutboxParams{

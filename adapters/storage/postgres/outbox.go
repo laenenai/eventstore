@@ -136,6 +136,8 @@ func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error)
 		Actor:          actor,
 		Payload:        r.Payload,
 		KeyRefs:        r.EncryptionKeyRefs,
+		Hash:           r.Hash,
+		PrevHash:       r.PrevHash,
 	}, nil
 }
 

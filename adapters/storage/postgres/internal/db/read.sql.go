@@ -34,7 +34,7 @@ func (q *Queries) CurrentStreamVersion(ctx context.Context, arg CurrentStreamVer
 }
 
 const getEventByID = `-- name: GetEventByID :one
-SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs
+SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs, hash, prev_hash
 FROM events
 WHERE tenant_id = $1
   AND event_id = $2
@@ -67,12 +67,14 @@ func (q *Queries) GetEventByID(ctx context.Context, arg GetEventByIDParams) (Eve
 		&i.Payload,
 		&i.PayloadJson,
 		&i.EncryptionKeyRefs,
+		&i.Hash,
+		&i.PrevHash,
 	)
 	return i, err
 }
 
 const readAllFromPosition = `-- name: ReadAllFromPosition :many
-SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs
+SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs, hash, prev_hash
 FROM events
 WHERE global_position > $1
 ORDER BY global_position
@@ -113,6 +115,8 @@ func (q *Queries) ReadAllFromPosition(ctx context.Context, arg ReadAllFromPositi
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}
@@ -125,7 +129,7 @@ func (q *Queries) ReadAllFromPosition(ctx context.Context, arg ReadAllFromPositi
 }
 
 const readAllFromPositionTenant = `-- name: ReadAllFromPositionTenant :many
-SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs
+SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs, hash, prev_hash
 FROM events
 WHERE tenant_id = $1
   AND global_position > $2
@@ -167,6 +171,8 @@ func (q *Queries) ReadAllFromPositionTenant(ctx context.Context, arg ReadAllFrom
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}
@@ -180,7 +186,7 @@ func (q *Queries) ReadAllFromPositionTenant(ctx context.Context, arg ReadAllFrom
 
 const readStream = `-- name: ReadStream :many
 
-SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs
+SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs, hash, prev_hash
 FROM events
 WHERE tenant_id = $1
   AND stream_id = $2
@@ -227,6 +233,8 @@ func (q *Queries) ReadStream(ctx context.Context, arg ReadStreamParams) ([]Event
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}
@@ -239,7 +247,7 @@ func (q *Queries) ReadStream(ctx context.Context, arg ReadStreamParams) ([]Event
 }
 
 const readStreamFromVersion = `-- name: ReadStreamFromVersion :many
-SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs
+SELECT event_id, tenant_id, stream_id, version, global_position, type_url, schema_version, occurred_at, recorded_at, correlation_id, causation_id, command_id, actor, actor_principal, payload, payload_json, encryption_key_refs, hash, prev_hash
 FROM events
 WHERE tenant_id = $1
   AND stream_id = $2
@@ -282,6 +290,8 @@ func (q *Queries) ReadStreamFromVersion(ctx context.Context, arg ReadStreamFromV
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}

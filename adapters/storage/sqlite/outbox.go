@@ -150,6 +150,8 @@ func rowToEnvelopeOutbox(r db.PendingOutboxWithEnvelopeRow) (es.Envelope, error)
 	if r.EncryptionKeyRefs != nil {
 		env.KeyRefs = []byte(*r.EncryptionKeyRefs)
 	}
+	env.Hash = r.Hash
+	env.PrevHash = r.PrevHash
 	return env, nil
 }
 

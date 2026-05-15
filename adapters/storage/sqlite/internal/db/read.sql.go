@@ -35,7 +35,8 @@ SELECT
     event_id, tenant_id, stream_id, version, global_position,
     type_url, schema_version, occurred_at, recorded_at,
     correlation_id, causation_id, command_id,
-    actor, actor_principal, payload, payload_json, encryption_key_refs
+    actor, actor_principal, payload, payload_json, encryption_key_refs,
+    hash, prev_hash
 FROM events
 WHERE tenant_id = ?
   AND event_id = ?
@@ -67,6 +68,8 @@ func (q *Queries) GetEventByID(ctx context.Context, arg GetEventByIDParams) (Eve
 		&i.Payload,
 		&i.PayloadJson,
 		&i.EncryptionKeyRefs,
+		&i.Hash,
+		&i.PrevHash,
 	)
 	return i, err
 }
@@ -76,7 +79,8 @@ SELECT
     event_id, tenant_id, stream_id, version, global_position,
     type_url, schema_version, occurred_at, recorded_at,
     correlation_id, causation_id, command_id,
-    actor, actor_principal, payload, payload_json, encryption_key_refs
+    actor, actor_principal, payload, payload_json, encryption_key_refs,
+    hash, prev_hash
 FROM events
 WHERE global_position > ?
 ORDER BY global_position
@@ -115,6 +119,8 @@ func (q *Queries) ReadAllFromPosition(ctx context.Context, arg ReadAllFromPositi
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}
@@ -134,7 +140,8 @@ SELECT
     event_id, tenant_id, stream_id, version, global_position,
     type_url, schema_version, occurred_at, recorded_at,
     correlation_id, causation_id, command_id,
-    actor, actor_principal, payload, payload_json, encryption_key_refs
+    actor, actor_principal, payload, payload_json, encryption_key_refs,
+    hash, prev_hash
 FROM events
 WHERE tenant_id = ?
   AND global_position > ?
@@ -175,6 +182,8 @@ func (q *Queries) ReadAllFromPositionTenant(ctx context.Context, arg ReadAllFrom
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}
@@ -195,7 +204,8 @@ SELECT
     event_id, tenant_id, stream_id, version, global_position,
     type_url, schema_version, occurred_at, recorded_at,
     correlation_id, causation_id, command_id,
-    actor, actor_principal, payload, payload_json, encryption_key_refs
+    actor, actor_principal, payload, payload_json, encryption_key_refs,
+    hash, prev_hash
 FROM events
 WHERE tenant_id = ?
   AND stream_id = ?
@@ -235,6 +245,8 @@ func (q *Queries) ReadStream(ctx context.Context, arg ReadStreamParams) ([]Event
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}
@@ -254,7 +266,8 @@ SELECT
     event_id, tenant_id, stream_id, version, global_position,
     type_url, schema_version, occurred_at, recorded_at,
     correlation_id, causation_id, command_id,
-    actor, actor_principal, payload, payload_json, encryption_key_refs
+    actor, actor_principal, payload, payload_json, encryption_key_refs,
+    hash, prev_hash
 FROM events
 WHERE tenant_id = ?
   AND stream_id = ?
@@ -295,6 +308,8 @@ func (q *Queries) ReadStreamFromVersion(ctx context.Context, arg ReadStreamFromV
 			&i.Payload,
 			&i.PayloadJson,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}

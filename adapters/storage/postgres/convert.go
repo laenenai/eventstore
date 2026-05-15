@@ -87,5 +87,7 @@ func rowToEnvelope(r db.Event) (es.Envelope, error) {
 		Payload:        r.Payload,
 		PayloadJSON:    r.PayloadJson,
 		KeyRefs:        r.EncryptionKeyRefs,
+		Hash:           r.Hash,
+		PrevHash:       r.PrevHash,
 	}, nil
 }

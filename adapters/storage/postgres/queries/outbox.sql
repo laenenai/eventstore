@@ -51,7 +51,9 @@ SELECT
     e.actor,
     e.actor_principal,
     e.payload,
-    e.encryption_key_refs
+    e.encryption_key_refs,
+    e.hash,
+    e.prev_hash
 FROM outbox o
 JOIN events e
   ON e.tenant_id = o.tenant_id

@@ -367,7 +367,9 @@ SELECT
     e.actor,
     e.actor_principal,
     e.payload,
-    e.encryption_key_refs
+    e.encryption_key_refs,
+    e.hash,
+    e.prev_hash
 FROM outbox o
 JOIN events e
   ON e.tenant_id = o.tenant_id
@@ -407,6 +409,8 @@ type PendingOutboxWithEnvelopeRow struct {
 	ActorPrincipal    string
 	Payload           []byte
 	EncryptionKeyRefs *string
+	Hash              []byte
+	PrevHash          []byte
 }
 
 // Drain hot path. Filters by retry-readiness, max-attempts (DLQ
@@ -445,6 +449,8 @@ func (q *Queries) PendingOutboxWithEnvelope(ctx context.Context, arg PendingOutb
 			&i.ActorPrincipal,
 			&i.Payload,
 			&i.EncryptionKeyRefs,
+			&i.Hash,
+			&i.PrevHash,
 		); err != nil {
 			return nil, err
 		}

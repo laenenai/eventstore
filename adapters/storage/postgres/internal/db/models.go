@@ -29,6 +29,8 @@ type Event struct {
 	Payload           []byte
 	PayloadJson       []byte
 	EncryptionKeyRefs []byte
+	Hash              []byte
+	PrevHash          []byte
 }
 
 type Outbox struct {

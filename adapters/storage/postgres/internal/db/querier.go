@@ -118,6 +118,9 @@ type Querier interface {
 	// keeps the most recent attempt info if the same (subscriber, tenant,
 	// event) re-DLQs (rare — happens on replay after partial recovery).
 	InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error
+	// Returns the hash of the most recent event in a stream, used to
+	// chain the next append. Empty result for streams with no events.
+	LastStreamHash(ctx context.Context, arg LastStreamHashParams) ([]byte, error)
 	// ===========================================================================
 	// Admin / dashboard queries
 	// ===========================================================================

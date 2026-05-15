@@ -54,7 +54,9 @@ INSERT INTO events (
     actor_principal,
     payload,
     payload_json,
-    encryption_key_refs
+    encryption_key_refs,
+    hash,
+    prev_hash
 ) VALUES (
     $1,
     $2,
@@ -71,7 +73,9 @@ INSERT INTO events (
     $12,
     $13,
     $14,
-    $15
+    $15,
+    $16,
+    $17
 )
 RETURNING global_position, recorded_at
 `
@@ -92,6 +96,8 @@ type InsertEventParams struct {
 	Payload           []byte
 	PayloadJson       []byte
 	EncryptionKeyRefs []byte
+	Hash              []byte
+	PrevHash          []byte
 }
 
 type InsertEventRow struct {
@@ -119,6 +125,8 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (Inser
 		arg.Payload,
 		arg.PayloadJson,
 		arg.EncryptionKeyRefs,
+		arg.Hash,
+		arg.PrevHash,
 	)
 	var i InsertEventRow
 	err := row.Scan(&i.GlobalPosition, &i.RecordedAt)
@@ -141,4 +149,25 @@ type InsertOutboxParams struct {
 func (q *Queries) InsertOutbox(ctx context.Context, arg InsertOutboxParams) error {
 	_, err := q.db.Exec(ctx, insertOutbox, arg.TenantID, arg.GlobalPosition, arg.EventID)
 	return err
+}
+
+const lastStreamHash = `-- name: LastStreamHash :one
+SELECT hash FROM events
+WHERE tenant_id = $1 AND stream_id = $2
+ORDER BY version DESC
+LIMIT 1
+`
+
+type LastStreamHashParams struct {
+	TenantID string
+	StreamID string
+}
+
+// Returns the hash of the most recent event in a stream, used to
+// chain the next append. Empty result for streams with no events.
+func (q *Queries) LastStreamHash(ctx context.Context, arg LastStreamHashParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, lastStreamHash, arg.TenantID, arg.StreamID)
+	var hash []byte
+	err := row.Scan(&hash)
+	return hash, err
 }

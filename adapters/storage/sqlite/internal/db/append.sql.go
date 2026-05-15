@@ -29,8 +29,10 @@ INSERT INTO events (
     actor_principal,
     payload,
     payload_json,
-    encryption_key_refs
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    encryption_key_refs,
+    hash,
+    prev_hash
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertEventParams struct {
@@ -50,6 +52,8 @@ type InsertEventParams struct {
 	Payload           []byte
 	PayloadJson       *string
 	EncryptionKeyRefs *string
+	Hash              []byte
+	PrevHash          []byte
 }
 
 // Append-path queries for SQLite. Mirror of the Postgres adapter's
@@ -84,6 +88,8 @@ func (q *Queries) InsertEvent(ctx context.Context, arg InsertEventParams) (int64
 		arg.Payload,
 		arg.PayloadJson,
 		arg.EncryptionKeyRefs,
+		arg.Hash,
+		arg.PrevHash,
 	)
 	if err != nil {
 		return 0, err
@@ -105,4 +111,25 @@ type InsertOutboxParams struct {
 func (q *Queries) InsertOutbox(ctx context.Context, arg InsertOutboxParams) error {
 	_, err := q.db.ExecContext(ctx, insertOutbox, arg.TenantID, arg.GlobalPosition, arg.EventID)
 	return err
+}
+
+const lastStreamHash = `-- name: LastStreamHash :one
+SELECT hash FROM events
+WHERE tenant_id = ? AND stream_id = ?
+ORDER BY version DESC
+LIMIT 1
+`
+
+type LastStreamHashParams struct {
+	TenantID string
+	StreamID string
+}
+
+// Returns the hash of the most recent event in a stream, used to
+// chain the next append. Empty result for streams with no events.
+func (q *Queries) LastStreamHash(ctx context.Context, arg LastStreamHashParams) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, lastStreamHash, arg.TenantID, arg.StreamID)
+	var hash []byte
+	err := row.Scan(&hash)
+	return hash, err
 }
