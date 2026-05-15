@@ -7,17 +7,23 @@ import (
 	"github.com/laenenai/eventstore/cmdworkflow"
 )
 
-// SubscriberDLQ interfaces (ADR 0025). See sqlite/subscriber_dlq.go
-// for the SQLite mirror; the contract is identical.
+// SubscriberDLQ interfaces (ADR 0025, batched per ADR 0029). See
+// sqlite/subscriber_dlq.go for the SQLite mirror; the contract is
+// identical. Postgres uses native text[] columns so the slice
+// translation is just a passthrough.
 
 // InsertSubscriberDLQ implements cmdworkflow.SubscriberDLQWriter.
 func (a *Adapter) InsertSubscriberDLQ(ctx context.Context, row cmdworkflow.SubscriberDLQRow) error {
+	if len(row.EventIDs) == 0 {
+		return nil
+	}
 	return a.queries.InsertSubscriberDLQ(ctx, db.InsertSubscriberDLQParams{
 		SubscriberName: row.SubscriberName,
 		TenantID:       row.TenantID,
-		EventID:        row.EventID,
 		StreamID:       row.StreamID,
-		TypeUrl:        row.TypeURL,
+		FirstEventID:   row.EventIDs[0],
+		EventIds:       row.EventIDs,
+		TypeUrls:       row.TypeURLs,
 		LastError:      row.LastError,
 		Attempts:       int32(row.Attempts),
 		EnqueuedAt:     row.EnqueuedAt.UTC(),
@@ -42,9 +48,9 @@ func (a *Adapter) ListSubscriberDLQ(ctx context.Context, subscriberName, tenant 
 		out[i] = cmdworkflow.SubscriberDLQRow{
 			SubscriberName: r.SubscriberName,
 			TenantID:       r.TenantID,
-			EventID:        r.EventID,
 			StreamID:       r.StreamID,
-			TypeURL:        r.TypeUrl,
+			EventIDs:       r.EventIds,
+			TypeURLs:       r.TypeUrls,
 			LastError:      r.LastError,
 			Attempts:       int(r.Attempts),
 			EnqueuedAt:     r.EnqueuedAt,
@@ -63,10 +69,11 @@ func (a *Adapter) ClearSubscriberDLQ(ctx context.Context, subscriberName, tenant
 }
 
 // DeleteSubscriberDLQRow implements cmdworkflow.SubscriberDLQAdmin.
-func (a *Adapter) DeleteSubscriberDLQRow(ctx context.Context, subscriberName, tenant, eventID string) error {
+// Keyed by the first event id in the batch.
+func (a *Adapter) DeleteSubscriberDLQRow(ctx context.Context, subscriberName, tenant, firstEventID string) error {
 	return a.queries.DeleteSubscriberDLQRow(ctx, db.DeleteSubscriberDLQRowParams{
 		SubscriberName: subscriberName,
 		TenantID:       tenant,
-		EventID:        eventID,
+		FirstEventID:   firstEventID,
 	})
 }

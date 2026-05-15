@@ -29,7 +29,7 @@ var (
 // configured. Emits handler files; core sum_type / codec / projection
 // emission is skipped in this mode.
 func generateDBOSFile(plugin *protogen.Plugin, file *protogen.File) error {
-	aggregates, err := findAggregatesWithAnnotatedCommands(file)
+	aggregates, err := findAggregatesWithAnnotatedCommands(file, plugin.Files)
 	if err != nil {
 		return err
 	}
@@ -71,6 +71,7 @@ func generateDBOSFile(plugin *protogen.Plugin, file *protogen.File) error {
 func emitDBOSService(out *protogen.GeneratedFile, agg *aggregate, variants []commandVariantInfo) {
 	stateName := out.QualifiedGoIdent(agg.rootImport.Ident(agg.state.GoIdent.GoName))
 	cmdIface := out.QualifiedGoIdent(agg.rootImport.Ident(agg.commandSumTypeName))
+	evtIface := out.QualifiedGoIdent(agg.rootImport.Ident(agg.eventSumTypeName))
 
 	esWithTenant := out.QualifiedGoIdent(esPkg.Ident("WithTenant"))
 	esNewStreamID := out.QualifiedGoIdent(esPkg.Ident("NewStreamID"))
@@ -84,14 +85,14 @@ func emitDBOSService(out *protogen.GeneratedFile, agg *aggregate, variants []com
 	out.P("// DBOS workflows. Register each method with dbos.RegisterWorkflow")
 	out.P("// before calling dctx.Launch().")
 	out.P("type ", svcName, " struct {")
-	out.P("\tWorkflow *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, "]")
+	out.P("\tWorkflow *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, ", ", evtIface, "]")
 	out.P("}")
 	out.P()
 	out.P("// New", svcName, " returns a DBOS-registerable service backed by wf.")
 	out.P("// Also wires durable Async fan-out: subsequent Async subscriber")
 	out.P("// dispatches go through dbos.RunWorkflow targeting AsyncDispatch,")
-	out.P("// keyed by <streamType>:<subscriberName>:<eventID> for dedup.")
-	out.P("func New", svcName, "(wf *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, "]) *", svcName, " {")
+	out.P("// keyed by <streamType>:<subscriberName>:<firstEventID> for dedup.")
+	out.P("func New", svcName, "(wf *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, ", ", evtIface, "]) *", svcName, " {")
 	out.P("\ts := &", svcName, "{Workflow: wf}")
 	out.P("\twf.SetAsyncSend(s.sendAsync)")
 	out.P("\treturn s")

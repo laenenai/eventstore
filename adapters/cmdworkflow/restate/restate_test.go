@@ -102,14 +102,14 @@ var invoiceDecider = es.Decider[*invoicev1.Invoice, invoicev1.Command, invoicev1
 // RestateService + Restate testcontainer.
 type testFixture struct {
 	env     *testsupport.Env
-	wf      *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]
+	wf      *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]
 	adapter *sqliteadapter.Adapter
 }
 
 // fixtureOpt allows test scenarios to register subscribers before the
 // workflow is wrapped in the Restate service. Multiple opts can be
 // applied; they run in order.
-type fixtureOpt func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command])
+type fixtureOpt func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event])
 
 func newFixture(t *testing.T, opts ...fixtureOpt) *testFixture {
 	t.Helper()
@@ -125,9 +125,9 @@ func newFixture(t *testing.T, opts ...fixtureOpt) *testFixture {
 	}
 
 	runtime := cwrestate.New()
-	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
 		aggregate.NewProto(a, invoiceDecider, invoicev1.EventCodec{}),
-		a, runtime,
+		a, runtime, invoicev1.EventCodec{},
 	).WithDLQ(a)
 
 	for _, opt := range opts {
@@ -220,13 +220,13 @@ func TestRestate_Smoke(t *testing.T) {
 //     replay).
 func TestRestate_SyncRetryThenSuccess(t *testing.T) {
 	var attempts atomic.Int32
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "flaky-sub",
 			Mode:        cmdworkflow.Sync,
 			MaxRetries:  5,
 			OnExhausted: cmdworkflow.DLQ,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				n := attempts.Add(1)
 				if n < 3 {
 					return errors.New("transient")
@@ -309,13 +309,13 @@ func TestRestate_IdempotencyKey(t *testing.T) {
 // Bounded sleep then check counter — keep the test fast.
 func TestRestate_AsyncSubscriberDelivered(t *testing.T) {
 	var delivered atomic.Int32
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "async-sub",
 			Mode:        cmdworkflow.Async,
 			MaxRetries:  3,
 			OnExhausted: cmdworkflow.Drop,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				delivered.Add(1)
 				return nil
 			},
@@ -347,17 +347,18 @@ func TestRestate_AsyncSubscriberDelivered(t *testing.T) {
 // "compensate:<sub>:<event>:" to avoid collision with the parent's
 // "append" / "read-envelopes" journal entries.
 func TestRestate_SyncCompensate(t *testing.T) {
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "credit-check",
 			Filter:      cmdworkflow.EventFilter{TypeURLs: []string{"myapp.invoice.v1.Created"}},
 			Mode:        cmdworkflow.Sync,
 			MaxRetries:  1,
 			OnExhausted: cmdworkflow.Compensate,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				return errors.New("credit declined")
 			},
-			Compensate: func(_ context.Context, env es.Envelope) (invoicev1.Command, error) {
+			Compensate: func(_ context.Context, envs []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) (invoicev1.Command, error) {
+				env := envs[0]
 				return &invoicev1.Void{
 					TenantId:   env.TenantID,
 					InvoiceId:  env.StreamID.ID,

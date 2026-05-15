@@ -24,7 +24,7 @@ import (
 // aggregate.NewProto + Workflow.With(...). Compare with the
 // pre-helpers version (10+ lines of struct-literal + Register calls).
 type fixture struct {
-	wf      *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]
+	wf      *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]
 	rt      *inproc.Runtime
 	read    *exampleCw.ReadModel
 	search  *exampleCw.SearchIndex
@@ -53,8 +53,8 @@ func setup(t *testing.T) *fixture {
 	credit := exampleCw.NewCreditReservation()
 
 	rt := inproc.New()
-	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
-		aggregate.NewProto(a, exampleCw.Decider, invoicev1.EventCodec{}), a, rt,
+	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
+		aggregate.NewProto(a, exampleCw.Decider, invoicev1.EventCodec{}), a, rt, invoicev1.EventCodec{},
 	).
 		WithDLQ(a).
 		With(read.Subscriber(), search.Subscriber(), credit.Subscriber())

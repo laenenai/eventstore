@@ -105,9 +105,10 @@ type SubjectKey struct {
 type SubscriberDlq struct {
 	SubscriberName string
 	TenantID       string
-	EventID        string
 	StreamID       string
-	TypeUrl        string
+	FirstEventID   string
+	EventIds       string
+	TypeUrls       string
 	LastError      string
 	Attempts       int64
 	EnqueuedAt     string

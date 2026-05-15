@@ -33,9 +33,9 @@ import (
 const TenantHeader = "X-Tenant"
 
 // EmployeeBus is the per-aggregate command bus. The bus type is fully
-// generic over (S, C); newServer takes one as input so tests can
+// generic over (S, C, E); newServer takes one as input so tests can
 // substitute fakes.
-type EmployeeBus = *cmdworkflow.Workflow[*employeev1.Employee, employeev1.Command]
+type EmployeeBus = *cmdworkflow.Workflow[*employeev1.Employee, employeev1.Command, employeev1.Event]
 
 func main() {
 	db, err := sql.Open("sqlite", "file:edge.db?cache=shared")
@@ -61,9 +61,9 @@ func buildBus(ctx context.Context, db *sql.DB) (EmployeeBus, error) {
 	if err := a.Migrate(ctx); err != nil {
 		return nil, err
 	}
-	bus := cmdworkflow.New[*employeev1.Employee, employeev1.Command](
+	bus := cmdworkflow.New[*employeev1.Employee, employeev1.Command, employeev1.Event](
 		aggregate.NewProto(a, employee.Decider, employeev1.EventCodec{}),
-		a, cwinproc.New(),
+		a, cwinproc.New(), employeev1.EventCodec{},
 	)
 	return bus, nil
 }

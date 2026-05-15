@@ -14,6 +14,7 @@ sql:
       - migrations/00010_state_stream_subscribers.sql
       - migrations/00011_subscriber_dlq.sql
       - migrations/00012_tamper_evident_chain.sql
+      - migrations/00013_subscriber_dlq_batch.sql
     queries: queries/
     gen:
       go:

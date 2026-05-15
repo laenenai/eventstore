@@ -191,6 +191,30 @@ func (r *Runtime[S, C, E]) Load(ctx context.Context, sid es.StreamID) (S, uint64
 	return state, version, nil
 }
 
+// EncodeState serializes state via the runtime's StateCodec. Used by
+// the cmdworkflow bus to journal the post-Decide state once per
+// dispatch (ADR 0029) so workflow replay sees the same value
+// subscribers saw on the first run. Returns an error when no
+// StateCodec is wired — Tier-1 state mirroring is required for the
+// per-batch subscriber delivery model.
+func (r *Runtime[S, C, E]) EncodeState(state S) ([]byte, error) {
+	if r.StateCodec == nil {
+		return nil, fmt.Errorf("aggregate: EncodeState requires a StateCodec to be wired on the runtime")
+	}
+	b, _, err := r.StateCodec.Encode(state)
+	return b, err
+}
+
+// DecodeState is the inverse of EncodeState. Decodes journaled state
+// bytes back into the typed S via the same StateCodec.
+func (r *Runtime[S, C, E]) DecodeState(data []byte) (S, error) {
+	var zero S
+	if r.StateCodec == nil {
+		return zero, fmt.Errorf("aggregate: DecodeState requires a StateCodec to be wired on the runtime")
+	}
+	return r.StateCodec.Decode(data)
+}
+
 func (r *Runtime[S, C, E]) stateSchemaVersion() uint32 {
 	if r.StateSchemaVersion == 0 {
 		return 1

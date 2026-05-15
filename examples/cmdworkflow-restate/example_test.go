@@ -45,9 +45,9 @@ func setup(t *testing.T) *fixture {
 	read := cwrestate.NewReadModel()
 	audit := cwrestate.NewAuditLog()
 
-	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
 		aggregate.NewProto(a, cwrestate.Decider, invoicev1.EventCodec{}),
-		a, cwrestateadapter.New(),
+		a, cwrestateadapter.New(), invoicev1.EventCodec{},
 	).
 		WithDLQ(a).
 		With(read.Subscriber(), audit.Subscriber())

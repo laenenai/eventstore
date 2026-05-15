@@ -16,14 +16,14 @@ import (
 // One handler per v1.Command variant; each wraps cmdworkflow.Workflow.HandleCmd
 // with the tenant and stream id extracted from the command.
 type RestateService struct {
-	Workflow *cmdworkflow.Workflow[*v1.Invoice, v1.Command]
+	Workflow *cmdworkflow.Workflow[*v1.Invoice, v1.Command, v1.Event]
 }
 
 // NewRestateService returns a Restate-bindable service backed by wf.
 // Also wires durable Async fan-out: subsequent Async subscriber
 // dispatches go through restate.ServiceSend targeting AsyncDispatch,
-// keyed by <streamType>:<subscriberName>:<eventID> for dedup.
-func NewRestateService(wf *cmdworkflow.Workflow[*v1.Invoice, v1.Command]) *RestateService {
+// keyed by <streamType>:<subscriberName>:<firstEventID> for dedup.
+func NewRestateService(wf *cmdworkflow.Workflow[*v1.Invoice, v1.Command, v1.Event]) *RestateService {
 	s := &RestateService{Workflow: wf}
 	wf.SetAsyncSend(s.sendAsync)
 	return s

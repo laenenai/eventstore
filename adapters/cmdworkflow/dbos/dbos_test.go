@@ -104,19 +104,19 @@ var invoiceDecider = es.Decider[*invoicev1.Invoice, invoicev1.Command, invoicev1
 // command handlers — the same shape that production apps wire up.
 type fixture struct {
 	env *testsupport.Env
-	wf  *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]
+	wf  *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]
 	svc *invoicev1dbos.DBOSService
 }
 
-type fixtureOpt func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command])
+type fixtureOpt func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event])
 
 func newFixture(t *testing.T, opts ...fixtureOpt) *fixture {
 	t.Helper()
 	env := testsupport.Start(t)
 
-	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
 		aggregate.NewProto(env.Adapter, invoiceDecider, invoicev1.EventCodec{}),
-		env.Adapter, cwdbos.New(),
+		env.Adapter, cwdbos.New(), invoicev1.EventCodec{},
 	).WithDLQ(env.Adapter)
 
 	for _, opt := range opts {
@@ -187,13 +187,13 @@ func TestDBOS_Smoke(t *testing.T) {
 // journals exactly one step regardless of attempt count.
 func TestDBOS_SyncRetryThenSuccess(t *testing.T) {
 	var attempts atomic.Int32
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "flaky-sub",
 			Mode:        cmdworkflow.Sync,
 			MaxRetries:  5,
 			OnExhausted: cmdworkflow.DLQ,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				if attempts.Add(1) < 3 {
 					return errors.New("transient")
 				}
@@ -282,13 +282,13 @@ func TestDBOS_IdempotencyKey(t *testing.T) {
 // the background. Phase 2a limitation: not journaled by DBOS.
 func TestDBOS_AsyncSubscriberDelivered(t *testing.T) {
 	var delivered atomic.Int32
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "async-sub",
 			Mode:        cmdworkflow.Async,
 			MaxRetries:  3,
 			OnExhausted: cmdworkflow.Drop,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				delivered.Add(1)
 				return nil
 			},
@@ -324,13 +324,13 @@ func TestDBOS_AsyncSubscriberDelivered(t *testing.T) {
 // "<streamType>:<subscriberName>:<eventID>".
 func TestDBOS_AsyncDurable(t *testing.T) {
 	var delivered atomic.Int32
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "audit-async",
 			Mode:        cmdworkflow.Async,
 			MaxRetries:  3,
 			OnExhausted: cmdworkflow.Drop,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				delivered.Add(1)
 				return nil
 			},
@@ -387,17 +387,18 @@ func TestDBOS_AsyncDurable(t *testing.T) {
 // step names with "compensate:<sub>:<event>:" — matches the Restate
 // fix from task #71.
 func TestDBOS_SyncCompensate(t *testing.T) {
-	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command]) {
-		wf.With(cmdworkflow.Subscriber[invoicev1.Command]{
+	fx := newFixture(t, func(wf *cmdworkflow.Workflow[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]) {
+		wf.With(cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 			Name:        "credit-check",
 			Filter:      cmdworkflow.EventFilter{TypeURLs: []string{"myapp.invoice.v1.Created"}},
 			Mode:        cmdworkflow.Sync,
 			MaxRetries:  1,
 			OnExhausted: cmdworkflow.Compensate,
-			Handle: func(_ context.Context, _ es.Envelope) error {
+			Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 				return errors.New("credit declined")
 			},
-			Compensate: func(_ context.Context, env es.Envelope) (invoicev1.Command, error) {
+			Compensate: func(_ context.Context, envs []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) (invoicev1.Command, error) {
+				env := envs[0]
 				return &invoicev1.Void{
 					TenantId:   env.TenantID,
 					InvoiceId:  env.StreamID.ID,

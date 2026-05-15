@@ -30,9 +30,9 @@ func setup(t *testing.T) *fixture {
 	read := cwdbosex.NewReadModel()
 	audit := cwdbosex.NewAuditLog()
 
-	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+	wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
 		aggregate.NewProto(env.Adapter, cwdbosex.Decider, invoicev1.EventCodec{}),
-		env.Adapter, cwdbos.New(),
+		env.Adapter, cwdbos.New(), invoicev1.EventCodec{},
 	).
 		WithDLQ(env.Adapter).
 		With(read.Subscriber(), audit.Subscriber())

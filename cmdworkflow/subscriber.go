@@ -37,12 +37,13 @@ func (m DeliveryMode) String() string {
 type ExhaustedPolicy int
 
 const (
-	// DLQ: write the event into subscriber_dlq for operator action.
-	// The most common policy for both Sync and Async subscribers.
+	// DLQ: write the failed command-batch into subscriber_dlq for
+	// operator action. The most common policy for both Sync and
+	// Async subscribers.
 	DLQ ExhaustedPolicy = iota
 	// Compensate: invoke Subscriber.Compensate to produce a
 	// compensating command, append it through the bus (nested
-	// HandleCmd call), and consider the original event settled.
+	// HandleCmd call), and consider the original batch settled.
 	// Saga semantics. Requires Compensate to be set.
 	Compensate
 	// Drop: silently abandon. No DLQ, no compensation.
@@ -112,20 +113,41 @@ func (f EventFilter) Matches(env es.Envelope) bool {
 	return true
 }
 
-// Subscriber describes one registered consumer of events on the bus.
-type Subscriber[C any] struct {
+// Subscriber describes one registered consumer of a command's effect
+// on the bus. The framework calls Handle ONCE per command, passing
+// the envelope batch (after Filter narrowing), the typed post-Decide
+// state, and the typed events index-aligned with the envelopes.
+//
+// Type parameters:
+//   - S: aggregate state. Matches the Workflow's S.
+//   - C: command sum type. Matches the Workflow's C.
+//   - E: event sum type. Matches the Workflow's E.
+//
+// Why per-batch and not per-event: projections that need full
+// post-Decide state would otherwise re-derive it from event payloads
+// (duplicating Decider logic) or call Load themselves (an extra DB
+// roundtrip per event). With per-batch delivery the framework hands
+// over the state it already computed for the in-tx state_cache write,
+// and Handle becomes one call regardless of how many events the
+// command emitted. See ADR 0029.
+type Subscriber[S, C, E any] struct {
 	// Name is a stable identifier — journal entries use it as a
 	// prefix, DLQ rows store it. Must be unique within the bus.
 	Name string
 
 	// Filter narrows the set of envelopes this subscriber receives.
+	// Filter is applied per-envelope; envs that survive form the
+	// batch passed to Handle. If no envelopes survive the filter,
+	// Handle is not called at all (no journal entry).
 	Filter EventFilter
 
 	// Mode controls whether HandleCmd blocks on the subscriber's
 	// completion (Sync) or returns once it's scheduled (Async).
 	Mode DeliveryMode
 
-	// MaxRetries caps the failure budget per envelope.
+	// MaxRetries caps the failure budget per command-batch. The
+	// budget is consumed by the BATCH, not by individual events
+	// within it — one Handle call counts as one attempt.
 	//   0  = single attempt, no retry
 	//   N  = up to N retries after the first attempt
 	//  -1  = retry forever (workflow replay re-attempts on every run)
@@ -138,18 +160,27 @@ type Subscriber[C any] struct {
 	// (inherits the caller's context).
 	AttemptTimeout time.Duration
 
-	// Handle is invoked once per matched envelope per attempt. It
-	// must be idempotent on env.EventID — at-least-once delivery is
-	// the framework's contract.
-	Handle func(ctx context.Context, env es.Envelope) error
+	// Handle is invoked once per command, with:
+	//   - envs:   envelopes from this command that matched Filter.
+	//             Skipped (subscriber not called) if empty.
+	//   - state:  the post-Decide state — the same value the
+	//             runtime's StateCodec persisted to state_cache in
+	//             the same transaction as the events.
+	//   - events: typed events matching Filter. envs[i] ↔ events[i].
+	//
+	// Handle must be idempotent on (env.EventID, env.EventID, …)
+	// for the whole batch — at-least-once delivery is the
+	// framework's contract.
+	Handle func(ctx context.Context, envs []es.Envelope, state S, events []E) error
 
 	// Compensate produces a compensating command when OnExhausted is
 	// Compensate and the retry budget is exhausted. Required for
-	// Compensate policy; ignored otherwise.
+	// Compensate policy; ignored otherwise. Receives the same batch
+	// that Handle did.
 	//
 	// The returned command is appended through the bus (nested
 	// HandleCmd). Compensate runs with a fresh, non-cancellable
 	// context (context.WithoutCancel) so a caller timeout cannot
 	// leave the aggregate in a half-rolled-back state.
-	Compensate func(ctx context.Context, env es.Envelope) (C, error)
+	Compensate func(ctx context.Context, envs []es.Envelope, state S, events []E) (C, error)
 }

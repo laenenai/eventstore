@@ -13,8 +13,8 @@ import (
 )
 
 // TestSubscriberDLQ_InsertListClear exercises the operator surface
-// end-to-end against the SQLite adapter. Confirms the adapter wires
-// cmdworkflow.SubscriberDLQWriter + Admin interfaces correctly.
+// end-to-end against the SQLite adapter under the batched DLQ shape
+// (ADR 0029): one row per (subscriber, failed command-batch).
 func TestSubscriberDLQ_InsertListClear(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -29,19 +29,29 @@ func TestSubscriberDLQ_InsertListClear(t *testing.T) {
 	tenant := "t-dlq"
 	now := time.Now().UTC().Truncate(time.Second)
 
-	// Insert three rows for one subscriber.
-	for i, ev := range []string{"ev-1", "ev-2", "ev-3"} {
+	// Insert three batches for one subscriber. Each "batch" has two
+	// event ids to exercise the array shape.
+	batches := [][]string{
+		{"ev-1a", "ev-1b"},
+		{"ev-2a"},
+		{"ev-3a", "ev-3b", "ev-3c"},
+	}
+	for i, ids := range batches {
+		typeURLs := make([]string, len(ids))
+		for j := range ids {
+			typeURLs[j] = "myapp.invoice.v1.Created"
+		}
 		if err := a.InsertSubscriberDLQ(context.Background(), cmdworkflow.SubscriberDLQRow{
 			SubscriberName: "search-index",
 			TenantID:       tenant,
-			EventID:        ev,
-			StreamID:       "invoice:i-" + ev,
-			TypeURL:        "myapp.invoice.v1.Created",
+			StreamID:       "invoice:i-" + ids[0],
+			EventIDs:       ids,
+			TypeURLs:       typeURLs,
 			LastError:      "transient API failure",
 			Attempts:       3,
 			EnqueuedAt:     now.Add(time.Duration(i) * time.Second),
 		}); err != nil {
-			t.Fatalf("Insert %s: %v", ev, err)
+			t.Fatalf("Insert %s: %v", ids[0], err)
 		}
 	}
 
@@ -53,12 +63,19 @@ func TestSubscriberDLQ_InsertListClear(t *testing.T) {
 	if len(rows) != 3 {
 		t.Errorf("list: got %d want 3", len(rows))
 	}
-	if rows[0].EventID != "ev-1" || rows[2].EventID != "ev-3" {
+	if rows[0].EventIDs[0] != "ev-1a" || rows[2].EventIDs[0] != "ev-3a" {
 		t.Errorf("ordering: %v", rows)
 	}
+	// Batch fields round-trip.
+	if len(rows[2].EventIDs) != 3 || rows[2].EventIDs[2] != "ev-3c" {
+		t.Errorf("batch round-trip: %+v", rows[2])
+	}
+	if len(rows[2].TypeURLs) != 3 {
+		t.Errorf("type_urls round-trip: %+v", rows[2])
+	}
 
-	// Delete one specific row.
-	if err := a.DeleteSubscriberDLQRow(context.Background(), "search-index", tenant, "ev-2"); err != nil {
+	// Delete one specific row by first event id.
+	if err := a.DeleteSubscriberDLQRow(context.Background(), "search-index", tenant, "ev-2a"); err != nil {
 		t.Fatalf("DeleteRow: %v", err)
 	}
 	rows, _ = a.ListSubscriberDLQ(context.Background(), "search-index", tenant, 10)

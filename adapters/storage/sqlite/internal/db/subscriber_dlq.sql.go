@@ -32,30 +32,35 @@ const deleteSubscriberDLQRow = `-- name: DeleteSubscriberDLQRow :exec
 DELETE FROM subscriber_dlq
 WHERE subscriber_name = ?1
   AND tenant_id       = ?2
-  AND event_id        = ?3
+  AND first_event_id  = ?3
 `
 
 type DeleteSubscriberDLQRowParams struct {
 	SubscriberName string
 	TenantID       string
-	EventID        string
+	FirstEventID   string
 }
 
 func (q *Queries) DeleteSubscriberDLQRow(ctx context.Context, arg DeleteSubscriberDLQRowParams) error {
-	_, err := q.db.ExecContext(ctx, deleteSubscriberDLQRow, arg.SubscriberName, arg.TenantID, arg.EventID)
+	_, err := q.db.ExecContext(ctx, deleteSubscriberDLQRow, arg.SubscriberName, arg.TenantID, arg.FirstEventID)
 	return err
 }
 
 const insertSubscriberDLQ = `-- name: InsertSubscriberDLQ :exec
 
 INSERT INTO subscriber_dlq (
-    subscriber_name, tenant_id, event_id, stream_id,
-    type_url, last_error, attempts, enqueued_at
+    subscriber_name, tenant_id, stream_id,
+    first_event_id, event_ids, type_urls,
+    last_error, attempts, enqueued_at
 ) VALUES (
-    ?1, ?2, ?3, ?4,
-    ?5, ?6, ?7, ?8
+    ?1, ?2, ?3,
+    ?4, ?5, ?6,
+    ?7, ?8, ?9
 )
-ON CONFLICT (subscriber_name, tenant_id, event_id) DO UPDATE SET
+ON CONFLICT (subscriber_name, tenant_id, first_event_id) DO UPDATE SET
+    event_ids   = excluded.event_ids,
+    type_urls   = excluded.type_urls,
+    stream_id   = excluded.stream_id,
     last_error  = excluded.last_error,
     attempts    = excluded.attempts,
     enqueued_at = excluded.enqueued_at
@@ -64,22 +69,24 @@ ON CONFLICT (subscriber_name, tenant_id, event_id) DO UPDATE SET
 type InsertSubscriberDLQParams struct {
 	SubscriberName string
 	TenantID       string
-	EventID        string
 	StreamID       string
-	TypeUrl        string
+	FirstEventID   string
+	EventIds       string
+	TypeUrls       string
 	LastError      string
 	Attempts       int64
 	EnqueuedAt     string
 }
 
-// subscriber_dlq queries (ADR 0025).
+// subscriber_dlq queries (ADR 0025, batched per ADR 0029).
 func (q *Queries) InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error {
 	_, err := q.db.ExecContext(ctx, insertSubscriberDLQ,
 		arg.SubscriberName,
 		arg.TenantID,
-		arg.EventID,
 		arg.StreamID,
-		arg.TypeUrl,
+		arg.FirstEventID,
+		arg.EventIds,
+		arg.TypeUrls,
 		arg.LastError,
 		arg.Attempts,
 		arg.EnqueuedAt,
@@ -88,8 +95,8 @@ func (q *Queries) InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberD
 }
 
 const listSubscriberDLQ = `-- name: ListSubscriberDLQ :many
-SELECT subscriber_name, tenant_id, event_id, stream_id, type_url,
-       last_error, attempts, enqueued_at
+SELECT subscriber_name, tenant_id, stream_id, first_event_id,
+       event_ids, type_urls, last_error, attempts, enqueued_at
 FROM subscriber_dlq
 WHERE subscriber_name = ?1
   AND (?2 = '' OR tenant_id = ?2)
@@ -115,9 +122,10 @@ func (q *Queries) ListSubscriberDLQ(ctx context.Context, arg ListSubscriberDLQPa
 		if err := rows.Scan(
 			&i.SubscriberName,
 			&i.TenantID,
-			&i.EventID,
 			&i.StreamID,
-			&i.TypeUrl,
+			&i.FirstEventID,
+			&i.EventIds,
+			&i.TypeUrls,
 			&i.LastError,
 			&i.Attempts,
 			&i.EnqueuedAt,

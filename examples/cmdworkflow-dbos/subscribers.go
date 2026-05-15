@@ -5,15 +5,16 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/laenenai/eventstore/cmdworkflow"
 	"github.com/laenenai/eventstore/es"
 	invoicev1 "github.com/laenenai/eventstore/gen/myapp/invoice/v1"
 )
 
 // ReadModel — Sync subscriber. HandleCmd waits for it before
-// returning to the caller; read-your-writes holds.
+// returning to the caller; read-your-writes holds. Per-batch
+// delivery (ADR 0029) hands over the full Invoice state directly,
+// so the projection is one expression: store-or-delete based on
+// terminal status.
 type ReadModel struct {
 	mu   sync.RWMutex
 	rows map[string]*invoicev1.Invoice
@@ -23,8 +24,8 @@ func NewReadModel() *ReadModel {
 	return &ReadModel{rows: map[string]*invoicev1.Invoice{}}
 }
 
-func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name: "active-invoices",
 		Filter: cmdworkflow.EventFilter{
 			TypeURLs: []string{
@@ -40,26 +41,15 @@ func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
 	}
 }
 
-func (r *ReadModel) handle(_ context.Context, env es.Envelope) error {
+func (r *ReadModel) handle(_ context.Context, envs []es.Envelope, state *invoicev1.Invoice, _ []invoicev1.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	streamID := env.StreamID.Canonical()
-	switch env.TypeURL {
-	case "myapp.invoice.v1.Created":
-		var e invoicev1.Created
-		if err := proto.Unmarshal(env.Payload, &e); err != nil {
-			return err
-		}
-		r.rows[streamID] = &invoicev1.Invoice{
-			InvoiceId:  e.InvoiceId,
-			CustomerId: e.CustomerId,
-			Currency:   e.Currency,
-			TotalCents: e.TotalCents,
-			Status:     invoicev1.Status_STATUS_OPEN,
-		}
-	case "myapp.invoice.v1.Paid", "myapp.invoice.v1.Voided":
+	streamID := envs[0].StreamID.Canonical()
+	if state.Status == invoicev1.Status_STATUS_PAID || state.Status == invoicev1.Status_STATUS_VOIDED {
 		delete(r.rows, streamID)
+		return nil
 	}
+	r.rows[streamID] = state
 	return nil
 }
 
@@ -76,21 +66,22 @@ func (r *ReadModel) Len() int {
 	return len(r.rows)
 }
 
-// AuditLog — Async subscriber. Spawned as a goroutine; HandleCmd
-// doesn't wait for it.
+// AuditLog — Async subscriber. Spawned as a child workflow; HandleCmd
+// doesn't wait for it. Counts batch deliveries rather than individual
+// events — one Handle invocation per command.
 type AuditLog struct {
 	calls atomic.Int32
 }
 
 func NewAuditLog() *AuditLog { return &AuditLog{} }
 
-func (a *AuditLog) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (a *AuditLog) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name:        "audit-log",
 		Mode:        cmdworkflow.Async,
 		MaxRetries:  3,
 		OnExhausted: cmdworkflow.Drop,
-		Handle: func(_ context.Context, _ es.Envelope) error {
+		Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 			a.calls.Add(1)
 			return nil
 		},
