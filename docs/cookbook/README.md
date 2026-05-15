@@ -36,6 +36,8 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 16 | [Sagas at the app layer](./16-sagas-at-the-app-layer.md) | Multi-step orchestration with timers / external callbacks / concurrent waits as user workflow functions calling the framework's command bus. Restate + DBOS variants. Why sagas are deliberately out of framework scope. |
 | 17 | [High-frequency bucketed events](./17-high-frequency-bucketed-events.md) | Login ticks, heartbeats, last-seen updates: Decider-side bucket dedup, when to spin a short-retention firehose stream, when to stay out of ES. Clock-skew + replay edge cases. |
 | 18 | [Clock injection and time acceleration](./18-clock-and-time-acceleration.md) | `es.Clock` + `ManualClock` for deterministic time-travel in tests. Expiry-window assertions, bucket boundary tests, workflow-sleep substitutes. Anti-patterns: `time.Now()` in Deciders, framework hot paths. |
+| 19 | [L2 — Periodic Merkle anchors](./19-merkle-anchors.md) | Bolt-on to ADR 0028's L1 chain that detects **truncation** by Merkle-rooting hashes into an `events_anchor` audit table on a scheduled cadence. |
+| 20 | [L3 — External witness anchoring](./20-external-witness.md) | Publish L2 Merkle roots to an external append-only log (internal ledger, Sigstore Rekor, OpenTimestamps/Bitcoin) so a hostile DBA who edits both `events` and `events_anchor` is still detectable. |
 
 ## Conventions used in these recipes
 

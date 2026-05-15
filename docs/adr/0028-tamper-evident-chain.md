@@ -128,10 +128,10 @@ verify the chain against the originally appended bytes.
 
 - **L2 — periodic Merkle anchors in a separate audit table.** Cadence,
   table layout, indexing, and retention vary per workload. Lives as
-  cookbook recipe 16.
+  cookbook recipe 19.
 - **L3 — external witness anchoring** (Sigstore Rekor, internal
   append-only ledger, blockchain). Trust roots and protocol vary per
-  org. Lives as cookbook recipe 17.
+  org. Lives as cookbook recipe 20.
 - **Per-event digital signatures.** A different threat model
   (nonrepudiation against the writer, not detection by the auditor).
   Worth a separate ADR if a consumer needs it.
@@ -182,7 +182,7 @@ the *applied event*, not its DB-side metadata.
   (new ADR, new column, migration).
 - Subscribers receive envelopes with `hash` populated. Downstream
   projections that mirror events into external systems can replay
-  the hash for end-to-end attestation — enabling recipe 17 (external
+  the hash for end-to-end attestation — enabling recipe 20 (external
   witness) without further framework changes.
 - Crypto-shredding stays unchanged. The chain continues to verify
   after a shred; auditors learn "an event existed here" without
