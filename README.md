@@ -11,39 +11,54 @@ in early stages.
 
 ## Design
 
-- [Architecture Decision Records](docs/adr/) — 19 ADRs covering the
+- [Architecture Decision Records](docs/adr/) — the ADRs covering the
   framework's spine. Start with the [index](docs/adr/README.md).
 - [Cookbook](docs/cookbook/) — patterns for application code that the
   framework deliberately does not provide (sagas, process managers,
-  workflows, timeouts).
+  workflows, timeouts, HTTP edge).
+- [Architecture overview](docs/architecture/overview.md) — the
+  high-level shape.
 
 ## Repository layout
 
 ```
 es/               Core API (Decider, Envelope, StreamID, ...)
-aggregate/        Aggregate runtime
+aggregate/        Aggregate runtime (incl. aggregate.NewProto)
 projection/       Projector runtime
 outbox/           Outbox primitives + drain helpers
-snapshot/         Snapshot primitives
 shred/            Crypto-shredding logic
-publisher/        EventPublisher interface (+ inproc adapter)
-kms/              KeyStore interface (+ inproc adapter)
+cmdworkflow/      Workflow-orchestrated command bus (ADR 0025)
+publisher/        EventPublisher interface
+kms/              KeyStore interface
 estest/           Test harness (given/when/then)
 proto/            Framework's own .proto files
-gen/              Generated Go from framework protos
-cmd/              CLI tools
-  protoc-gen-es-go/   Codegen plugin (Phase 2)
-  esctl/              Operational CLI
+gen/              Generated Go from framework protos (DO NOT hand-edit)
+proto-gen/        protoc-gen-es-go codegen plugin source
 adapters/
   storage/
-    postgres/     Postgres adapter (pgx)
-    sqlite/       SQLite adapter (driver-agnostic; modernc / libsql)
-  publisher/      External publisher adapters (Phase 2+)
-  kms/            External KMS adapters (Phase 2+)
+    postgres/         Postgres adapter (pgx)            [own go.mod]
+    sqlite/           SQLite adapter                    [own go.mod]
+  cmdworkflow/
+    inproc/           In-process workflow runtime (tests)
+    restate/          Restate workflow adapter          [own go.mod]
+    dbos/             DBOS workflow adapter             [own go.mod]
+  authz/
+    cedar/            Cedar policy adapter              [own go.mod]
+  httpedge/
+    connect/          Connect-go runtime helper         [own go.mod]
+  kms/inproc/         In-process key store
+  publisher/inproc/   In-process publisher
+examples/             Worked examples per aggregate / pattern (each its own go.mod, not published)
+scripts/release.sh    Synchronized release across published modules
 docs/
-  adr/            Architecture Decision Records
-  cookbook/       Application-pattern recipes
+  adr/                Architecture Decision Records
+  cookbook/           Application-pattern recipes
+  architecture/       High-level overview
 ```
+
+Adapters with their own `go.mod` are independently published (see
+`scripts/release.sh`); they pull heavy SDK dependencies and keep them
+scoped to consumers that actually use them.
 
 ## Defining an aggregate
 
@@ -188,15 +203,15 @@ The hand-written piece per aggregate is small. The recommended
 pattern uses the proto-defined State message directly:
 
 ```go
-// State is the proto-defined message — no parallel Go struct needed.
-// proto.Marshal(state) gives you free snapshots (ADR 0011) and the
-// schema lives in exactly one place.
-type State = counterv1.Counter
+// The proto State message is used directly — no parallel Go struct.
+// Marshalling state into the state_cache (ADR 0023, supersedes the
+// earlier snapshot design) is automatic when wired via
+// aggregate.NewProto (see below).
 
-var Decider = es.Decider[*State, counterv1.Command, counterv1.Event]{
-    Initial: func() *State { return &State{} },
+var Decider = es.Decider[*counterv1.Counter, counterv1.Command, counterv1.Event]{
+    Initial: func() *counterv1.Counter { return &counterv1.Counter{} },
 
-    Decide: func(s *State, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
+    Decide: func(s *counterv1.Counter, c counterv1.Command) ([]counterv1.Event, []es.ConstraintOp, error) {
         switch cmd := c.(type) {
         case *counterv1.Init:
             if s.GetInitialized() {
@@ -210,7 +225,7 @@ var Decider = es.Decider[*State, counterv1.Command, counterv1.Event]{
         }
     },
 
-    Evolve: func(s *State, e counterv1.Event) *State {
+    Evolve: func(s *counterv1.Counter, e counterv1.Event) *counterv1.Counter {
         switch evt := e.(type) {
         case *counterv1.Initialized:
             s.Initialized = true
@@ -222,19 +237,29 @@ var Decider = es.Decider[*State, counterv1.Command, counterv1.Event]{
 }
 ```
 
-Then wire the runtime against any `es.Store`:
+Then wire the runtime against any `es.Store`. For proto-state
+aggregates, `aggregate.NewProto` pre-wires the `state_cache` codec
+so reads are served from the cache (read-your-writes; ADR 0023):
 
 ```go
-runtime := &aggregate.Runtime[*State, counterv1.Command, counterv1.Event]{
-    Store:   store,                  // postgres or sqlite adapter
-    Decider: Decider,
-    Codec:   counterv1.EventCodec{}, // generated
-}
+runtime := aggregate.NewProto(
+    store,                 // postgres or sqlite adapter
+    Decider,
+    counterv1.EventCodec{}, // generated
+)
 
+ctx = es.WithTenant(ctx, tenantID)     // REQUIRED (ADR 0007)
+streamID, _ := es.NewStreamID(tenantID, "counter", "main")
 result, err := runtime.Handle(ctx, streamID, &counterv1.Init{
     Min: 0, Max: 100, Initial: 5,
 })
 ```
+
+For production deployments where commands need durable subscriber
+fan-out, wrap the runtime in a `cmdworkflow.Workflow` (ADR 0025;
+see [cookbook 14](docs/cookbook/14-cmdworkflow-deployment.md)) and
+expose it via Connect over HTTP using
+[cookbook 15](docs/cookbook/15-http-edge-with-connect.md).
 
 ### Hand-written state struct — when it's the right choice
 
@@ -273,11 +298,13 @@ state for production-shape illustration.
 - **Event names are past-tense domain verbs** (Initialized,
   Incremented); **command names are imperatives** (Init, Increment).
 
-### PII annotations (forthcoming)
+### PII annotations
 
-The options below are already defined in `proto/es/v1/options.proto`
-and will be consumed by codegen in a later iteration. Add them now
-and the resulting protos remain forward-compatible.
+Encryption is opt-in via `(es.v1.data_classification)`. Default
+(`PUBLIC` or unset) is plaintext. Anything from `PERSONAL` onwards
+is encrypted per-subject (see ADR 0010 and ADR 0027 for the
+classification-to-behavior mapping; cookbook 11 for the operator
+runbook). Works on both `string` and `bytes` fields.
 
 ```protobuf
 message UserRegistered {
@@ -323,8 +350,8 @@ message Incremented {
 }
 ```
 
-The upcaster registry (planned codegen work) will scaffold a stub
-when the version bumps and fail the build until the body is filled in.
+Codegen scaffolds upcaster registration stubs when a version bump
+is detected so the build fails until the body is filled in.
 
 See [`docs/adr/`](docs/adr/) for the full architectural rationale
 behind each option.

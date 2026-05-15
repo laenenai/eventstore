@@ -1,9 +1,25 @@
 version: '3'
 
 vars:
-  ROOT_MOD: .
-  PG_MOD:   ./adapters/storage/postgres
-  SQ_MOD:   ./adapters/storage/sqlite
+  # Workspace modules — published adapters + the framework root. Keep
+  # in sync with go.work's `use` block (minus examples/, which run
+  # separately).
+  MODULES: >-
+    .
+    ./adapters/storage/postgres
+    ./adapters/storage/sqlite
+    ./adapters/authz/cedar
+    ./adapters/cmdworkflow/restate
+    ./adapters/cmdworkflow/dbos
+    ./adapters/httpedge/connect
+
+  # Example modules (not published, but tested in CI to catch
+  # regressions in the framework-consumer contract).
+  EXAMPLE_MODULES: >-
+    ./examples/connectedge
+    ./examples/cmdworkflow
+    ./examples/employee
+    ./examples/invoice
 
 tasks:
   default:
@@ -11,41 +27,52 @@ tasks:
     cmd: task --list
 
   test:
-    desc: Run unit tests across all modules
+    desc: Run unit tests across all workspace modules
     cmds:
-      - cd {{.ROOT_MOD}} && go test ./...
-      - cd {{.PG_MOD}}   && go test ./...
-      - cd {{.SQ_MOD}}   && go test ./...
+      - |
+        for mod in {{.MODULES}}; do
+          echo "=== go test in $mod ===" && (cd "$mod" && go test ./...) || exit 1
+        done
+
+  test:examples:
+    desc: Run example tests (catches framework-consumer contract regressions)
+    cmds:
+      - |
+        for mod in {{.EXAMPLE_MODULES}}; do
+          echo "=== go test in $mod ===" && (cd "$mod" && go test ./...) || exit 1
+        done
 
   vet:
-    desc: Run go vet across all modules
+    desc: Run go vet across all workspace modules
     cmds:
-      - cd {{.ROOT_MOD}} && go vet ./...
-      - cd {{.PG_MOD}}   && go vet ./...
-      - cd {{.SQ_MOD}}   && go vet ./...
+      - |
+        for mod in {{.MODULES}}; do
+          echo "=== go vet in $mod ===" && (cd "$mod" && go vet ./...) || exit 1
+        done
 
   build:
-    desc: Build all packages across all modules
+    desc: Build all packages across all workspace modules
     cmds:
-      - cd {{.ROOT_MOD}} && go build ./...
-      - cd {{.PG_MOD}}   && go build ./...
-      - cd {{.SQ_MOD}}   && go build ./...
+      - |
+        for mod in {{.MODULES}}; do
+          echo "=== go build in $mod ===" && (cd "$mod" && go build ./...) || exit 1
+        done
 
   generate:
     desc: Run buf + sqlc codegen
     cmds:
       - cd proto && buf generate
-      - cd {{.PG_MOD}} && sqlc generate
-      - cd {{.SQ_MOD}} && sqlc generate
+      - cd ./adapters/storage/postgres && sqlc generate
+      - cd ./adapters/storage/sqlite   && sqlc generate
 
   generate:check:
     desc: Verify generated code is up to date (CI gate)
     deps: [generate]
     cmds:
       - |
-        if [ -n "$(git status --porcelain gen adapters/storage/*/internal/db)" ]; then
+        if [ -n "$(git status --porcelain gen adapters/storage/*/internal/db adapters/cmdworkflow/*/gen)" ]; then
           echo "ERROR: generated code is out of date. Run 'task generate' and commit." >&2
-          git status --porcelain gen adapters/storage/*/internal/db >&2
+          git status --porcelain gen adapters/storage/*/internal/db adapters/cmdworkflow/*/gen >&2
           exit 1
         fi
 
@@ -55,12 +82,22 @@ tasks:
       - cd proto && buf lint
       - cd proto && buf breaking --against '.git#branch=main'
 
+  ci:
+    desc: CI gate — vet, tests, examples, generated-code freshness, proto lint
+    cmds:
+      - task: vet
+      - task: test
+      - task: test:examples
+      - task: generate:check
+      - task: lint:proto
+
   clean:
     desc: Remove build artifacts
     cmds:
-      - cd {{.ROOT_MOD}} && go clean ./...
-      - cd {{.PG_MOD}}   && go clean ./...
-      - cd {{.SQ_MOD}}   && go clean ./...
+      - |
+        for mod in {{.MODULES}}; do
+          (cd "$mod" && go clean ./...) || exit 1
+        done
 
   release:
     desc: Tag a synchronized release across all published modules (VERSION=vX.Y.Z)

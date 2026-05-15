@@ -1,0 +1,123 @@
+name: ci
+
+# Two responsibilities, sequenced:
+#
+#   1. ci job — runs the quality gate (vet, tests, examples, generated-
+#      code freshness, proto lint). Fires on PRs and on push to main.
+#
+#   2. tag job — only on push to main, only after ci passes. Reads the
+#      HEAD commit subject; if it carries a conventional-commits prefix
+#      (feat:/fix:), computes the next synchronized version and runs
+#      scripts/release.sh. Anything else (docs:, chore:, refactor:, …)
+#      is a no-op.
+#
+# Manual releases via .github/workflows/release.yml's workflow_dispatch
+# still work and override this cadence — use them for major bumps,
+# prereleases, or to batch several feat/fix commits behind one tag.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # buf breaking needs main as a reachable ref. Fetch enough
+          # history that it resolves on a feature-branch checkout.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install buf
+        run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+      - name: Install sqlc
+        run: go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+
+      - name: Install task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: task ci
+
+  tag:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: main
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Compute next version
+        id: version
+        run: |
+          set -euo pipefail
+          msg="$(git log -1 --pretty=%s HEAD)"
+          echo "head subject: $msg"
+
+          case "$msg" in
+            feat:*|feat\(*\):*)  bump=minor ;;
+            fix:*|fix\(*\):*)    bump=patch ;;
+            *)
+              echo "no feat:/fix: prefix — skipping release"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+          esac
+
+          last="$(git tag --list 'v*' --sort=-v:refname | head -n1)"
+          [[ -z "$last" ]] && last="v0.0.0"
+          v="${last#v}"
+          IFS='.' read -r major minor patch <<<"$v"
+
+          case "$bump" in
+            minor) minor=$((minor+1)); patch=0 ;;
+            patch) patch=$((patch+1)) ;;
+          esac
+          version="v${major}.${minor}.${patch}"
+          echo "bump=$bump version=$version"
+          echo "skip=false"       >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "bump=$bump"       >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        if: steps.version.outputs.skip == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Run release script
+        if: steps.version.outputs.skip == 'false'
+        run: ./scripts/release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Create GitHub release
+        if: steps.version.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true

@@ -45,9 +45,9 @@ func TestEdge_HireRoundTrip(t *testing.T) {
 
 	req := connect.NewRequest(&employeev1.Hire{
 		EmployeeId:  "emp-1",
-		LegalName:   []byte("Alice"),
-		Email:       []byte("alice@example.com"),
-		DateOfBirth: []byte("1990-01-01"),
+		LegalName:   "Alice",
+		Email:       "alice@example.com",
+		DateOfBirth: "1990-01-01",
 		Department:  "eng",
 		InitialRole: "swe-2",
 	})
@@ -95,8 +95,8 @@ func TestEdge_DomainErrorMapsToFailedPrecondition(t *testing.T) {
 		baseURL+"/myapp.employee.v1.EmployeeService/Hire",
 	)
 	first := connect.NewRequest(&employeev1.Hire{
-		EmployeeId: "emp-3", LegalName: []byte("Bob"),
-		Email: []byte("b@e.com"), DateOfBirth: []byte("1990-01-01"),
+		EmployeeId: "emp-3", LegalName: "Bob",
+		Email: "b@e.com", DateOfBirth: "1990-01-01",
 		Department: "eng", InitialRole: "swe-1",
 	})
 	first.Header().Set("X-Tenant", "acme")
@@ -110,8 +110,8 @@ func TestEdge_DomainErrorMapsToFailedPrecondition(t *testing.T) {
 	// errors need explicit handling in the decode wrapper if the user
 	// wants richer codes. The recipe documents the pattern.
 	second := connect.NewRequest(&employeev1.Hire{
-		EmployeeId: "emp-3", LegalName: []byte("Bob"),
-		Email: []byte("b@e.com"), DateOfBirth: []byte("1990-01-01"),
+		EmployeeId: "emp-3", LegalName: "Bob",
+		Email: "b@e.com", DateOfBirth: "1990-01-01",
 		Department: "eng", InitialRole: "swe-1",
 	})
 	second.Header().Set("X-Tenant", "acme")

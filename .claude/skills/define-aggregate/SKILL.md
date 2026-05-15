@@ -54,16 +54,23 @@ message <Aggregate> {
   option (es.v1.aggregate) = "<aggregate>";
 
   // Subject id field — identifies the crypto-shred subject. Always
-  // plaintext; never encrypted.
+  // plaintext; never encrypted (you'd need the key to find the key).
   string <aggregate>_id = 1 [(es.v1.subject_field) = true];
 
-  // Domain fields.
-  //   - bytes fields without (es.v1.non_pii) are crypto-shredded
-  //     (encrypted per-subject; key destroyed on ForgetSubject).
-  //   - bytes fields WITH (es.v1.non_pii) stay plaintext.
-  //   - string / int / enum fields are NEVER encrypted regardless of
-  //     annotation. If a string field is PII, change it to bytes.
-  // ...
+  // Domain fields. Annotate each with a data_classification:
+  //   PUBLIC / UNSPECIFIED — plaintext, in DSAR exports.
+  //   INTERNAL             — plaintext, NOT in DSAR.
+  //   PERSONAL             — encrypted per-subject (GDPR Art.4).
+  //   QUASI_IDENTIFIER     — encrypted (HIPAA-safe-harbor 18-list).
+  //   SENSITIVE            — encrypted + audited (GDPR Art.9).
+  //   FINANCIAL            — encrypted + tax-retention-locked.
+  //   CARDHOLDER           — encrypted + PCI-scoped + audited.
+  //   SAD                  — REJECTED at runtime (PCI never-persist).
+  //   CREDENTIAL           — encrypted, DSAR always skips.
+  //   UNSTRUCTURED         — encrypted, scanner flag for PII spill.
+  // Works on both string (ciphertext base64'd) and bytes (raw).
+  string email = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string department = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
 }
 
 // ---- Commands (variants) ------------------------------------------------
@@ -107,9 +114,10 @@ Apply naming conventions:
 - Commands: imperative (Register, ChangeEmail, AssignRole)
 - Events: past-tense (Registered, EmailChanged, RoleAssigned)
 - State fields: lowercase snake_case for proto, will become PascalCase in Go
-- PII handling: model PII as `bytes` (crypto-shredded by default); mark
-  non-PII bytes with `[(es.v1.non_pii) = true]`. String / int / enum
-  fields are never encrypted — use `bytes` if the value is PII.
+- PII handling: encryption is opt-in via `(es.v1.data_classification)`.
+  Default (`PUBLIC` / unset) is plaintext. Anything `PERSONAL` or
+  stricter is encrypted per-subject (works on `string` AND `bytes`).
+  `SAD` is rejected at runtime — never persist. See ADR 0027.
 
 ## Step 2 — Generate code
 

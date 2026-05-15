@@ -83,9 +83,16 @@ adapter `gen/` trees so the SDK deps stay scoped to the adapter.
   (ADR 0023). The `snapshot/` package is dead code awaiting deletion.
   Aggregate state is mirrored synchronously in transaction; read it
   via the runtime's `Load`, not via event replay.
-- **PII via crypto-shredding** — proto `bytes` fields with no
-  `non_pii` annotation are encrypted per-subject; `ForgetSubject`
-  destroys the DEK (ADR 0010, cookbook 11).
+- **PII via crypto-shredding** — encryption is opt-in via the
+  `(es.v1.data_classification)` field option. Default
+  (`DATA_CLASSIFICATION_PUBLIC` or unset) is plaintext. Declaring
+  `PERSONAL`, `QUASI_IDENTIFIER`, `SENSITIVE`, `FINANCIAL`,
+  `CARDHOLDER`, `CREDENTIAL`, or `UNSTRUCTURED` engages per-subject
+  encryption. `INTERNAL` stays plaintext but is excluded from DSAR
+  export. `SAD` (PCI sensitive auth data) is **rejected at runtime**
+  — never persistable. Works on both `string` (ciphertext base64'd
+  to stay UTF-8) and `bytes` (ciphertext raw) fields. `ForgetSubject`
+  destroys the DEK (ADR 0010, ADR 0027, cookbook 11).
 - **Commands via the bus** — production wiring is
   `cmdworkflow.Workflow` over Restate or DBOS (ADR 0025/0026, cookbook
   14). `inproc` is for tests only.

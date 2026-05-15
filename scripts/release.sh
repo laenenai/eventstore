@@ -35,12 +35,10 @@ tag_for() {
   if [[ -z "$mod" ]]; then echo "$VERSION"; else echo "$mod/$VERSION"; fi
 }
 
-# Preflight: on main, clean, in sync with origin.
-branch="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$branch" != "main" ]]; then
-  echo "error: must release from main (currently on $branch)" >&2
-  exit 1
-fi
+# Preflight: clean tree, HEAD matches origin/main. The branch-name
+# check is intentionally skipped — CI runs in detached HEAD on the
+# main ref, which is the same commit but not the same branch handle.
+# The SHA comparison below is the load-bearing safety check.
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "error: working tree is dirty" >&2
   git status --short >&2
@@ -50,7 +48,7 @@ git fetch origin --tags --quiet
 local_sha="$(git rev-parse HEAD)"
 remote_sha="$(git rev-parse origin/main)"
 if [[ "$local_sha" != "$remote_sha" ]]; then
-  echo "error: local main ($local_sha) does not match origin/main ($remote_sha)" >&2
+  echo "error: HEAD ($local_sha) does not match origin/main ($remote_sha)" >&2
   exit 1
 fi
 
