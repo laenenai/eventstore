@@ -696,9 +696,20 @@ func classifyFields(v *protogen.Message) ([]piiField, bool, error) {
 			case protoreflect.StringKind:
 				pf.kind = piiKindString
 			default:
-				return nil, false, fmt.Errorf(
-					"protoc-gen-es-go: field %s.%s has data_classification=%s but type %s is not encryptable (must be string or bytes)",
-					v.Desc.FullName(), pf.protoName, pf.classification, f.Desc.Kind())
+				// Non-string/bytes field with a PII classification: the
+				// classification still drives View() / LogValue() access
+				// scoping (e.g. an int32 date_of_birth_year classified
+				// QUASI_IDENTIFIER is hidden below AccessLevelSubject),
+				// but the field cannot be encrypted at the wire-format
+				// boundary — there's no per-field crypto envelope for
+				// fixed-width primitives. Emit no encryption code; the
+				// access helpers continue to honour the classification.
+				//
+				// Repeated/map/message fields with a PII classification
+				// land here too; they encode their PII through their
+				// element/value types' own classifications, not at the
+				// container level.
+				pf.kind = piiKindNone
 			}
 		default:
 			pf.kind = piiKindNone
