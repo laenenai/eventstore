@@ -11,6 +11,7 @@ sql:
       - migrations/00006_processed_events.sql
       - migrations/00007_state_cache_jsonb.sql
       - migrations/00008_state_cache_schema_version.sql
+      - migrations/00009_drop_snapshots.sql
       - migrations/00010_state_stream_subscribers.sql
       - migrations/00011_subscriber_dlq.sql
       - migrations/00012_tamper_evident_chain.sql

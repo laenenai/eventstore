@@ -80,9 +80,8 @@ adapter `gen/` trees so the SDK deps stay scoped to the adapter.
   operate without one. `StreamID` is `tenant:type:id` canonical form
   (ADR 0008).
 - **State lives in `state_cache`** — `state_cache` supersedes snapshots
-  (ADR 0023). The `snapshot/` package is dead code awaiting deletion.
-  Aggregate state is mirrored synchronously in transaction; read it
-  via the runtime's `Load`, not via event replay.
+  (ADR 0023). Aggregate state is mirrored synchronously in transaction;
+  read it via the runtime's `Load`, not via event replay.
 - **PII via crypto-shredding** — encryption is opt-in via the
   `(es.v1.data_classification)` field option. Default
   (`DATA_CLASSIFICATION_PUBLIC` or unset) is plaintext. Declaring
@@ -115,7 +114,8 @@ adapter `gen/` trees so the SDK deps stay scoped to the adapter.
   surrounding cleanup; abstractions earn their place by being used
   three times.
 - **Don't introduce snapshot infrastructure** — superseded by
-  state_cache. The `snapshot/` package should be deleted, not extended.
+  state_cache (ADR 0023). The historical `snapshots` table is dropped
+  by migrations 00009 (sqlite) / 00010 (postgres); don't reintroduce it.
 
 ## Commands
 
