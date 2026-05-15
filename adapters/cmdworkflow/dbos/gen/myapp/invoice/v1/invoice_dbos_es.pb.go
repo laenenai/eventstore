@@ -16,14 +16,14 @@ import (
 // DBOS workflows. Register each method with dbos.RegisterWorkflow
 // before calling dctx.Launch().
 type DBOSService struct {
-	Workflow *cmdworkflow.Workflow[*v1.Invoice, v1.Command]
+	Workflow *cmdworkflow.Workflow[*v1.Invoice, v1.Command, v1.Event]
 }
 
 // NewDBOSService returns a DBOS-registerable service backed by wf.
 // Also wires durable Async fan-out: subsequent Async subscriber
 // dispatches go through dbos.RunWorkflow targeting AsyncDispatch,
-// keyed by <streamType>:<subscriberName>:<eventID> for dedup.
-func NewDBOSService(wf *cmdworkflow.Workflow[*v1.Invoice, v1.Command]) *DBOSService {
+// keyed by <streamType>:<subscriberName>:<firstEventID> for dedup.
+func NewDBOSService(wf *cmdworkflow.Workflow[*v1.Invoice, v1.Command, v1.Event]) *DBOSService {
 	s := &DBOSService{Workflow: wf}
 	wf.SetAsyncSend(s.sendAsync)
 	return s

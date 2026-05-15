@@ -78,7 +78,8 @@ type Querier interface {
 	DeleteStateCacheForType(ctx context.Context, arg DeleteStateCacheForTypeParams) (int64, error)
 	// Cross-tenant variant for full rebuild.
 	DeleteStateCacheForTypeAllTenants(ctx context.Context, typeUrl string) (int64, error)
-	// Delete a single DLQ row after operator-driven replay.
+	// Delete a single DLQ row after operator-driven replay. Keyed by the
+	// batch's first event id (uniquely identifies the failed batch).
 	DeleteSubscriberDLQRow(ctx context.Context, arg DeleteSubscriberDLQRowParams) error
 	// Crypto-shred a subject. Sets the wrapped DEK to empty bytes and marks
 	// the shred timestamp. The row is retained for compliance audit.
@@ -113,10 +114,11 @@ type Querier interface {
 	// (projection, tenant, global_position) overwrites the existing row
 	// (handler error message is the most useful version).
 	InsertProjectionDLQ(ctx context.Context, arg InsertProjectionDLQParams) error
-	// subscriber_dlq queries (ADR 0025).
-	// Capture one exhausted subscriber delivery. INSERT-on-conflict-update
-	// keeps the most recent attempt info if the same (subscriber, tenant,
-	// event) re-DLQs (rare — happens on replay after partial recovery).
+	// subscriber_dlq queries (ADR 0025, batched per ADR 0029).
+	// Capture one exhausted subscriber command-batch. INSERT-on-conflict-
+	// update keeps the most recent attempt info if the same (subscriber,
+	// tenant, first_event_id) re-DLQs (rare — happens on replay after
+	// partial recovery).
 	InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error
 	// Returns the hash of the most recent event in a stream, used to
 	// chain the next append. Empty result for streams with no events.

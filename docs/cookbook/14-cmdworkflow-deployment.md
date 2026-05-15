@@ -38,11 +38,15 @@ pool, _ := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
 store := pgadapter.New(pool)
 store.Migrate(ctx) // eventstore tables
 
-// Workflow: same shape as inproc + restate examples.
-wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+// Workflow: same shape as inproc + restate examples. Per-batch
+// subscriber delivery (ADR 0029) means the constructor takes the
+// event Codec[E] alongside the aggregate runtime + store + runtime
+// adapter.
+wf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
     aggregate.NewProto(store, invoice.Decider, invoicev1.EventCodec{}),
     store,
     cwdbos.New(),
+    invoicev1.EventCodec{},
 ).
     WithDLQ(store).
     With(readModel.Subscriber(), searchIndex.Subscriber(), creditCheck.Subscriber())
@@ -143,12 +147,15 @@ Application code, runtime-agnostic. Same shape regardless of adapter:
 db := openPostgres()                                // your event store
 store := pgadapter.New(db)                          // eventstore adapter
 
-// One Workflow per aggregate.
+// One Workflow per aggregate. The Workflow is generic over
+// [S, C, E] (ADR 0029) so subscribers receive typed events
+// alongside the post-Decide state in one Handle call.
 runtime := cwrestate.New()                          // Restate WorkflowRuntime
-invoiceWf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
+invoiceWf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event](
     aggregate.NewProto(store, invoice.Decider, invoicev1.EventCodec{}),
     store,
     runtime,
+    invoicev1.EventCodec{},
 ).
     WithDLQ(store).
     With(
@@ -157,7 +164,7 @@ invoiceWf := cmdworkflow.New[*invoicev1.Invoice, invoicev1.Command](
         invoiceCreditCheck.Subscriber(),   // Sync+Compensate — saga step
     )
 
-customerWf := cmdworkflow.New[*customerv1.Customer, customerv1.Command](...)...
+customerWf := cmdworkflow.New[*customerv1.Customer, customerv1.Command, customerv1.Event](...)...
 ```
 
 ### 2. Bind generated services to Restate

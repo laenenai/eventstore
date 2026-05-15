@@ -5,8 +5,6 @@ import (
 	"errors"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/laenenai/eventstore/cmdworkflow"
 	"github.com/laenenai/eventstore/es"
 	invoicev1 "github.com/laenenai/eventstore/gen/myapp/invoice/v1"
@@ -14,35 +12,28 @@ import (
 
 // ============================================================
 // Subscriber #1: ReadModel — Sync local-UPSERT into "active invoices"
-// table. Demonstrates the most common subscriber shape: a Tier 3
-// projection that the UI queries directly, kept consistent via the
-// command bus rather than a polled projection runner.
+// table. With per-batch delivery (ADR 0029), the projection becomes
+// "given the post-Decide state, set the active-row to that state if
+// the invoice is open, otherwise drop it" — no per-event type switch.
 // ============================================================
 
-// ActiveInvoice is one row in the fake read model.
-type ActiveInvoice struct {
-	InvoiceID  string
-	CustomerID string
-	TotalCents int64
-	Status     invoicev1.Status
-}
-
-// ReadModel is an in-memory read store. Real implementations would
-// be Postgres / MySQL / wherever the read side lives. The contract is
-// the same: idempotent UPSERT keyed by stream id.
+// ReadModel is an in-memory read store keyed by stream id. Real
+// implementations would be Postgres / MySQL / wherever the read side
+// lives. The contract is the same: idempotent UPSERT keyed by stream
+// id.
 type ReadModel struct {
 	mu   sync.RWMutex
-	rows map[string]*ActiveInvoice
+	rows map[string]*invoicev1.Invoice
 }
 
 func NewReadModel() *ReadModel {
-	return &ReadModel{rows: map[string]*ActiveInvoice{}}
+	return &ReadModel{rows: map[string]*invoicev1.Invoice{}}
 }
 
 // Subscriber returns the bus-registration entry for this read model.
 // Sync + retries + DLQ: this is the read-your-writes path.
-func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name: "active-invoices",
 		Filter: cmdworkflow.EventFilter{
 			TypeURLs: []string{
@@ -58,38 +49,32 @@ func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
 	}
 }
 
-func (r *ReadModel) handle(_ context.Context, env es.Envelope) error {
+// handle receives the WHOLE post-Decide state on every batch — no
+// re-deriving it from event payloads, no second Load. The projection
+// reduces to: store the state if active, drop it otherwise. The new
+// shape is dramatically simpler than the per-event type-switch the
+// old per-event subscriber model required.
+func (r *ReadModel) handle(_ context.Context, envs []es.Envelope, state *invoicev1.Invoice, _ []invoicev1.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	streamID := env.StreamID.Canonical()
-	switch env.TypeURL {
-	case "myapp.invoice.v1.Created":
-		var e invoicev1.Created
-		if err := proto.Unmarshal(env.Payload, &e); err != nil {
-			return err
-		}
-		r.rows[streamID] = &ActiveInvoice{
-			InvoiceID:  e.InvoiceId,
-			CustomerID: e.CustomerId,
-			TotalCents: e.TotalCents,
-			Status:     invoicev1.Status_STATUS_OPEN,
-		}
-	case "myapp.invoice.v1.Paid", "myapp.invoice.v1.Voided":
-		// Terminal — drop from "active" view.
+	streamID := envs[0].StreamID.Canonical()
+	if state.Status == invoicev1.Status_STATUS_PAID || state.Status == invoicev1.Status_STATUS_VOIDED {
 		delete(r.rows, streamID)
+		return nil
 	}
+	r.rows[streamID] = state
 	return nil
 }
 
 // Lookup returns the current row for an invoice.
-func (r *ReadModel) Lookup(streamID string) (ActiveInvoice, bool) {
+func (r *ReadModel) Lookup(streamID string) (*invoicev1.Invoice, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	row, ok := r.rows[streamID]
 	if !ok {
-		return ActiveInvoice{}, false
+		return nil, false
 	}
-	return *row, true
+	return row, true
 }
 
 // Len returns the count of active rows.
@@ -108,7 +93,7 @@ func (r *ReadModel) Len() int {
 
 type SearchIndex struct {
 	mu       sync.RWMutex
-	docs     map[string]string // streamID → typeURL of latest seen
+	docs     map[string]string // streamID → typeURL of latest seen event in batch
 	failNext int               // test hook — fail this many calls
 }
 
@@ -122,8 +107,8 @@ func (s *SearchIndex) FailNext(n int) {
 	s.mu.Unlock()
 }
 
-func (s *SearchIndex) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (s *SearchIndex) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name:        "search-index-mirror",
 		Mode:        cmdworkflow.Async,
 		MaxRetries:  3,
@@ -132,14 +117,17 @@ func (s *SearchIndex) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
 	}
 }
 
-func (s *SearchIndex) handle(_ context.Context, env es.Envelope) error {
+func (s *SearchIndex) handle(_ context.Context, envs []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failNext > 0 {
 		s.failNext--
 		return errors.New("search-index: transient API failure")
 	}
-	s.docs[env.StreamID.Canonical()] = env.TypeURL
+	// Record the last event's type URL for the stream — enough for
+	// the example's assertions.
+	last := envs[len(envs)-1]
+	s.docs[last.StreamID.Canonical()] = last.TypeURL
 	return nil
 }
 
@@ -155,6 +143,10 @@ func (s *SearchIndex) Has(streamID string) bool {
 // On invoice creation, "reserve" the invoice amount with a fake
 // credit-control service. If exhausted, emits a Void command back
 // through the bus to roll back the invoice.
+//
+// With per-batch delivery the saga step receives the post-Decide
+// state directly, so it can decide based on the in-memory Invoice
+// (total cents, customer, etc.) without re-decoding events.
 // ============================================================
 
 type CreditReservation struct {
@@ -179,8 +171,8 @@ func (c *CreditReservation) SetApproveAll(b bool) {
 	c.mu.Unlock()
 }
 
-func (c *CreditReservation) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (c *CreditReservation) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name: "credit-reservation",
 		Filter: cmdworkflow.EventFilter{
 			TypeURLs: []string{"myapp.invoice.v1.Created"},
@@ -193,28 +185,24 @@ func (c *CreditReservation) Subscriber() cmdworkflow.Subscriber[invoicev1.Comman
 	}
 }
 
-func (c *CreditReservation) handle(_ context.Context, env es.Envelope) error {
+func (c *CreditReservation) handle(_ context.Context, envs []es.Envelope, state *invoicev1.Invoice, _ []invoicev1.Event) error {
 	c.mu.RLock()
 	approve := c.approveAll
 	c.mu.RUnlock()
 	if !approve {
 		return errors.New("credit-reservation: declined")
 	}
-	var e invoicev1.Created
-	if err := proto.Unmarshal(env.Payload, &e); err != nil {
-		return err
-	}
 	c.mu.Lock()
-	c.reservedFor[env.StreamID.Canonical()] = e.TotalCents
+	c.reservedFor[envs[0].StreamID.Canonical()] = state.TotalCents
 	c.mu.Unlock()
 	return nil
 }
 
-func (c *CreditReservation) compensate(_ context.Context, env es.Envelope) (invoicev1.Command, error) {
+func (c *CreditReservation) compensate(_ context.Context, envs []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) (invoicev1.Command, error) {
 	// Roll back: Void the invoice.
 	return &invoicev1.Void{
 		Reason:     "credit reservation declined",
-		VoidedAtMs: env.OccurredAt.UnixMilli(),
+		VoidedAtMs: envs[0].OccurredAt.UnixMilli(),
 	}, nil
 }
 

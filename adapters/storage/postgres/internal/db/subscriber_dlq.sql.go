@@ -35,31 +35,37 @@ const deleteSubscriberDLQRow = `-- name: DeleteSubscriberDLQRow :exec
 DELETE FROM subscriber_dlq
 WHERE subscriber_name = $1
   AND tenant_id       = $2
-  AND event_id        = $3
+  AND first_event_id  = $3
 `
 
 type DeleteSubscriberDLQRowParams struct {
 	SubscriberName string
 	TenantID       string
-	EventID        string
+	FirstEventID   string
 }
 
-// Delete a single DLQ row after operator-driven replay.
+// Delete a single DLQ row after operator-driven replay. Keyed by the
+// batch's first event id (uniquely identifies the failed batch).
 func (q *Queries) DeleteSubscriberDLQRow(ctx context.Context, arg DeleteSubscriberDLQRowParams) error {
-	_, err := q.db.Exec(ctx, deleteSubscriberDLQRow, arg.SubscriberName, arg.TenantID, arg.EventID)
+	_, err := q.db.Exec(ctx, deleteSubscriberDLQRow, arg.SubscriberName, arg.TenantID, arg.FirstEventID)
 	return err
 }
 
 const insertSubscriberDLQ = `-- name: InsertSubscriberDLQ :exec
 
 INSERT INTO subscriber_dlq (
-    subscriber_name, tenant_id, event_id, stream_id,
-    type_url, last_error, attempts, enqueued_at
+    subscriber_name, tenant_id, stream_id,
+    first_event_id, event_ids, type_urls,
+    last_error, attempts, enqueued_at
 ) VALUES (
-    $1, $2, $3, $4,
-    $5, $6, $7, $8
+    $1, $2, $3,
+    $4, $5, $6,
+    $7, $8, $9
 )
-ON CONFLICT (subscriber_name, tenant_id, event_id) DO UPDATE SET
+ON CONFLICT (subscriber_name, tenant_id, first_event_id) DO UPDATE SET
+    event_ids   = EXCLUDED.event_ids,
+    type_urls   = EXCLUDED.type_urls,
+    stream_id   = EXCLUDED.stream_id,
     last_error  = EXCLUDED.last_error,
     attempts    = EXCLUDED.attempts,
     enqueued_at = EXCLUDED.enqueued_at
@@ -68,25 +74,28 @@ ON CONFLICT (subscriber_name, tenant_id, event_id) DO UPDATE SET
 type InsertSubscriberDLQParams struct {
 	SubscriberName string
 	TenantID       string
-	EventID        string
 	StreamID       string
-	TypeUrl        string
+	FirstEventID   string
+	EventIds       []string
+	TypeUrls       []string
 	LastError      string
 	Attempts       int32
 	EnqueuedAt     time.Time
 }
 
-// subscriber_dlq queries (ADR 0025).
-// Capture one exhausted subscriber delivery. INSERT-on-conflict-update
-// keeps the most recent attempt info if the same (subscriber, tenant,
-// event) re-DLQs (rare — happens on replay after partial recovery).
+// subscriber_dlq queries (ADR 0025, batched per ADR 0029).
+// Capture one exhausted subscriber command-batch. INSERT-on-conflict-
+// update keeps the most recent attempt info if the same (subscriber,
+// tenant, first_event_id) re-DLQs (rare — happens on replay after
+// partial recovery).
 func (q *Queries) InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberDLQParams) error {
 	_, err := q.db.Exec(ctx, insertSubscriberDLQ,
 		arg.SubscriberName,
 		arg.TenantID,
-		arg.EventID,
 		arg.StreamID,
-		arg.TypeUrl,
+		arg.FirstEventID,
+		arg.EventIds,
+		arg.TypeUrls,
 		arg.LastError,
 		arg.Attempts,
 		arg.EnqueuedAt,
@@ -95,8 +104,8 @@ func (q *Queries) InsertSubscriberDLQ(ctx context.Context, arg InsertSubscriberD
 }
 
 const listSubscriberDLQ = `-- name: ListSubscriberDLQ :many
-SELECT subscriber_name, tenant_id, event_id, stream_id, type_url,
-       last_error, attempts, enqueued_at
+SELECT subscriber_name, tenant_id, stream_id, first_event_id,
+       event_ids, type_urls, last_error, attempts, enqueued_at
 FROM subscriber_dlq
 WHERE subscriber_name = $1
   AND ($2::text = '' OR tenant_id = $2)
@@ -123,9 +132,10 @@ func (q *Queries) ListSubscriberDLQ(ctx context.Context, arg ListSubscriberDLQPa
 		if err := rows.Scan(
 			&i.SubscriberName,
 			&i.TenantID,
-			&i.EventID,
 			&i.StreamID,
-			&i.TypeUrl,
+			&i.FirstEventID,
+			&i.EventIds,
+			&i.TypeUrls,
 			&i.LastError,
 			&i.Attempts,
 			&i.EnqueuedAt,

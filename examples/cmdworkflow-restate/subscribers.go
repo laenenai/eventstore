@@ -5,8 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/laenenai/eventstore/cmdworkflow"
 	"github.com/laenenai/eventstore/es"
 	invoicev1 "github.com/laenenai/eventstore/gen/myapp/invoice/v1"
@@ -16,6 +14,10 @@ import (
 // open invoices. Read-your-writes: HandleCmd blocks on this
 // subscriber's completion before returning to the API caller (which
 // in this example is Restate's ingress).
+//
+// Per-batch delivery (ADR 0029) gives the projection the full
+// post-Decide state directly — store-or-delete based on terminal
+// status, no per-event type switch.
 type ReadModel struct {
 	mu   sync.RWMutex
 	rows map[string]*invoicev1.Invoice
@@ -25,8 +27,8 @@ func NewReadModel() *ReadModel {
 	return &ReadModel{rows: map[string]*invoicev1.Invoice{}}
 }
 
-func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name: "active-invoices",
 		Filter: cmdworkflow.EventFilter{
 			TypeURLs: []string{
@@ -42,27 +44,15 @@ func (r *ReadModel) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
 	}
 }
 
-func (r *ReadModel) handle(_ context.Context, env es.Envelope) error {
+func (r *ReadModel) handle(_ context.Context, envs []es.Envelope, state *invoicev1.Invoice, _ []invoicev1.Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	streamID := env.StreamID.Canonical()
-	switch env.TypeURL {
-	case "myapp.invoice.v1.Created":
-		var e invoicev1.Created
-		if err := proto.Unmarshal(env.Payload, &e); err != nil {
-			return err
-		}
-		r.rows[streamID] = &invoicev1.Invoice{
-			InvoiceId:  e.InvoiceId,
-			CustomerId: e.CustomerId,
-			Currency:   e.Currency,
-			TotalCents: e.TotalCents,
-			Status:     invoicev1.Status_STATUS_OPEN,
-		}
-	case "myapp.invoice.v1.Paid", "myapp.invoice.v1.Voided":
-		// Terminal — drop from "active" view.
+	streamID := envs[0].StreamID.Canonical()
+	if state.Status == invoicev1.Status_STATUS_PAID || state.Status == invoicev1.Status_STATUS_VOIDED {
 		delete(r.rows, streamID)
+		return nil
 	}
+	r.rows[streamID] = state
 	return nil
 }
 
@@ -81,10 +71,11 @@ func (r *ReadModel) Len() int {
 	return len(r.rows)
 }
 
-// AuditLog is an Async subscriber that records every event as a
-// best-effort append-only log. Async means HandleCmd doesn't block
+// AuditLog is an Async subscriber that records every command-batch as
+// a best-effort append-only log. Async means HandleCmd doesn't block
 // on it — the API caller gets their response while the audit log
-// catches up in the background.
+// catches up in the background. Per-batch delivery: one Calls() bump
+// per command, not per event.
 type AuditLog struct {
 	mu    sync.RWMutex
 	calls atomic.Int32
@@ -92,18 +83,19 @@ type AuditLog struct {
 
 func NewAuditLog() *AuditLog { return &AuditLog{} }
 
-func (a *AuditLog) Subscriber() cmdworkflow.Subscriber[invoicev1.Command] {
-	return cmdworkflow.Subscriber[invoicev1.Command]{
+func (a *AuditLog) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
 		Name:        "audit-log",
 		Mode:        cmdworkflow.Async,
 		MaxRetries:  3,
 		OnExhausted: cmdworkflow.Drop, // Async DLQ also blocked on task #71
-		Handle: func(_ context.Context, _ es.Envelope) error {
+		Handle: func(_ context.Context, _ []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) error {
 			a.calls.Add(1)
 			return nil
 		},
 	}
 }
 
-// Calls returns the number of events the audit log has received.
+// Calls returns the number of command-batches the audit log has
+// received.
 func (a *AuditLog) Calls() int32 { return a.calls.Load() }

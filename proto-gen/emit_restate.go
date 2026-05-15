@@ -28,6 +28,8 @@ type aggregate struct {
 	state     *protogen.Message  // the State message
 	commands  []*protogen.Message
 	commandSumTypeName string    // the Go interface name (usually "Command")
+	eventSumTypeName   string    // the Go interface name (usually "Event")
+	eventCodecName     string    // the codec struct name (commandSumTypeName + "Codec")
 
 	// Populated by generateRestateFile before emitRestateService.
 	// The Restate-mode file lives in a different Go package; we need
@@ -47,7 +49,7 @@ type commandVariantInfo struct {
 // configured. Emits handler files; the core sum_type/codec/projection
 // emission is skipped in this mode.
 func generateRestateFile(plugin *protogen.Plugin, file *protogen.File) error {
-	aggregates, err := findAggregatesWithAnnotatedCommands(file)
+	aggregates, err := findAggregatesWithAnnotatedCommands(file, plugin.Files)
 	if err != nil {
 		return err
 	}
@@ -101,10 +103,19 @@ func generateRestateFile(plugin *protogen.Plugin, file *protogen.File) error {
 // (option (es.v1.aggregate) = "X") and pairs them with Command sum
 // types in the same file whose variants are annotated.
 //
+// The Event sum type is resolved across every file in the same proto
+// package (not just the file declaring the Command sum type). Real-
+// world layouts split aggregates across multiple proto files —
+// state + commands in one, events in another — and the package is
+// the right boundary: same proto package = same aggregate scope, and
+// the framework already isolates aggregates across packages by
+// convention. Files from different packages are never consulted for
+// the Event sum-type pairing.
+//
 // Skips aggregates whose commands have NO annotations (opt-in).
 // Errors if some — but not all — variants have annotations, or if a
 // variant has stream_id but not tenant_id (or vice versa).
-func findAggregatesWithAnnotatedCommands(file *protogen.File) ([]*aggregate, error) {
+func findAggregatesWithAnnotatedCommands(file *protogen.File, allFiles []*protogen.File) ([]*aggregate, error) {
 	// 1. Collect State messages.
 	stateByName := map[string]*aggregate{}
 	for _, m := range file.Messages {
@@ -186,10 +197,47 @@ func findAggregatesWithAnnotatedCommands(file *protogen.File) ([]*aggregate, err
 		}
 	}
 
-	// 3. Return aggregates that actually have commands attached.
+	// 3. Resolve the Event sum type for each aggregate that has
+	// commands. The codegen-emitted Workflow constructor takes the
+	// EventCodec as a fourth argument (ADR 0029), so we need the
+	// Event sum type's interface name + the conventional codec name
+	// (sumType + "Codec").
+	//
+	// Scan every file in the same proto package — real-world layouts
+	// often split aggregates into a state+commands file and an events
+	// file (centcom does this for individual, identity, kyc, etc.).
+	// Cross-package scans are deliberately excluded: an Event sum-type
+	// in a different package would couple aggregates across the
+	// boundary the framework treats as their natural isolation seam.
+	pkg := file.Desc.Package()
+	for _, f := range allFiles {
+		if f.Desc.Package() != pkg {
+			continue
+		}
+		for _, m := range f.Messages {
+			sumName, _ := proto.GetExtension(m.Desc.Options(), esv1.E_SumType).(string)
+			if sumName != "Event" {
+				continue
+			}
+			for _, a := range stateByName {
+				if len(a.commands) > 0 {
+					a.eventSumTypeName = sumName
+					a.eventCodecName = sumName + "Codec"
+				}
+			}
+		}
+	}
+
+	// 4. Return aggregates that actually have commands attached, with
+	// a fatal error if Event sum type was missing — the runtime
+	// Workflow needs an EventCodec.
 	var out []*aggregate
 	for _, a := range stateByName {
 		if len(a.commands) > 0 {
+			if a.eventSumTypeName == "" {
+				return nil, fmt.Errorf("%s: aggregate %q has annotated commands but no Event sum type (option (es.v1.sum_type) = \"Event\") in the same proto package",
+					file.Desc.Path(), a.name)
+			}
 			out = append(out, a)
 		}
 	}
@@ -253,9 +301,13 @@ func isTenantIDField(f *protogen.Field) bool {
 // tenant via context, invoke.
 func emitRestateService(out *protogen.GeneratedFile, agg *aggregate, variants []commandVariantInfo) {
 	// Types defined in the root core gen package — Invoice, Command,
-	// Create, MarkPaid, Void — must be qualified through the import.
+	// Event, Create, MarkPaid, Void — must be qualified through the
+	// import. The Workflow is generic on [S, C, E] (ADR 0029), so
+	// the Event sum type appears in the service struct's type
+	// parameters too.
 	stateName := out.QualifiedGoIdent(agg.rootImport.Ident(agg.state.GoIdent.GoName))
 	cmdIface := out.QualifiedGoIdent(agg.rootImport.Ident(agg.commandSumTypeName))
+	evtIface := out.QualifiedGoIdent(agg.rootImport.Ident(agg.eventSumTypeName))
 
 	// Framework + adapter references.
 	ctxType := out.QualifiedGoIdent(contextPkg.Ident("Context"))
@@ -270,14 +322,14 @@ func emitRestateService(out *protogen.GeneratedFile, agg *aggregate, variants []
 	out.P("// One handler per ", cmdIface, " variant; each wraps cmdworkflow.Workflow.HandleCmd")
 	out.P("// with the tenant and stream id extracted from the command.")
 	out.P("type ", svcName, " struct {")
-	out.P("\tWorkflow *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, "]")
+	out.P("\tWorkflow *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, ", ", evtIface, "]")
 	out.P("}")
 	out.P()
 	out.P("// New", svcName, " returns a Restate-bindable service backed by wf.")
 	out.P("// Also wires durable Async fan-out: subsequent Async subscriber")
 	out.P("// dispatches go through restate.ServiceSend targeting AsyncDispatch,")
-	out.P("// keyed by <streamType>:<subscriberName>:<eventID> for dedup.")
-	out.P("func New", svcName, "(wf *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, "]) *", svcName, " {")
+	out.P("// keyed by <streamType>:<subscriberName>:<firstEventID> for dedup.")
+	out.P("func New", svcName, "(wf *", cmdwfWorkflow, "[*", stateName, ", ", cmdIface, ", ", evtIface, "]) *", svcName, " {")
 	out.P("\ts := &", svcName, "{Workflow: wf}")
 	out.P("\twf.SetAsyncSend(s.sendAsync)")
 	out.P("\treturn s")

@@ -1,5 +1,5 @@
 // Package connectedge is a thin runtime helper that adapts a
-// cmdworkflow.Workflow[S, C] command bus to a Connect-go (HTTP) RPC.
+// cmdworkflow.Workflow[S, C, E] command bus to a Connect-go (HTTP) RPC.
 //
 // It is intentionally not a code generator. The framework's proto
 // commands evolve with the aggregate (per ADR 0013), but an external

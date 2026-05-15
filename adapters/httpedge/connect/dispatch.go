@@ -17,7 +17,9 @@ import (
 const IdempotencyKeyHeader = "Idempotency-Key"
 
 // Dispatcher is the minimal command-bus surface this helper needs.
-// *cmdworkflow.Workflow[S, C] satisfies it for any (S, C).
+// *cmdworkflow.Workflow[S, C, E] satisfies it for any (S, C, E) —
+// the helper does not care about the event type parameter; only
+// HandleCmd's signature matters.
 type Dispatcher[S, C any] interface {
 	HandleCmd(ctx context.Context, sid es.StreamID, cmd C, opts ...cmdworkflow.HandleCmdOption) (S, error)
 }
