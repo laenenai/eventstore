@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package test.rsspec.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/rsspec/v1;rsspecv1";
+
+// Test-only proto for the codegen plugin's runtime=restate emission
+// (ADR 0026). Every command in the Commands sum type carries the
+// (es.v1.tenant_id) + (es.v1.stream_id) annotations that the emitter
+// requires; the result is a RestateService with one Restate handler
+// per command, plus an AsyncDispatch handler for durable Async fan-out.
+//
+// The output lands at:
+//   adapters/cmdworkflow/restate/gen/test/rsspec/v1/rsspec_restate_es.pb.go
+//
+// Tests (adapters/cmdworkflow/restate/gen/test/rsspec/v1/restate_test.go)
+// pin the emitter's contract without spinning up a real Restate runtime
+// — the handler shape, ServiceName(), per-command method dispatch, and
+// tenant + stream_id extraction are all exercisable in-process with a
+// nil sdk_go.Context and the inproc workflow runtime.
+
+// ---- State -----------------------------------------------------------
+
+message RsState {
+  option (es.v1.aggregate) = "rs";
+  string rs_id = 1 [(es.v1.subject_field) = true];
+  string label = 2;
+}
+
+// ---- Commands --------------------------------------------------------
+//
+// Every command carries the two annotations the emitter requires.
+// CreateRs uses a non-`tenant_id` Go name for the tenant field to prove
+// the codegen reads the annotation, not the field name.
+
+message CreateRs {
+  string tenant   = 1 [(es.v1.tenant_id) = true];
+  string rs_id    = 2 [(es.v1.stream_id) = true];
+  string label    = 3;
+}
+
+message UpdateRs {
+  string tenant_id = 1 [(es.v1.tenant_id) = true];
+  string rs_id     = 2 [(es.v1.stream_id) = true];
+  string new_label = 3;
+}
+
+message DeleteRs {
+  string tenant_id = 1 [(es.v1.tenant_id) = true];
+  string rs_id     = 2 [(es.v1.stream_id) = true];
+  string reason    = 3;
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    CreateRs create = 1;
+    UpdateRs update = 2;
+    DeleteRs delete = 3;
+  }
+}
+
+// ---- Events ----------------------------------------------------------
+
+message RsCreated {
+  string rs_id = 1 [(es.v1.subject_field) = true];
+  string label = 2;
+}
+
+message RsUpdated {
+  string rs_id     = 1 [(es.v1.subject_field) = true];
+  string new_label = 2;
+}
+
+message RsDeleted {
+  string rs_id  = 1 [(es.v1.subject_field) = true];
+  string reason = 2;
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    RsCreated created = 1;
+    RsUpdated updated = 2;
+    RsDeleted deleted = 3;
+  }
+}

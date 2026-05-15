@@ -1,0 +1,27 @@
+{
+  "source": "test/rsspec/v1/rsspec.proto",
+  "package": "test.rsspec.v1",
+  "events": [
+    {
+      "name": "test.rsspec.v1.RsCreated",
+      "fields": [
+        {"name": "rs_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "label", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    },
+    {
+      "name": "test.rsspec.v1.RsUpdated",
+      "fields": [
+        {"name": "rs_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "new_label", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    },
+    {
+      "name": "test.rsspec.v1.RsDeleted",
+      "fields": [
+        {"name": "rs_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "reason", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ]
+}
