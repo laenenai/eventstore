@@ -11,6 +11,13 @@ import (
 type Querier interface {
 	AbandonAllProjectionDLQ(ctx context.Context, arg AbandonAllProjectionDLQParams) (int64, error)
 	AbandonDLQ(ctx context.Context, arg AbandonDLQParams) error
+	// Populate hash + prev_hash for an event whose chain columns are NULL,
+	// as written by streams that existed before ADR 0028's tamper-evident
+	// chain migration. The `hash IS NULL` predicate is a safety guard: if
+	// the row already carries a hash, the UPDATE is a no-op (RowsAffected
+	// = 0) and the Go wrapper errors out, since overwriting an existing
+	// hash would silently mask tampering.
+	BackfillEventHash(ctx context.Context, arg BackfillEventHashParams) (int64, error)
 	// Uniqueness primitives (ADR 0010). Identical semantics to Postgres;
 	// SQLite UNIQUE PK gives the same fail-fast guarantee.
 	ClaimUnique(ctx context.Context, arg ClaimUniqueParams) error

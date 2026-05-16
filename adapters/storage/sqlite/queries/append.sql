@@ -43,6 +43,17 @@ WHERE tenant_id = ? AND stream_id = ?
 ORDER BY version DESC
 LIMIT 1;
 
+-- name: BackfillEventHash :execrows
+-- Populate hash + prev_hash for an event whose chain columns are NULL,
+-- as written by streams that existed before ADR 0028's tamper-evident
+-- chain migration. The `hash IS NULL` predicate is a safety guard: if
+-- the row already carries a hash, the UPDATE is a no-op (RowsAffected
+-- = 0) and the Go wrapper errors out, since overwriting an existing
+-- hash would silently mask tampering.
+UPDATE events
+SET hash = ?, prev_hash = ?
+WHERE tenant_id = ? AND event_id = ? AND hash IS NULL;
+
 -- name: InsertOutbox :exec
 INSERT INTO outbox (tenant_id, global_position, event_id)
 VALUES (?, ?, ?);

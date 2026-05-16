@@ -107,6 +107,17 @@ turning O(events) writes into O(events²) total work. Auditors run
 `es.VerifyStreamChain(ctx, store, sid)` on the streams they care
 about, on the cadence they choose.
 
+Adopters with pre-existing streams (events written before the hash
+columns existed) populate the chain retroactively via
+`es.RebuildStreamChain(ctx, store, sid)` — implemented in
+`es/chain.go`. It walks the stream in version order, writes the
+recomputed hash + prev_hash to rows with NULL chain columns, and
+verifies (without overwriting) any row that already carries a hash.
+The underlying SQL UPDATE has a `WHERE hash IS NULL` guard so a row
+with an existing hash is never silently overwritten — that would
+mask tampering. `RebuildStreamChain` is idempotent: a second pass
+over a fully-chained stream is a pure verify.
+
 ### 6. Interaction with crypto-shredding
 
 `payload` and `encryption_key_refs` are included in the hash as their

@@ -37,6 +37,38 @@ func (q *Queries) AdvisoryLock(ctx context.Context, lockKey int64) error {
 	return err
 }
 
+const backfillEventHash = `-- name: BackfillEventHash :execrows
+UPDATE events
+SET hash = $1, prev_hash = $2
+WHERE tenant_id = $3 AND event_id = $4 AND hash IS NULL
+`
+
+type BackfillEventHashParams struct {
+	Hash     []byte
+	PrevHash []byte
+	TenantID string
+	EventID  uuid.UUID
+}
+
+// Populate hash + prev_hash for an event whose chain columns are NULL,
+// as written by streams that existed before ADR 0028's tamper-evident
+// chain migration. The `hash IS NULL` predicate is a safety guard: if
+// the row already carries a hash, the UPDATE is a no-op (RowsAffected
+// = 0) and the Go wrapper errors out, since overwriting an existing
+// hash would silently mask tampering.
+func (q *Queries) BackfillEventHash(ctx context.Context, arg BackfillEventHashParams) (int64, error) {
+	result, err := q.db.Exec(ctx, backfillEventHash,
+		arg.Hash,
+		arg.PrevHash,
+		arg.TenantID,
+		arg.EventID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertEvent = `-- name: InsertEvent :one
 INSERT INTO events (
     event_id,

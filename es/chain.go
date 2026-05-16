@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -116,6 +117,80 @@ func VerifyStreamChain(ctx context.Context, store StreamReader, sid StreamID) er
 // es.Store satisfies it; tests can substitute a fake.
 type StreamReader interface {
 	ReadStream(ctx context.Context, sid StreamID, afterVersion uint64) ([]Envelope, error)
+}
+
+// StreamChainRebuilder is the store surface RebuildStreamChain needs:
+// the StreamReader plus a write hook for filling in NULL hash columns
+// on pre-migration rows. Both storage adapters implement it.
+type StreamChainRebuilder interface {
+	StreamReader
+	// BackfillEventHash writes hash + prev_hash for an event row whose
+	// chain columns are currently NULL. Implementations MUST be a
+	// no-op on rows whose columns are already populated (the SQL
+	// guard `WHERE hash IS NULL` carries that contract) and MUST
+	// return a non-nil error in that case so the caller knows the
+	// expected backfill did not happen. Atomic at the row level —
+	// the caller does not wrap this in a transaction.
+	BackfillEventHash(ctx context.Context, tenantID string, eventID uuid.UUID, hash, prevHash []byte) error
+}
+
+// RebuildResult summarizes a RebuildStreamChain pass.
+type RebuildResult struct {
+	// BackfilledCount is the number of events that had NULL hash
+	// columns and got the recomputed values written.
+	BackfilledCount int
+	// VerifiedCount is the number of events that already carried a
+	// non-NULL hash; those were checked against the recompute and
+	// left untouched.
+	VerifiedCount int
+}
+
+// RebuildStreamChain walks a stream in version order, recomputing each
+// event's chain hash and either backfilling NULL hash columns or
+// verifying existing hashes against the recompute. Designed for
+// adopters who enabled ADR 0028's hash chain after streams already
+// existed: pre-migration rows have NULL hash/prev_hash columns; this
+// helper populates them.
+//
+// Safety guard: rows that already carry a non-NULL hash are NEVER
+// overwritten. If the recompute disagrees with a stored hash, the
+// function returns ErrChainBroken — overwriting would silently mask
+// tampering. The SQL UPDATE underlying BackfillEventHash includes a
+// `WHERE hash IS NULL` predicate so a concurrent writer cannot turn
+// the backfill into a destructive write.
+//
+// Idempotent: a second pass over a fully-chained stream returns
+// (BackfilledCount=0, VerifiedCount=len(stream), nil).
+//
+// O(stream length); per-row UPDATEs are not batched. Operators
+// typically run this once per stream during the migration window and
+// then never again.
+func RebuildStreamChain(ctx context.Context, store StreamChainRebuilder, sid StreamID) (RebuildResult, error) {
+	envs, err := store.ReadStream(ctx, sid, 0)
+	if err != nil {
+		return RebuildResult{}, err
+	}
+	var res RebuildResult
+	prev := ZeroHash
+	for i := range envs {
+		expected, err := ComputeChainHash(prev, &envs[i])
+		if err != nil {
+			return res, fmt.Errorf("recompute hash at version %d: %w", envs[i].Version, err)
+		}
+		if len(envs[i].Hash) == 0 {
+			if err := store.BackfillEventHash(ctx, envs[i].TenantID, envs[i].EventID, expected, prev); err != nil {
+				return res, fmt.Errorf("backfill version %d: %w", envs[i].Version, err)
+			}
+			res.BackfilledCount++
+		} else {
+			if !equalHash(expected, envs[i].Hash) {
+				return res, fmt.Errorf("%w: version %d (stored hash differs from recompute — tampering or chain corruption)", ErrChainBroken, envs[i].Version)
+			}
+			res.VerifiedCount++
+		}
+		prev = expected
+	}
+	return res, nil
 }
 
 func equalHash(a, b []byte) bool {
