@@ -1,0 +1,31 @@
+// FROZEN — pre-ADR-0027 shape of test.piimigration.v1.Hired, kept
+// for the migrating-codec upcaster only. Do not modify; do not
+// regenerate against current es.v1.* options.
+//
+// The package name deliberately lives one level below the current
+// shape (test.piimigration.v1.legacy) so the codegen plugin treats
+// it as a separate compilation unit. The Go output ends up in a
+// distinct package (legacyv1) which the upcaster imports under that
+// name; the current-shape package never references this one.
+//
+// Field tags (1, 2, 3) match the current shape — wire compatibility
+// is preserved at the protobuf level. Only the wire type differs:
+// bytes (raw ciphertext) here vs. string (base64 of the same
+// ciphertext) in the current shape.
+syntax = "proto3";
+
+package test.piimigration.v1.legacy;
+
+option go_package = "github.com/laenenai/eventstore/gen/test/piimigration/v1/legacy;legacyv1";
+
+// HiredV1 is the pre-migration shape. The runtime's Shredder used
+// to write raw AEAD ciphertext into `bytes` fields with no proto
+// annotation; the (es.v1.data_classification) opt-in didn't exist
+// yet. The migrating codec decodes payloads with schema_version=1
+// through this message, then re-encodes the ciphertext as base64
+// to match the current-shape Hired.
+message HiredV1 {
+  string employee_id = 1;
+  bytes  legal_name  = 2;
+  bytes  email       = 3;
+}
