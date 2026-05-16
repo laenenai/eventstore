@@ -34,6 +34,13 @@ type Querier interface {
 	// Acquire the store-wide append lock. Auto-releases on commit/rollback.
 	// The constant is the framework's reserved lock key for this table.
 	AdvisoryLock(ctx context.Context, lockKey int64) error
+	// Populate hash + prev_hash for an event whose chain columns are NULL,
+	// as written by streams that existed before ADR 0028's tamper-evident
+	// chain migration. The `hash IS NULL` predicate is a safety guard: if
+	// the row already carries a hash, the UPDATE is a no-op (RowsAffected
+	// = 0) and the Go wrapper errors out, since overwriting an existing
+	// hash would silently mask tampering.
+	BackfillEventHash(ctx context.Context, arg BackfillEventHashParams) (int64, error)
 	// First-class uniqueness primitives (ADR 0010).
 	//
 	// A claim is inserted in the same transaction as the events that produce

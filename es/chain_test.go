@@ -202,3 +202,211 @@ func TestVerifyStreamChain_PropagatesReadError(t *testing.T) {
 		t.Fatalf("expected wrapped read error, got %v", err)
 	}
 }
+
+// fakeStreamChainRebuilder extends fakeStreamReader with an in-memory
+// BackfillEventHash that mimics the adapter's "WHERE hash IS NULL"
+// guard. Used to drive RebuildStreamChain unit tests without a real DB.
+type fakeStreamChainRebuilder struct {
+	envs []es.Envelope
+	err  error
+
+	// backfills records each call for assertions.
+	backfills []backfillCall
+	// failBackfill, when non-nil, is returned from BackfillEventHash.
+	failBackfill error
+}
+
+type backfillCall struct {
+	tenantID string
+	eventID  uuid.UUID
+	hash     []byte
+	prevHash []byte
+}
+
+func (f *fakeStreamChainRebuilder) ReadStream(_ context.Context, _ es.StreamID, _ uint64) ([]es.Envelope, error) {
+	return f.envs, f.err
+}
+
+func (f *fakeStreamChainRebuilder) BackfillEventHash(_ context.Context, tenantID string, eventID uuid.UUID, hash, prevHash []byte) error {
+	if f.failBackfill != nil {
+		return f.failBackfill
+	}
+	// Find the envelope and apply the same `IS NULL` semantics the SQL
+	// guard would. Rows that already have a hash are a no-op + error.
+	for i := range f.envs {
+		if f.envs[i].EventID != eventID || f.envs[i].TenantID != tenantID {
+			continue
+		}
+		if len(f.envs[i].Hash) != 0 {
+			return errors.New("fake: row already has a hash")
+		}
+		f.envs[i].Hash = hash
+		f.envs[i].PrevHash = prevHash
+		f.backfills = append(f.backfills, backfillCall{
+			tenantID: tenantID,
+			eventID:  eventID,
+			hash:     hash,
+			prevHash: prevHash,
+		})
+		return nil
+	}
+	return errors.New("fake: event not found")
+}
+
+// stripChain returns the envelopes with Hash and PrevHash cleared,
+// simulating pre-migration rows.
+func stripChain(envs []es.Envelope) []es.Envelope {
+	out := make([]es.Envelope, len(envs))
+	for i := range envs {
+		out[i] = envs[i]
+		out[i].Hash = nil
+		out[i].PrevHash = nil
+	}
+	return out
+}
+
+func TestRebuildStreamChain_BackfillsNullHashes(t *testing.T) {
+	sid := mustSID(t)
+	// Build a properly chained slice, then strip the chain columns to
+	// simulate the pre-migration on-disk state.
+	chained := buildChained(t, sid, 4)
+	pre := stripChain(chained)
+
+	r := &fakeStreamChainRebuilder{envs: pre}
+	res, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if err != nil {
+		t.Fatalf("RebuildStreamChain: %v", err)
+	}
+	if res.BackfilledCount != 4 || res.VerifiedCount != 0 {
+		t.Errorf("counts: got backfilled=%d verified=%d; want backfilled=4 verified=0",
+			res.BackfilledCount, res.VerifiedCount)
+	}
+	if len(r.backfills) != 4 {
+		t.Fatalf("backfill calls: got %d, want 4", len(r.backfills))
+	}
+	// Every backfilled hash must match the canonical chained value.
+	for i := range chained {
+		if string(r.envs[i].Hash) != string(chained[i].Hash) {
+			t.Errorf("v%d hash mismatch:\n  got  %x\n  want %x",
+				chained[i].Version, r.envs[i].Hash, chained[i].Hash)
+		}
+		if string(r.envs[i].PrevHash) != string(chained[i].PrevHash) {
+			t.Errorf("v%d prev_hash mismatch", chained[i].Version)
+		}
+	}
+}
+
+func TestRebuildStreamChain_VerifiesExistingHashes(t *testing.T) {
+	sid := mustSID(t)
+	chained := buildChained(t, sid, 3)
+	r := &fakeStreamChainRebuilder{envs: chained}
+	res, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if err != nil {
+		t.Fatalf("RebuildStreamChain on already-chained: %v", err)
+	}
+	if res.BackfilledCount != 0 || res.VerifiedCount != 3 {
+		t.Errorf("counts: got backfilled=%d verified=%d; want backfilled=0 verified=3",
+			res.BackfilledCount, res.VerifiedCount)
+	}
+	if len(r.backfills) != 0 {
+		t.Errorf("expected no backfill writes, got %d", len(r.backfills))
+	}
+}
+
+func TestRebuildStreamChain_DetectsTampering(t *testing.T) {
+	sid := mustSID(t)
+	chained := buildChained(t, sid, 3)
+	// Flip a byte in the second event's payload. The stored hash now
+	// disagrees with the recompute, but the row still has a non-NULL
+	// hash so RebuildStreamChain treats this as a verify mismatch.
+	chained[1].Payload = append([]byte(nil), chained[1].Payload...)
+	chained[1].Payload[0] ^= 0xff
+
+	r := &fakeStreamChainRebuilder{envs: chained}
+	_, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if !errors.Is(err, es.ErrChainBroken) {
+		t.Fatalf("want ErrChainBroken on tampered row, got %v", err)
+	}
+}
+
+func TestRebuildStreamChain_EmptyStream(t *testing.T) {
+	sid := mustSID(t)
+	r := &fakeStreamChainRebuilder{envs: nil}
+	res, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if err != nil {
+		t.Fatalf("empty stream should return no error: %v", err)
+	}
+	if res.BackfilledCount != 0 || res.VerifiedCount != 0 {
+		t.Errorf("counts: got backfilled=%d verified=%d; want both 0",
+			res.BackfilledCount, res.VerifiedCount)
+	}
+}
+
+func TestRebuildStreamChain_PartialBackfill(t *testing.T) {
+	sid := mustSID(t)
+	chained := buildChained(t, sid, 5)
+	// Mixed state: first three events still NULL (pre-migration),
+	// last two already chained (events appended after the migration).
+	mixed := make([]es.Envelope, 5)
+	for i := 0; i < 5; i++ {
+		mixed[i] = chained[i]
+		if i < 3 {
+			mixed[i].Hash = nil
+			mixed[i].PrevHash = nil
+		}
+	}
+
+	r := &fakeStreamChainRebuilder{envs: mixed}
+	res, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if err != nil {
+		t.Fatalf("RebuildStreamChain: %v", err)
+	}
+	if res.BackfilledCount != 3 || res.VerifiedCount != 2 {
+		t.Errorf("counts: got backfilled=%d verified=%d; want backfilled=3 verified=2",
+			res.BackfilledCount, res.VerifiedCount)
+	}
+	// After the rebuild the in-memory store should chain end-to-end.
+	if err := es.VerifyStreamChain(context.Background(), r, sid); err != nil {
+		t.Errorf("post-rebuild VerifyStreamChain: %v", err)
+	}
+}
+
+func TestRebuildStreamChain_PropagatesReadError(t *testing.T) {
+	sid := mustSID(t)
+	wantErr := errors.New("store: boom")
+	r := &fakeStreamChainRebuilder{err: wantErr}
+	_, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected wrapped read error, got %v", err)
+	}
+}
+
+func TestRebuildStreamChain_PropagatesBackfillError(t *testing.T) {
+	sid := mustSID(t)
+	pre := stripChain(buildChained(t, sid, 2))
+	wantErr := errors.New("backfill: boom")
+	r := &fakeStreamChainRebuilder{envs: pre, failBackfill: wantErr}
+	_, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected wrapped backfill error, got %v", err)
+	}
+}
+
+func TestRebuildStreamChain_Idempotent(t *testing.T) {
+	sid := mustSID(t)
+	pre := stripChain(buildChained(t, sid, 3))
+	r := &fakeStreamChainRebuilder{envs: pre}
+	// First pass fills in the chain.
+	if _, err := es.RebuildStreamChain(context.Background(), r, sid); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	// Second pass must be a pure-verify no-op.
+	res, err := es.RebuildStreamChain(context.Background(), r, sid)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if res.BackfilledCount != 0 || res.VerifiedCount != 3 {
+		t.Errorf("second pass counts: got backfilled=%d verified=%d; want backfilled=0 verified=3",
+			res.BackfilledCount, res.VerifiedCount)
+	}
+}
