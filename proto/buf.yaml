@@ -17,14 +17,15 @@ lint:
     IMPORT_USED:
       - myapp/customerview/v1/customerview.proto
       - test/projection/v1/projection.proto
-    # The legacy package is intentionally named
-    # `test.piimigration.v1.legacy` (no trailing version suffix). It
-    # is a frozen sibling of `test.piimigration.v1` kept solely for
-    # the read-time upcaster in cookbook recipe 11 § "PII shape
-    # migration (Tier D, ADR 0030)". Adding a `.v1` suffix would
-    # mis-suggest the file evolves independently; it does not.
+    # Legacy packages are intentionally named with a `.legacy` leaf
+    # (no trailing version suffix). They are frozen siblings of the
+    # current-shape package kept solely for read-time upcasters per
+    # ADR 0030. Adding a `.v1` suffix would mis-suggest the file
+    # evolves independently; it does not. See cookbook recipes 11
+    # (PII shape migration, Tier D) and 21 (unit conversion, Tier B).
     PACKAGE_VERSION_SUFFIX:
       - test/piimigration/v1/legacy/legacy.proto
+      - test/unitsmigration/v1/legacy/legacy.proto
 
 breaking:
   use:

@@ -1,0 +1,13 @@
+{
+  "source": "test/unitsmigration/v1/unitsmigration.proto",
+  "package": "test.unitsmigration.v1",
+  "events": [
+    {
+      "name": "test.unitsmigration.v1.MeasurementRecorded",
+      "fields": [
+        {"name": "measurement_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "latency_us", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ]
+}

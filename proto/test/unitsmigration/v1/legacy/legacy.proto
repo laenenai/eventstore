@@ -1,0 +1,33 @@
+// FROZEN — pre-Tier-B shape of test.unitsmigration.v1.MeasurementRecorded,
+// kept for the read-time upcaster only. Do not modify; do not
+// regenerate against current es.v1.* options.
+//
+// The package name deliberately lives one level below the current
+// shape (test.unitsmigration.v1.legacy) so the codegen plugin
+// treats it as a separate compilation unit. The Go output ends up
+// in a distinct package (legacyv1) which the upcaster imports
+// under that name; the current-shape package never references this
+// one.
+//
+// Field tag 2 matches the current shape — wire compatibility is
+// preserved at the protobuf level. Same wire type (varint) too.
+// Only the *meaning* differs: milliseconds here vs. microseconds
+// in the current shape. That is the defining shape of a Tier-B
+// migration per ADR 0030 — the wire bytes are identical, the
+// interpretation is not, and a read-time upcaster bridges the gap.
+syntax = "proto3";
+
+package test.unitsmigration.v1.legacy;
+
+option go_package = "github.com/laenenai/eventstore/gen/test/unitsmigration/v1/legacy;legacyv1";
+
+// MeasurementRecordedV1 is the pre-migration shape. Callers wrote
+// millisecond integers into `latency_ms` under
+// schema_version=1. The migrating codec decodes payloads with
+// schemaVersion=1 through this message and multiplies by 1000 to
+// produce the current-shape MeasurementRecorded carrying
+// microseconds.
+message MeasurementRecordedV1 {
+  string measurement_id = 1;
+  int64  latency_ms     = 2;
+}
