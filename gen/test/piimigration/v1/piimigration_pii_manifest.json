@@ -1,0 +1,14 @@
+{
+  "source": "test/piimigration/v1/piimigration.proto",
+  "package": "test.piimigration.v1",
+  "events": [
+    {
+      "name": "test.piimigration.v1.Hired",
+      "fields": [
+        {"name": "employee_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "legal_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ]
+}

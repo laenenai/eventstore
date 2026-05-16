@@ -4,80 +4,22 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	kmsinproc "github.com/laenenai/eventstore/adapters/kms/inproc"
+	"github.com/laenenai/eventstore/estest"
 	pb "github.com/laenenai/eventstore/gen/test/encspec/v1"
 	"github.com/laenenai/eventstore/shred"
 )
 
-// ---- In-memory SubjectStore ------------------------------------------
-//
-// shred.Shredder needs a SubjectStore implementation. Storage adapters
-// (sqlite, postgres) provide one in production; tests against the
-// codegen-emitted EncryptPII/DecryptPII methods only need correctness
-// at this layer, not durability. Keep it minimal: tenant+subject keyed
-// map, no concurrency theatrics, supports ForgetSubject by storing
-// shredded_at.
-
-type memSubjectStore struct {
-	mu   sync.Mutex
-	rows map[string]shred.SubjectKey // key: tenant|subject
-}
-
-func newMemSubjectStore() *memSubjectStore {
-	return &memSubjectStore{rows: map[string]shred.SubjectKey{}}
-}
-
-func sskey(tenant, subject string) string { return tenant + "|" + subject }
-
-func (s *memSubjectStore) GetSubjectKey(_ context.Context, tenantID, subject string) (shred.SubjectKey, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	row, ok := s.rows[sskey(tenantID, subject)]
-	if !ok {
-		return shred.SubjectKey{}, shred.ErrSubjectKeyNotFound
-	}
-	return row, nil
-}
-
-func (s *memSubjectStore) UpsertSubjectKey(_ context.Context, tenantID, subject string, dekWrapped []byte, kekVersion uint32) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.rows[sskey(tenantID, subject)] = shred.SubjectKey{
-		TenantID:   tenantID,
-		Subject:    subject,
-		DEKWrapped: append([]byte(nil), dekWrapped...),
-		KEKVersion: kekVersion,
-		CreatedAt:  time.Now().UTC(),
-	}
-	return nil
-}
-
-func (s *memSubjectStore) ForgetSubject(_ context.Context, tenantID, subject string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	row, ok := s.rows[sskey(tenantID, subject)]
-	if !ok {
-		return shred.ErrSubjectKeyNotFound
-	}
-	now := time.Now().UTC()
-	row.DEKWrapped = nil
-	row.ShreddedAt = &now
-	s.rows[sskey(tenantID, subject)] = row
-	return nil
-}
-
-func (s *memSubjectStore) ListStaleSubjectKeys(_ context.Context, _ string, _ uint32, _ int) ([]shred.SubjectKey, error) {
-	return nil, nil // unused in these tests
-}
-
 // ---- Helpers ----------------------------------------------------------
 
+// newShredder wires the in-process KMS against an in-memory
+// SubjectStore. The same helper is reused by the PII migration
+// fixture under gen/test/piimigration/v1 — see ADR 0010 and
+// cookbook recipe 11.
 func newShredder() *shred.Shredder {
-	return shred.New(kmsinproc.New(), newMemSubjectStore())
+	return shred.New(kmsinproc.New(), estest.NewMemSubjectStore())
 }
 
 func cleanPIISample() *pb.CleanPII {

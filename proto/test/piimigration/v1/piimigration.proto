@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package test.piimigration.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/test/piimigration/v1;piimigrationv1";
+
+// Test-only fixture for the PII shape migration documented in cookbook
+// recipe 11 § "PII shape migration (Tier D, ADR 0030)".
+//
+// Two protos cooperate to prove the upcaster pattern:
+//   * This file — the CURRENT (post-migration) shape of Hired. The
+//     event carries (es.v1.schema_version) = 2 and uses `string`
+//     fields whose wire encoding is base64-of-ciphertext after the
+//     codegen-emitted EncryptPII runs.
+//   * proto/test/piimigration/v1/legacy/legacy.proto — the FROZEN
+//     pre-migration shape. `bytes` fields holding raw ciphertext,
+//     no (es.v1.data_classification). Hand-written; never
+//     regenerated against current options. Lives in a sibling
+//     package so the codegen plugin treats it as a separate
+//     compilation unit.
+//
+// The wrapper codec at gen/test/piimigration/v1/migrating_codec.go
+// dispatches on schemaVersion: v2 falls through to the
+// codegen-emitted EventCodec; v1 decodes via legacyv1.HiredV1 and
+// translates the raw-bytes ciphertext to base64-encoded strings,
+// preserving the underlying DEK + plaintext.
+
+// Hired is the post-migration event shape. fields 2 and 3 changed
+// from `bytes` to `string` between v1 and v2 of the schema, and
+// gained the PERSONAL classification — same ciphertext on disk,
+// different wire encoding.
+message Hired {
+  option (es.v1.schema_version) = 2;
+
+  string employee_id = 1 [(es.v1.subject_field) = true];
+  string legal_name  = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string email       = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+}
+
+// Events is the sum-type container. One variant is enough — the
+// migration only changes Hired's shape; the codegen-emitted
+// EventCodec is what the wrapper delegates to for v2 payloads.
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    Hired hired = 1;
+  }
+}
