@@ -338,8 +338,14 @@ extension.
 
 **Phase 3 (separate ADR if needed):**
 
-9. Codegen extension — typed `RegisterFor[*EventType](handler)`.
-10. Connect-go service stubs from `protoc-gen-es-go`.
+9. ~~Codegen extension — typed `RegisterFor[*EventType](handler)`.~~
+   **Rejected.** The 5-line type-switch is idiomatic Go; the runtime
+   and maintenance cost (scattered registration, type-list bookkeeping,
+   codegen drift against the sum-type set) outweighs the boilerplate
+   saving. If concrete demand surfaces — three or more separate adopter
+   teams asking for it — a new ADR can capture the shape.
+10. Connect-go service stubs from `protoc-gen-es-go`. See ADR 0025
+    Sunset § for the kept-with-criteria disposition.
 
 **Future (if it ever needs to be in-framework):**
 
@@ -350,3 +356,56 @@ extension.
 12. Decider-emitted compensation plans — optional override of
     per-subscriber Compensate. Would only be valuable if multi-event
     transaction-spanning compensation patterns emerge.
+
+## Sunset criteria for deferred items
+
+**Decider-emitted compensation plans (item 12).**
+
+Today, compensation is per-subscriber via `Subscriber.OnExhausted =
+Compensate` with a `Compensate` function. Cookbook recipe 03
+demonstrates cross-aggregate compensation through this path; recipe
+02 demonstrates the stateful-saga pattern for branching/multi-event
+choreography. The deferred enhancement is letting the Decider emit
+a compensation plan as a first-class part of its `Decide` output.
+
+Decider-emitted compensation ships when:
+
+- **≥2 in-house sagas** have hand-rolled the same compensation
+  state-machine pattern from cookbook recipe 02, AND the boilerplate
+  is visibly repetitive across them.
+
+The exact API shape (return type from `Decide`, plan format, runtime
+execution semantics) is **intentionally left open** until real usage
+patterns surface. Premature lock-in on `Decider.Compensate(state, failed) []C`
+would be the wrong move; the shape should follow demand.
+
+Estimated effort when triggered: ~1 engineer-week. New return value
+on `Decide`, runtime to execute the plan, ADR 0025 amendment with
+the chosen shape, recipe 02 update.
+
+**Connect-go service stubs (item 10).**
+
+Today, cookbook recipe 15 ships the runtime helper
+(`adapters/httpedge/connect.Dispatch`). Each Connect handler is a
+~5-line user-side wrapper invoking the helper. The deferred extension
+would generate the handler boilerplate from proto service definitions.
+
+Codegen ships **only when both** of these conditions hold:
+
+- **≥3 in-house Connect handlers** are using `connectedge.Dispatch`
+  and the per-handler boilerplate (5-line wrapper + decode function)
+  is visibly repetitive across the same DTO / command pair, AND
+- An adopter has articulated a **coherent DTO-seam story** for the
+  codegen — specifically, how the generated code stays compatible
+  across schema evolution when the internal command's `schema_version`
+  bumps but the public API contract doesn't (and vice versa).
+
+Both conditions are required. (a) alone — just boilerplate — could
+be addressed by a better helper or template; doesn't justify a
+codegen extension. (b) without (a) — speculative design — risks the
+lock-in trap. The DTO seam is exactly the part that should stay
+manual because internal commands evolve differently from external
+API contracts (ADR 0013 upcasters can rewrite internal events freely;
+HTTP contracts have stricter compatibility rules).
+
+Estimated effort when triggered: ~5 engineer-days.

@@ -191,3 +191,17 @@ under the old version remain anywhere. **Deferred.** Adds a verification
 flow and risks ("are you sure?") that aren't worth the small storage win
 in v1. Documented for future consideration; upcasters live forever by
 default.
+
+**Sunset criterion.** Tombstoning becomes a v1.1+ feature when one of:
+
+- A maintained aggregate accumulates **≥3 upcaster versions** on the
+  same field, the original ones are confirmed unused via a per-tenant
+  DB scan, and operators ask for a pruning workflow, OR
+- Any adopter explicitly requests the operational story (open issue,
+  RFE).
+
+Estimated effort when triggered: ~3 engineer-days. Verification helper
+(pre-flight scan refusing tombstone if any event at the target version
+exists), write-side reject for the version, two-phase commit
+(mark-then-delete). The `aggregate.RebuildStateCache` flow handles any
+rebuild fallout.

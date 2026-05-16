@@ -373,20 +373,29 @@ patterns apply identically:
 
 ## Future direction: spec-driven projections (v2)
 
-A planned v2 enhancement is **spec-driven projection codegen**:
-declare projection event sets in a small YAML (or proto-with-
-custom-options) file, codegen a per-projection typed interface +
-dispatcher that handles only the listed events, plus registration
-glue:
+**v2 enhancement — spec-driven projection codegen — shipped.**
 
-```yaml
-# customer_view.projection.yaml
-name: customer-view
-events:
-  - myapp.invoice.v1.Created
-  - myapp.invoice.v1.Paid
-  - myapp.customer.v1.NameChanged
+The codegen ships via the `(es.v1.projection)` proto option (proto
+extensions won over YAML — already-installed, no separate format
+to learn). Codegen emits a per-projection typed interface +
+dispatcher that handles only the listed events:
+
+```proto
+// myapp/customerview/v1/customerview.proto
+message CustomerView {
+  option (es.v1.projection) = {
+    name: "customer-view"
+    events: [
+      "myapp.invoice.v1.Created",
+      "myapp.invoice.v1.Paid",
+      "myapp.customer.v1.NameChanged",
+    ]
+  };
+}
 ```
+
+Implementation: `proto-gen/main.go` § `emitProjectionSpec`. Working
+example: `proto/myapp/customerview/v1/` + `gen/myapp/customerview/v1/`.
 
 This wins for:
 
@@ -397,14 +406,9 @@ This wins for:
 - **External tooling**: dashboards, lineage tools, CI checks
   consuming the machine-readable spec.
 
-It is deliberately deferred from v1 because:
-
-- v1 (Decisions 3a–3i) is strictly simpler to build and debug.
-- v2 layers cleanly on top — the generated per-projection interface
-  composes existing dispatchers internally; nothing in v1 needs to
-  change.
-- The format choice (yaml vs proto-extensions) benefits from
-  observing real friction in v1.
+A possible v3 (YAML format + external-tooling integration) would
+be a separate ADR if it ever ships — proto extensions cover the
+in-framework use cases.
 
 Documented here so the v1 design is understood as the foundation
 of a longer trajectory, not a final answer.
@@ -438,14 +442,44 @@ of a longer trajectory, not a final answer.
 - `state_cache` lives in the same DB as events. Cross-DB
   deployments where state must live elsewhere fall back to Tier 3.
 
-**Deferred to follow-up work:**
-- Spec-driven projection codegen (v2 above).
-- Tier 3 sharding by stream-key hash.
-- Tier 3 DLQ-skip mode (analogue of `AutoResumeAfterDLQ` on the
-  drain).
-- `projection.WithDedup` middleware for non-idempotent handlers.
-- Concurrent-claim drain mode (`FOR UPDATE SKIP LOCKED`) for
-  projections — same trade-offs as for the outbox.
+**Deferred to follow-up work** (each with an explicit sunset
+criterion so the deferral has a finishing condition, not just a
+"someday" hedge):
+
+- **Tier 3 sharding by stream-key hash.** N independent runner
+  instances, each owning `hash(tenant_id || stream_id) % N`.
+  Sunset: when an adopter measures **≥1,000 events/sec sustained**
+  arrival rate AND single-runner projection lag is growing
+  unboundedly under normal load. Estimated effort: ~5 engineer-days
+  (partitioning strategy, per-partition cursor table, recipe).
+
+- **Tier 3 DLQ-skip mode** (analogue of `AutoResumeAfterDLQ` on
+  the drain). Skip the failing event, record in `projection_dlq`,
+  advance the cursor. Sunset: when an adopter ships a projection
+  that mirrors to **an external system outside the eventstore's
+  transactional boundary** (search index, OpenSearch sink,
+  analytics warehouse) — or when manual `projection_dlq` table
+  writes appear in production and need formalization. Estimated
+  effort: ~2 engineer-days (table + queries already scaffolded;
+  missing the opt-in flag, operator API, recipe section).
+
+- **`projection.WithDedup` middleware** for non-idempotent
+  handlers. Sunset: when an adopter ships a projection that needs
+  at-most-once delivery AND cannot achieve idempotency at the sink
+  (no UPSERT, no idempotency-key support, no natural primary key).
+  Adopters whose sink _could_ UPSERT should fix the projection,
+  not the framework. Estimated effort: ~3 engineer-days (interface
+  + SQL impl piggybacking on `processed_events` + middleware
+  wrapper + recipe).
+
+- **Concurrent-claim drain mode** (`FOR UPDATE SKIP LOCKED`) for
+  projections. Postgres-only intra-runner parallelism; the SQLite
+  adapter is explicitly out of scope (single-writer can't benefit).
+  Sunset: when an adopter measures projection lag that single-runner
+  can't fix by handler optimization (handler profiled, optimized,
+  still bottlenecked). Estimated effort: ~5 engineer-days. The
+  parity break vs SQLite is a deliberate trade-off — documented in
+  the future recipe.
 
 ## Alternatives considered
 

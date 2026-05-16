@@ -1,6 +1,6 @@
 # ADR 0021: JSONB Storage on SQLite (3.45+)
 
-- **Status:** Proposed
+- **Status:** Proposed (measure-first sunset criterion — see end)
 - **Date:** 2026-05-14
 - **Amends:** ADR 0020 (Projections and Read Models — specifically the
   `state_cache` storage format choice for SQLite). Not yet shipped.
@@ -224,3 +224,17 @@ Proposed. Implementation deferred until the next time someone needs
 filtered queries over `state_cache` on SQLite at a scale where the
 parse overhead matters. The ADR exists so the migration path is
 already designed when that day arrives.
+
+## Sunset criterion
+
+Ship the migration when an adopter produces a concrete benchmark
+showing `json_extract` on `state_cache.state` (TEXT) as the
+dominant cost in an `EXPLAIN QUERY PLAN` for a query they actually
+run in production — not a speculative micro-benchmark.
+
+Measure-first rather than ship-preemptively: SQLite adopters today
+are mostly dev / local-test users who won't hit the bottleneck.
+Forcing a benchmark before implementation also gives us free
+regression-test fodder when the work lands.
+
+Estimated effort when triggered: ~2 engineer-days.

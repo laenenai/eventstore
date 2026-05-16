@@ -131,32 +131,33 @@ func (f errFuture) Wait() ([]byte, error) { return nil, f.err }
 
 // Spawn implements cmdworkflow.WorkflowRuntime.Spawn via an
 // in-process goroutine. The spawned fn runs concurrently with the
-// caller's workflow but is NOT journaled by DBOS — Phase 2a parity
-// with the Restate adapter (see ADR 0026 § 7).
+// caller's workflow but is NOT journaled by DBOS at this layer.
+// Durable Async fan-out is provided by the codegen-emitted
+// AsyncDispatch handler in
+// `adapters/cmdworkflow/dbos/gen/<aggregate>/...` (see
+// `runtime=dbos` mode in `proto-gen/main.go`); the framework's
+// `cmdworkflow.Workflow.SetAsyncSend` wires the codegen service's
+// `sendAsync` to issue durable `dbos.RunWorkflow` calls.
 //
-// Why a goroutine and not dbos.RunWorkflow?
+// Why a goroutine and not dbos.RunWorkflow at THIS layer?
 //
 //   - dbos.RunWorkflow requires a registered workflow function
 //     with a typed (Input, Output) signature, registered at
-//     startup. Our framework's Subscriber.Handle is a closure
+//     startup. The framework's Subscriber.Handle is a closure
 //     dynamically dispatched by Filter — not registerable as a
 //     named workflow at module init time.
 //
 //   - A "GenericStep" workflow that takes a closure-ID +
-//     serialized envelope, looks up the closure at runtime, and
-//     runs it WOULD give durable Async fan-out — but at the cost
-//     of marshalling every (subscriber, event) pair through the
-//     workflow input shape. Not in Phase 2a scope.
+//     serialized envelope would let this layer call
+//     dbos.RunWorkflow, but it adds a marshalling round-trip per
+//     (subscriber, event) pair when the codegen path already
+//     provides the durable route. Not worth the duplication.
 //
-// Async subscribers on the DBOS adapter are therefore best-effort:
-// they will execute, but a process restart mid-spawn loses
-// in-flight work. Idempotency on env.EventID at the subscriber
-// keeps duplicates safe under retry; the DLQ table receives
-// permanent failures.
-//
-// For audit-grade durability of Async fan-out, register each
-// subscriber as its own DBOS workflow and dispatch via the
-// generated DBOSService.Send-style helper (Phase 2c codegen).
+// Async subscribers WITHOUT the codegen path are best-effort:
+// they execute, but a process restart mid-Spawn loses in-flight
+// work. Idempotency on env.EventID at the subscriber keeps
+// duplicates safe under retry; the DLQ table receives permanent
+// failures.
 func (r *Runtime) Spawn(
 	ctx context.Context,
 	name string,

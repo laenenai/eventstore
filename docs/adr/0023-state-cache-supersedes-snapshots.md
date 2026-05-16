@@ -172,3 +172,31 @@ the table would touch more code than it's worth.
 - [`aggregate/runtime.go`](../../aggregate/runtime.go) — Load + Handle changes
 - [`es/state_cache.go`](../../es/state_cache.go) — `StateCacheReader` / `StateCacheRow.StateSchemaVersion`
 - Cookbook recipe 09 — Snapshots (retargeted)
+
+## Deferred follow-up: `state_cache` hash partitioning
+
+The old `snapshots` table was hash-partitioned on `tenant_id`
+(16 partitions, migration 00002). `state_cache` is **not**
+partitioned today. The distinction is intentional: snapshots grew
+with events (each Load could write a new snapshot row, so row count
+was events × snapshot cadence). `state_cache` is upsert-one-per-
+stream, so its row count is bounded by **distinct stream count**,
+typically two-to-three orders of magnitude smaller. Postgres
+handles a few-million-row PK-indexed unpartitioned table without
+any partitioning benefit.
+
+**Sunset criterion.** `state_cache` hash-partitioning by `tenant_id`
+ships when one of:
+
+- A real deployment's `state_cache` row count **exceeds 10 million**
+  (measured, not speculative), OR
+- `pg_stat_statements` shows `state_cache` lock contention, vacuum
+  pressure, or index bloat as a top-5 cost in the deployment's
+  performance profile.
+
+Estimated effort when triggered: ~2 engineer-days. Add a new
+migration creating partition children mirroring the old snapshot
+partition scheme (modulus 16, HASH on `tenant_id`); SQL queries
+already PK-target so no query changes are needed. The existing
+`PRIMARY KEY (tenant_id, stream_id)` is already partition-key
+compatible.
