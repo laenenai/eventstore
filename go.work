@@ -6,6 +6,7 @@ use (
 	./adapters/cmdworkflow/dbos
 	./adapters/cmdworkflow/restate
 	./adapters/httpedge/connect
+	./adapters/kms/aws
 	./adapters/storage/postgres
 	./adapters/storage/sqlite
 	./cmd/esctl

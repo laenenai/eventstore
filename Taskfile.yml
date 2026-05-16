@@ -12,6 +12,7 @@ vars:
     ./adapters/cmdworkflow/restate
     ./adapters/cmdworkflow/dbos
     ./adapters/httpedge/connect
+    ./adapters/kms/aws
     ./cmd/esctl
 
   # Example modules (not published, but tested in CI to catch
