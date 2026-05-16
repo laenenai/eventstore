@@ -55,15 +55,20 @@ edge layer (not shown in the test) sets the tenant on the command
 and invokes `dbos.RunWorkflow` directly — no ingress hop, no
 serialization roundtrip.
 
-## What the test exercises
+## What the tests exercise
 
-- **Sync read-model** (`ReadModel`) — UPSERTs the active-invoices
-  view. `RunWorkflow` waits for it; read-your-writes holds.
-- **Async audit log** (`AuditLog`) — fires via `Spawn`; the caller
-  gets their result before the audit log catches up.
-- **Full lifecycle**: Create → MarkPaid. Each command flows through
-  the generated `DBOSService.Create` / `DBOSService.MarkPaid`
-  workflows registered with DBOS at startup.
+- **`TestDBOSExample_FullLifecycle`** — Create → MarkPaid through the
+  generated `DBOSService` workflows. Sync `ReadModel` UPSERT settles
+  inline (read-your-writes); Async `AuditLog` fires via Spawn and
+  catches up in the background.
+- **`TestDBOSExample_SagaCompensation`** — Sync+Compensate saga step.
+  The `CreditReservation` subscriber declines deterministically; the
+  framework emits the compensating `Void` command under the same
+  `DBOSContext` (step names prefixed `compensate:credit-reservation:…`,
+  journaled distinctly). The stream ends with `Created + Voided`; the
+  active-invoices view drops the voided row. Mirror of the inproc
+  `TestExample_SagaCompensation` — same subscriber code, different
+  runtime. See cookbook recipe 16 § "Inline compensation under DBOS".
 
 ## See also
 

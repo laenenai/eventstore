@@ -8,7 +8,14 @@ the framework**. The eventstore provides command bus + subscribers
 
 This recipe shows the pattern with a worked Restate example. The DBOS
 version is mechanically the same — substitute `dbos.Sleep`,
-`dbos.RunWorkflow`, etc.
+`dbos.RunWorkflow`, etc. Both worked examples ship in the repo:
+
+- Restate: `examples/cmdworkflow-restate/`
+- DBOS: `examples/cmdworkflow-dbos/` — including the
+  **Sync+Compensate saga step** under DBOS (see
+  `TestDBOSExample_SagaCompensation`), which proves the
+  compensation contract holds end-to-end through the codegen-emitted
+  `DBOSService`.
 
 ## Why not in the framework?
 
@@ -130,6 +137,25 @@ func (s *OrderSaga) CompleteRefund(dctx dbos.DBOSContext, req RefundRequest) (Re
 
 (DBOS uses `Send/GetEvent` for the callback pattern; Restate uses
 `Awakeable`. Same shape, different primitives.)
+
+### Inline compensation under DBOS
+
+For the narrower case where a single subscriber's exhaustion should
+roll back the command (the framework's `Sync + Compensate` knob — not
+a saga, but adjacent), the DBOS example exercises the worked path:
+
+- Subscriber wiring: `examples/cmdworkflow-dbos/subscribers.go`,
+  `CreditReservation` — `Mode: Sync`, `OnExhausted: Compensate`,
+  `Compensate` returns the inverse command (e.g., `Void`).
+- End-to-end test: `examples/cmdworkflow-dbos/example_test.go`,
+  `TestDBOSExample_SagaCompensation` — declines deterministically,
+  asserts `Created + Voided` in the stream, asserts the active-invoices
+  read model dropped the voided row.
+
+The compensating recursion runs under the same `DBOSContext` as the
+original `HandleCmd` with step names prefixed
+`compensate:<sub>:<event>:` — DBOS journals it distinctly from the
+primary handler, so a crash mid-compensation resumes from the journal.
 
 ## What this gives you
 
