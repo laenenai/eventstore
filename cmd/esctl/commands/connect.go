@@ -23,6 +23,7 @@ import (
 type Store interface {
 	es.Store
 	es.StateCacheReader
+	es.StateCacheWriter
 	es.OutboxAdmin
 	es.ProjectionAdmin
 }
@@ -95,11 +96,18 @@ func (c *pgxCloser) Close() error {
 	return nil
 }
 
+// storeOverride is set by tests to swap in a fake Store instead of
+// going through Connect(). Production code leaves it nil.
+var storeOverride Store
+
 // withStore is a helper every subcommand action calls — opens the
 // store, runs fn, closes. Errors propagate.
 func withStore(ctx context.Context, dbURL string,
 	fn func(context.Context, Store) error,
 ) error {
+	if storeOverride != nil {
+		return fn(ctx, storeOverride)
+	}
 	st, closer, err := Connect(ctx, dbURL)
 	if err != nil {
 		return err

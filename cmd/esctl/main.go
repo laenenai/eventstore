@@ -65,6 +65,12 @@ func main() {
 				Usage:   "Disable ANSI colour in pretty output",
 				Sources: cli.EnvVars("ESCTL_NO_COLOR", "NO_COLOR"),
 			},
+			&cli.BoolFlag{
+				Name:    "yes",
+				Aliases: []string{"y"},
+				Usage:   "Confirm destructive write commands. Without --yes, write commands DRY RUN.",
+				Sources: cli.EnvVars("ESCTL_YES"),
+			},
 		},
 		Commands: []*cli.Command{
 			commands.StreamCommand(),
@@ -73,6 +79,7 @@ func main() {
 			commands.ProjectionCommand(),
 			commands.OutboxCommand(),
 			commands.EventsCommand(),
+			commands.StateCacheCommand(),
 		},
 	}
 

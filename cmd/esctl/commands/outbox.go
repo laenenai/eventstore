@@ -13,10 +13,13 @@ import (
 func OutboxCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "outbox",
-		Usage: "Inspect the outbox drain queue and DLQ",
+		Usage: "Inspect and operate on the outbox drain queue and DLQ",
 		Commands: []*cli.Command{
 			outboxPendingCommand(),
 			outboxDLQCommand(),
+			outboxRetryCommand(),
+			outboxRetryAllCommand(),
+			outboxAbandonCommand(),
 		},
 	}
 }
@@ -68,6 +71,101 @@ func outboxPendingCommand() *cli.Command {
 					return Watch(ctx, c.Duration("refresh"), tick)
 				}
 				return tick(ctx)
+			})
+		},
+	}
+}
+
+func outboxRetryCommand() *cli.Command {
+	return &cli.Command{
+		Name: "retry",
+		Usage: "Reset a single DLQ'd outbox row so the next drain run picks it up. " +
+			"Use after fixing the root cause (subscriber redeploy, schema migration, ...).",
+		Flags: []cli.Flag{
+			&cli.UintFlag{Name: "position", Usage: "Target global_position", Required: true},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			tenant := requireTenant(c)
+			if tenant == "" {
+				return errors.New("--tenant is required for outbox retry")
+			}
+			pos := uint64(c.Uint("position"))
+			args := map[string]any{"position": pos}
+			if !confirmed(c) {
+				dryRun(c, args)
+				return nil
+			}
+			return withStore(ctx, c.Root().String("db"), func(ctx context.Context, s Store) error {
+				if err := s.ReplayDLQ(ctx, tenant, pos); err != nil {
+					return err
+				}
+				fmt.Fprintf(dryRunOut, "OK queued gp=%d for retry (tenant=%s)\n", pos, tenant)
+				auditLog(c, tenant, args)
+				return nil
+			})
+		},
+	}
+}
+
+func outboxRetryAllCommand() *cli.Command {
+	return &cli.Command{
+		Name: "retry-all",
+		Usage: "Reset every DLQ'd row for a tenant. Useful after a publisher outage " +
+			"recovery, when the whole DLQ is known to be safe to replay.",
+		Flags: []cli.Flag{
+			&cli.IntFlag{Name: "max-attempts", Usage: "DLQ threshold (matches your drain config)", Value: 5},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			tenant := requireTenant(c)
+			if tenant == "" {
+				return errors.New("--tenant is required for outbox retry-all")
+			}
+			maxAttempts := int32(c.Int("max-attempts"))
+			args := map[string]any{"max-attempts": maxAttempts}
+			if !confirmed(c) {
+				dryRun(c, args)
+				return nil
+			}
+			return withStore(ctx, c.Root().String("db"), func(ctx context.Context, s Store) error {
+				n, err := s.ReplayAllDLQ(ctx, tenant, maxAttempts)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(dryRunOut, "OK queued %d DLQ row(s) for retry (tenant=%s)\n", n, tenant)
+				auditLog(c, tenant, args)
+				return nil
+			})
+		},
+	}
+}
+
+func outboxAbandonCommand() *cli.Command {
+	return &cli.Command{
+		Name: "abandon",
+		Usage: "Mark a DLQ'd row as abandoned — the publisher will NEVER deliver it. " +
+			"The event itself stays in the events table (ADR 0005); only the " +
+			"outbox row is closed out. Use for genuinely garbage events.",
+		Flags: []cli.Flag{
+			&cli.UintFlag{Name: "position", Usage: "Target global_position", Required: true},
+		},
+		Action: func(ctx context.Context, c *cli.Command) error {
+			tenant := requireTenant(c)
+			if tenant == "" {
+				return errors.New("--tenant is required for outbox abandon")
+			}
+			pos := uint64(c.Uint("position"))
+			args := map[string]any{"position": pos}
+			if !confirmed(c) {
+				dryRun(c, args)
+				return nil
+			}
+			return withStore(ctx, c.Root().String("db"), func(ctx context.Context, s Store) error {
+				if err := s.AbandonDLQ(ctx, tenant, pos); err != nil {
+					return err
+				}
+				fmt.Fprintf(dryRunOut, "OK abandoned gp=%d (tenant=%s)\n", pos, tenant)
+				auditLog(c, tenant, args)
+				return nil
 			})
 		},
 	}
