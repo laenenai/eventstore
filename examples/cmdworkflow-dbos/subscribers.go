@@ -2,6 +2,7 @@ package cwdbosex
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 
@@ -89,3 +90,78 @@ func (a *AuditLog) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoi
 }
 
 func (a *AuditLog) Calls() int32 { return a.calls.Load() }
+
+// CreditReservation — Sync subscriber with OnExhausted = Compensate.
+// Mirrors the inproc example's saga step (examples/cmdworkflow). On
+// Created, "reserves" the invoice amount with a fake external credit
+// authority; on a deterministic decline, the framework's compensation
+// path emits the supplied rollback command (Void) back through the
+// same bus.
+//
+// Why this matters for DBOS specifically: the compensating recursion
+// runs under the same DBOSContext as the original HandleCmd, prefixed
+// with "compensate:<sub>:<event>:" step names so DBOS journals it
+// distinctly from the primary handler (see adapters/cmdworkflow/dbos
+// dbos_test.go § TestDBOS_SyncCompensate). A crash mid-compensation
+// resumes from the journal — the example proves the contract holds
+// end-to-end through the codegen-emitted DBOSService.
+type CreditReservation struct {
+	mu          sync.RWMutex
+	approveAll  bool
+	reservedFor map[string]int64
+}
+
+func NewCreditReservation() *CreditReservation {
+	return &CreditReservation{approveAll: true, reservedFor: map[string]int64{}}
+}
+
+// SetApproveAll toggles between "always approve" and "always decline →
+// compensate". The decline path is deterministic so the saga test
+// doesn't depend on retry timing.
+func (c *CreditReservation) SetApproveAll(b bool) {
+	c.mu.Lock()
+	c.approveAll = b
+	c.mu.Unlock()
+}
+
+func (c *CreditReservation) Subscriber() cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event] {
+	return cmdworkflow.Subscriber[*invoicev1.Invoice, invoicev1.Command, invoicev1.Event]{
+		Name:        "credit-reservation",
+		Filter:      cmdworkflow.EventFilter{TypeURLs: []string{"myapp.invoice.v1.Created"}},
+		Mode:        cmdworkflow.Sync,
+		MaxRetries:  2, // tight budget — saga steps fail fast
+		OnExhausted: cmdworkflow.Compensate,
+		Handle:      c.handle,
+		Compensate:  c.compensate,
+	}
+}
+
+func (c *CreditReservation) handle(_ context.Context, envs []es.Envelope, state *invoicev1.Invoice, _ []invoicev1.Event) error {
+	c.mu.RLock()
+	approve := c.approveAll
+	c.mu.RUnlock()
+	if !approve {
+		return errors.New("credit-reservation: declined")
+	}
+	c.mu.Lock()
+	c.reservedFor[envs[0].StreamID.Canonical()] = state.TotalCents
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *CreditReservation) compensate(_ context.Context, envs []es.Envelope, _ *invoicev1.Invoice, _ []invoicev1.Event) (invoicev1.Command, error) {
+	env := envs[0]
+	return &invoicev1.Void{
+		TenantId:   env.TenantID,
+		InvoiceId:  env.StreamID.ID,
+		Reason:     "credit reservation declined",
+		VoidedAtMs: env.OccurredAt.UnixMilli(),
+	}, nil
+}
+
+func (c *CreditReservation) ReservedFor(streamID string) (int64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.reservedFor[streamID]
+	return v, ok
+}
