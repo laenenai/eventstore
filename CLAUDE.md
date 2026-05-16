@@ -144,6 +144,13 @@ directory first — each has its own `go.mod`.
 - **Schema evolution** — read ADR 0013 + ADR 0023 first. The
   upcaster + `state_schema_version` bump + state_cache invalidation
   ordering matters; getting it wrong breaks replays.
+- **Any schema-touching change** — read [ADR 0030 (Schema Migration
+  Discipline)](./docs/adr/0030-schema-migration-discipline.md) and
+  pick a migration tier (A–F). Every PR that touches `proto/**`,
+  `adapters/storage/*/migrations/`, `aggregate/runtime.go`,
+  `es/envelope.go`, or `proto-gen/emit_*.go` must declare its tier
+  in the PR template. Reviewers refuse "Not applicable" claims that
+  contradict the diff.
 
 ## Style
 
