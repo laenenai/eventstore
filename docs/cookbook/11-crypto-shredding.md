@@ -390,6 +390,165 @@ run picks up where it left off. Run after every KEK rotation, then
 once a quarter as a defensive sweep. Schedule alongside the outbox
 drain (recipe 06).
 
+## PII shape migration (Tier D, ADR 0030)
+
+When a PII field changes its on-disk encoding — most commonly the
+`bytes` → `string` shift introduced by ADR 0027's
+`DataClassification` enum, where strings now hold **base64 of the
+ciphertext** instead of raw bytes — the framework's existing data
+needs a migration. Per [ADR 0030](../adr/0030-schema-migration-discipline.md)
+this is **Tier D**: classification or encryption shape changed.
+
+The on-disk DEK doesn't change. The plaintext doesn't change. Only
+the **wire encoding** changes — raw ciphertext bytes (proto `bytes`)
+become base64-of-the-same-ciphertext (proto `string`). The
+migration is a **read-time upcaster** registered against the OLD
+schema_version.
+
+### Shape before and after
+
+**Old proto** (the shape the framework shipped with first):
+
+```proto
+message Hired {
+  string employee_id = 1 [(es.v1.subject_field) = true];
+  bytes  legal_name  = 2;  // implicitly encrypted via the runtime's Shredder
+  bytes  email       = 3;  // raw ciphertext on disk
+}
+```
+
+**New proto** (current):
+
+```proto
+message Hired {
+  option (es.v1.schema_version) = 2;  // bump
+
+  string employee_id = 1 [(es.v1.subject_field) = true];
+  string legal_name  = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  string email       = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+}
+```
+
+The field tags (1, 2, 3) stay the same. Only the wire type changes
+(`bytes` → `string`) and the schema_version bumps.
+
+### The upcaster
+
+The framework's upcaster mechanism (ADR 0013) is the `Codec.Decode`
+method. The codegen-emitted codec only knows the current shape; for
+the migration you write a **wrapper codec** that dispatches on
+`schemaVersion`:
+
+```go
+package employee
+
+import (
+    "encoding/base64"
+    "fmt"
+
+    "google.golang.org/protobuf/proto"
+
+    "github.com/laenenai/eventstore/aggregate"
+    employeev1 "github.com/laenenai/eventstore/gen/myapp/employee/v1"
+    legacyv1  "github.com/laenenai/eventstore/gen/myapp/employee/v1/legacy"
+)
+
+// MigratingCodec wraps the codegen-emitted codec and upcasts
+// schema_version=1 events to schema_version=2 on read. Append still
+// uses the new shape; only Decode applies the migration.
+type MigratingCodec struct {
+    Inner employeev1.EventCodec  // codegen-emitted; handles v2 natively
+}
+
+func (c MigratingCodec) Encode(e employeev1.Event) (aggregate.EncodedEvent, error) {
+    return c.Inner.Encode(e)  // always emit the current shape
+}
+
+func (c MigratingCodec) Decode(typeURL string, schemaVersion uint32, payload []byte) (employeev1.Event, error) {
+    if schemaVersion >= 2 {
+        return c.Inner.Decode(typeURL, schemaVersion, payload)
+    }
+    // Upcast schema_version=1 → 2. Only the Hired variant changed
+    // shape (legal_name + email moved from bytes to string).
+    switch typeURL {
+    case "myapp.employee.v1.Hired":
+        var old legacyv1.HiredV1
+        if err := proto.Unmarshal(payload, &old); err != nil {
+            return nil, fmt.Errorf("upcast Hired v1: %w", err)
+        }
+        return &employeev1.Hired{
+            EmployeeId: old.EmployeeId,
+            // Raw ciphertext bytes → base64-encoded string. Same
+            // ciphertext, same DEK, same plaintext after DecryptPII.
+            LegalName: base64.RawStdEncoding.EncodeToString(old.LegalName),
+            Email:     base64.RawStdEncoding.EncodeToString(old.Email),
+        }, nil
+    }
+    return c.Inner.Decode(typeURL, schemaVersion, payload)
+}
+```
+
+The `legacyv1.HiredV1` is a **frozen copy** of the old proto in a
+separate package — preserved specifically for the upcaster. Don't
+keep it in the current namespace; freeze it as a hand-written
+schema-historical artifact so the codegen plugin doesn't regenerate
+it under the current rules.
+
+```proto
+// proto/myapp/employee/v1/legacy/legacy.proto
+// FROZEN — pre-ADR-0027 shape of Hired, kept for the upcaster only.
+// Do not modify; do not regenerate against current options.
+syntax = "proto3";
+package myapp.employee.v1.legacy;
+
+message HiredV1 {
+  string employee_id = 1;
+  bytes  legal_name  = 2;
+  bytes  email       = 3;
+}
+```
+
+### Wire it on the Runtime
+
+```go
+rt := aggregate.NewProto(
+    store,
+    employee.Decider,
+    employee.MigratingCodec{Inner: employeev1.EventCodec{}},
+)
+```
+
+That's the whole migration. Every existing schema_version=1 event
+decodes through the upcaster on Load. New writes use the current
+shape directly. No data movement on disk; no operator runbook beyond
+deploying the new code.
+
+### Verification before deploy
+
+The migration is read-time, but the upcaster needs at least one test
+that proves the round-trip:
+
+1. Encrypt a plaintext under the OLD shape using `Shredder.EncryptField`
+   directly (bytes ciphertext) and synthesize a v1 `HiredV1` payload.
+2. Run that payload through `MigratingCodec.Decode(typeURL, 1, payload)`.
+3. Apply `DecryptPII` to the resulting `*Hired` (uses the same
+   per-subject DEK).
+4. Assert the decrypted plaintext matches the original.
+
+Test under `gen/test/piimigration/v1/` is the natural home for this
+kind of fixture; the legacy proto goes there too so it's never
+confused with current-shape code.
+
+### When NOT to do the upcaster
+
+If you're greenfield — zero deployed data under the old shape — the
+upcaster is dead code. Skip it. The new proto is the only proto.
+
+If you're mid-deploy with some data under v1 and some under v2:
+register the upcaster, ship the new code, and over time
+schema_version=1 events age out (or you compact them via a separate
+rewriter job — Tier F territory, separate ADR).
+
 ## Failure modes
 
 **SAD fields at write time.** A field classified
