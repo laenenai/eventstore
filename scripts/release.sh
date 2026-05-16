@@ -28,6 +28,7 @@ MODULES=(
   "adapters/cmdworkflow/restate"
   "adapters/cmdworkflow/dbos"
   "adapters/httpedge/connect"
+  "adapters/kms/aws"
   "cmd/esctl"
 )
 
