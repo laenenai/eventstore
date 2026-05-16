@@ -40,6 +40,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0027 | [Data Governance Model — Classification, Access Levels, Codegen](./0027-data-governance-model.md) | Accepted |
 | 0028 | [Tamper-Evident Hash Chain](./0028-tamper-evident-chain.md)                             | Accepted   |
 | 0029 | [Per-Command Subscriber Batch Delivery](./0029-per-command-subscriber-batch-delivery.md) | Accepted (amends 0025) |
+| 0030 | [Schema Migration Discipline](./0030-schema-migration-discipline.md)                    | Accepted   |
 
 ## Conventions
 
