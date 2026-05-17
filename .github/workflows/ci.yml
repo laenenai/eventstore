@@ -38,6 +38,16 @@ jobs:
           # history that it resolves on a feature-branch checkout.
           fetch-depth: 0
 
+      # actions/checkout creates refs/remotes/origin/main but not
+      # refs/heads/main. `buf breaking --against '../.git#branch=main'`
+      # clones the .git directory and asks the source for a ref
+      # advertised as `main`, which means refs/heads/main. Without
+      # this step the lint:proto task fails on every PR with
+      # "fatal: couldn't find remote ref main".
+      - name: Materialize main ref for buf breaking
+        if: github.ref != 'refs/heads/main'
+        run: git fetch origin main:refs/heads/main
+
       # mise installs every tool pinned in .mise.toml (go, buf, sqlc,
       # task) at the exact version devs use locally. Without pinning,
       # `task generate:check` flakes when a new sqlc release changes
