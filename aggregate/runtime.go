@@ -8,12 +8,15 @@ package aggregate
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/laenenai/eventstore/es"
+	"github.com/laenenai/eventstore/es/obs"
 	"github.com/laenenai/eventstore/shred"
 )
 
@@ -101,6 +104,25 @@ type Runtime[S, C, E any] struct {
 	// code (Decider, Evolve) MUST NOT call time.Now() directly either;
 	// pass the timestamp in on the command if the domain needs it.
 	Clock es.Clock
+
+	// Logger is the structured logger used by Handle for entry/exit
+	// debug records and error-path warnings. Defaults to
+	// slog.Default() when unset; set the field directly on
+	// construction to redirect framework logs. The framework never
+	// logs raw commands or events (PII risk); only metadata
+	// attributes (tenant, stream id, command type, error) are
+	// emitted.
+	Logger *slog.Logger
+}
+
+// logger returns the runtime's slog.Logger, defaulting to
+// slog.Default(). Centralised so every call site uses one fallback —
+// changing the default later only touches this helper.
+func (r *Runtime[S, C, E]) logger() *slog.Logger {
+	if r.Logger != nil {
+		return r.Logger
+	}
+	return slog.Default()
 }
 
 // Now returns the current instant from the runtime's Clock, defaulting
@@ -278,7 +300,83 @@ func cloneProtoEvent[E any](e E) (E, error) {
 //
 // If Decider.Decide returns no events (a no-op command), Handle
 // returns the zero AppendResult and no error.
+//
+// Observability: Handle opens an "aggregate.Handle" span and records
+// one CommandsTotal increment + one CommandDuration sample per call.
+// When no OTel provider is registered both calls are no-ops. See
+// es/obs for naming conventions.
 func (r *Runtime[S, C, E]) Handle(
+	ctx context.Context,
+	sid es.StreamID,
+	cmd C,
+	opts ...HandleOption,
+) (es.AppendResult, error) {
+	// Command type label — fmt.Sprintf("%T", ...) is a one-off
+	// reflective call per Handle invocation; on hot paths this is
+	// dwarfed by Load/Append cost. Using %T (not the codegen TypeURL)
+	// because Handle is generic over C with no proto constraint.
+	cmdType := fmt.Sprintf("%T", cmd)
+
+	ctx, span := obs.Start(ctx, "aggregate.Handle",
+		obs.Tenant(sid.Tenant),
+		obs.StreamID(sid.String()),
+		obs.Aggregate(sid.Type),
+		obs.Command(cmdType),
+	)
+	defer span.End()
+
+	start := r.Now()
+	log := r.logger()
+	log.DebugContext(ctx, "aggregate.Handle: entry",
+		slog.String("tenant", sid.Tenant),
+		slog.String("stream_id", sid.String()),
+		slog.String("command_type", cmdType),
+	)
+
+	result, err := r.handleImpl(ctx, sid, cmd, opts...)
+
+	// Latency: r.Now() may use a ManualClock in tests; that's a
+	// feature, not a bug — tests can validate the metric independent
+	// of wall-clock jitter.
+	elapsed := r.Now().Sub(start).Seconds()
+	obs.CommandDuration.Record(ctx, elapsed,
+		metric.WithAttributes(
+			obs.Tenant(sid.Tenant),
+			obs.Aggregate(sid.Type),
+			obs.Command(cmdType),
+		),
+	)
+	outcome := obs.OutcomeSuccess
+	if err != nil {
+		outcome = obs.OutcomeError
+		obs.EndWithErr(span, err)
+		log.ErrorContext(ctx, "aggregate.Handle: failed",
+			slog.String("tenant", sid.Tenant),
+			slog.String("stream_id", sid.String()),
+			slog.String("command_type", cmdType),
+			slog.Any("error", err),
+		)
+	} else {
+		span.SetAttributes(
+			obs.EventCount(int(result.EndVersion-result.StartVersion+1)),
+			obs.Version(result.EndVersion),
+		)
+	}
+	obs.CommandsTotal.Add(ctx, 1,
+		metric.WithAttributes(
+			obs.Tenant(sid.Tenant),
+			obs.Aggregate(sid.Type),
+			obs.Command(cmdType),
+			obs.Outcome(outcome),
+		),
+	)
+	return result, err
+}
+
+// handleImpl is the unobservable inner body of Handle. Split out so
+// the wrapper above can keep span/metric/log instrumentation linear
+// and the inner control flow stays focused on Load + Decide + Append.
+func (r *Runtime[S, C, E]) handleImpl(
 	ctx context.Context,
 	sid es.StreamID,
 	cmd C,

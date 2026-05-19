@@ -3,12 +3,15 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/laenenai/eventstore/adapters/storage/postgres/internal/db"
 	"github.com/laenenai/eventstore/es"
+	"github.com/laenenai/eventstore/es/obs"
 )
 
 // ReadStream returns events for a stream with version > fromVersion,
@@ -17,22 +20,40 @@ func (a *Adapter) ReadStream(ctx context.Context, sid es.StreamID, fromVersion u
 	if err := sid.Validate(); err != nil {
 		return nil, err
 	}
+	ctx, span := obs.Start(ctx, "store.read_stream",
+		obs.Tenant(sid.Tenant),
+		obs.StreamID(sid.String()),
+		obs.DBSystem(dbSystemPostgreSQL),
+	)
+	defer span.End()
+	start := time.Now()
+
 	rows, err := a.queries.ReadStreamFromVersion(ctx, db.ReadStreamFromVersionParams{
 		TenantID:     sid.Tenant,
 		StreamID:     sid.Canonical(),
 		AfterVersion: int64(fromVersion),
 	})
+
+	obs.StoreReadStreamDuration.Record(ctx, time.Since(start).Seconds(),
+		metric.WithAttributes(
+			obs.Tenant(sid.Tenant),
+			obs.DBSystem(dbSystemPostgreSQL),
+		),
+	)
 	if err != nil {
+		obs.EndWithErr(span, err)
 		return nil, err
 	}
 	out := make([]es.Envelope, 0, len(rows))
 	for _, r := range rows {
 		env, err := rowToEnvelope(r)
 		if err != nil {
+			obs.EndWithErr(span, err)
 			return nil, err
 		}
 		out = append(out, env)
 	}
+	span.SetAttributes(obs.EventCount(len(out)))
 	return out, nil
 }
 

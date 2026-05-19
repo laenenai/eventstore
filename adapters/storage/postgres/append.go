@@ -5,16 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/laenenai/eventstore/adapters/storage/postgres/internal/db"
 	"github.com/laenenai/eventstore/es"
+	"github.com/laenenai/eventstore/es/obs"
 )
 
 // pgUniqueViolation is the SQLSTATE for unique-constraint conflicts.
 const pgUniqueViolation = "23505"
+
+// dbSystemPostgreSQL is the value reported for the OTel semconv
+// db.system attribute on every span/metric this adapter emits.
+const dbSystemPostgreSQL = "postgresql"
 
 // Append commits one batch of events plus any uniqueness constraint
 // operations in a single transaction. See ADR 0009 (advisory-lock +
@@ -40,6 +47,15 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 	if len(p.Events) == 0 {
 		return es.AppendResult{}, errors.New("postgres: append requires at least one event")
 	}
+
+	ctx, span := obs.Start(ctx, "store.append",
+		obs.Tenant(p.StreamID.Tenant),
+		obs.StreamID(p.StreamID.String()),
+		obs.EventCount(len(p.Events)),
+		obs.DBSystem(dbSystemPostgreSQL),
+	)
+	defer span.End()
+	start := time.Now()
 
 	var result es.AppendResult
 	err := pgx.BeginFunc(ctx, a.pool, func(tx pgx.Tx) error {
@@ -195,7 +211,25 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 		}
 		return nil
 	})
-	return result, err
+
+	obs.StoreAppendDuration.Record(ctx, time.Since(start).Seconds(),
+		metric.WithAttributes(
+			obs.Tenant(p.StreamID.Tenant),
+			obs.DBSystem(dbSystemPostgreSQL),
+		),
+	)
+	if err != nil {
+		obs.EndWithErr(span, err)
+		return result, err
+	}
+	obs.EventsAppendedTotal.Add(ctx, int64(len(p.Events)),
+		metric.WithAttributes(
+			obs.Tenant(p.StreamID.Tenant),
+			obs.DBSystem(dbSystemPostgreSQL),
+		),
+	)
+	span.SetAttributes(obs.Version(result.EndVersion))
+	return result, nil
 }
 
 // mapErr translates Postgres unique-violations into framework sentinel

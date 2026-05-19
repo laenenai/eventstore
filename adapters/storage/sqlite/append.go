@@ -8,9 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/laenenai/eventstore/adapters/storage/sqlite/internal/db"
 	"github.com/laenenai/eventstore/es"
+	"github.com/laenenai/eventstore/es/obs"
 )
+
+// dbSystemSQLite is the value reported for the OTel semconv db.system
+// attribute on every span/metric this adapter emits. Centralised so
+// both Append and ReadStream stay aligned.
+const dbSystemSQLite = "sqlite"
 
 // Append commits one batch of events plus any uniqueness constraint
 // operations in a single transaction. See ADR 0009 (gap-free
@@ -36,6 +44,18 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 	if len(p.Events) == 0 {
 		return es.AppendResult{}, errors.New("sqlite: append requires at least one event")
 	}
+
+	// Open the span before doing any work so the StreamID validation
+	// path above stays a fast pre-check; instrumenting it would
+	// add a hot-path span around an error-only branch.
+	ctx, span := obs.Start(ctx, "store.append",
+		obs.Tenant(p.StreamID.Tenant),
+		obs.StreamID(p.StreamID.String()),
+		obs.EventCount(len(p.Events)),
+		obs.DBSystem(dbSystemSQLite),
+	)
+	defer span.End()
+	start := time.Now()
 
 	var result es.AppendResult
 	err := withTx(ctx, a.db, func(tx *sql.Tx) error {
@@ -197,7 +217,27 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 		}
 		return nil
 	})
-	return result, err
+
+	// Record duration unconditionally; EventsAppendedTotal only on
+	// success (a partial tx rollback hasn't actually committed events).
+	obs.StoreAppendDuration.Record(ctx, time.Since(start).Seconds(),
+		metric.WithAttributes(
+			obs.Tenant(p.StreamID.Tenant),
+			obs.DBSystem(dbSystemSQLite),
+		),
+	)
+	if err != nil {
+		obs.EndWithErr(span, err)
+		return result, err
+	}
+	obs.EventsAppendedTotal.Add(ctx, int64(len(p.Events)),
+		metric.WithAttributes(
+			obs.Tenant(p.StreamID.Tenant),
+			obs.DBSystem(dbSystemSQLite),
+		),
+	)
+	span.SetAttributes(obs.Version(result.EndVersion))
+	return result, nil
 }
 
 // withTx runs fn inside a transaction, committing on nil return and

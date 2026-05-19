@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/laenenai/eventstore/adapters/storage/sqlite/internal/db"
 	"github.com/laenenai/eventstore/es"
+	"github.com/laenenai/eventstore/es/obs"
 )
 
 // ReadStream returns events for a stream with version > fromVersion,
@@ -17,14 +20,31 @@ func (a *Adapter) ReadStream(ctx context.Context, sid es.StreamID, fromVersion u
 	if err := sid.Validate(); err != nil {
 		return nil, err
 	}
+	ctx, span := obs.Start(ctx, "store.read_stream",
+		obs.Tenant(sid.Tenant),
+		obs.StreamID(sid.String()),
+		obs.DBSystem(dbSystemSQLite),
+	)
+	defer span.End()
+	start := time.Now()
+
 	rows, err := a.queries.ReadStreamFromVersion(ctx, db.ReadStreamFromVersionParams{
 		TenantID: sid.Tenant,
 		StreamID: sid.Canonical(),
 		Version:  int64(fromVersion),
 	})
+
+	obs.StoreReadStreamDuration.Record(ctx, time.Since(start).Seconds(),
+		metric.WithAttributes(
+			obs.Tenant(sid.Tenant),
+			obs.DBSystem(dbSystemSQLite),
+		),
+	)
 	if err != nil {
+		obs.EndWithErr(span, err)
 		return nil, err
 	}
+	span.SetAttributes(obs.EventCount(len(rows)))
 	return collect(rows)
 }
 
