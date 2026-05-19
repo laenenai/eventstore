@@ -18,4 +18,24 @@
 // Bridging stdlib context.Context to dbos.DBOSContext happens via
 // WithContext at the entry point of every DBOS workflow handler.
 // See ADR 0026 § 3.
+//
+// # Queue routing (ADR 0031)
+//
+// Adopters declare named *dbossdk.WorkflowQueue values via the
+// WithQueues constructor option. The cmdworkflow.WithQueue routing
+// hint attached to ctx is resolved against this declaration on every
+// queue-aware RunWorkflow dispatch — today, the async-subscriber
+// fan-out emitted by the codegen Service's sendAsync.
+//
+// Unknown queue names degrade gracefully by default: WithStrictQueues
+// is false (non-strict), so unrecognized names fall back to "default"
+// with a one-time slog WARN per unique name. Adopters who want every
+// routing decision to fail loudly set WithStrictQueues(true);
+// ResolveQueue then returns ErrUnknownQueue rather than degrading.
+//
+// The "default" queue is implicit: if WithQueues includes no entry
+// for "default", DefaultQueue resolution returns a nil
+// *dbossdk.WorkflowQueue, signaling "no queue option — run
+// immediately." This keeps the zero-config path identical to the
+// pre-queue adapter behavior.
 package dbos

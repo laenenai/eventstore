@@ -3,6 +3,9 @@ package dbos
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
 
 	dbossdk "github.com/dbos-inc/dbos-transact-golang/dbos"
 
@@ -53,11 +56,102 @@ var ErrNoDBOSContext = errors.New("cmdworkflow/dbos: no DBOSContext in context �
 // All operations require a DBOSContext stashed in the caller's
 // context.Context via WithContext. Calling Run/RunAsync/Spawn
 // without a wrapped context returns ErrNoDBOSContext.
-type Runtime struct{}
+//
+// Queue routing (ADR 0031): the Runtime resolves queue names attached
+// to the framework context via cmdworkflow.WithQueue against the
+// declared queues passed to New via WithQueues. Resolution lives on
+// ResolveQueue; codegen and adopter helpers apply the result by
+// passing dbossdk.WithQueue(name) to dbossdk.RunWorkflow. Sync
+// subscriber steps run inline inside their parent workflow — DBOS
+// queues do not apply at step granularity, only at workflow
+// invocation boundaries.
+type Runtime struct {
+	queues map[string]*dbossdk.WorkflowQueue
+	strict bool
 
-// New returns a Runtime. Stateless — the DBOSContext carries all the
-// runtime state.
-func New() *Runtime { return &Runtime{} }
+	// warnedUnknown deduplicates the one-time WARN log per unknown
+	// queue name. sync.Map is the right shape here: writes are rare
+	// (first observation of an unknown name) and reads are hot (every
+	// HandleCmd dispatch). Cleared only by process restart, which is
+	// fine — queue declarations are themselves process-scoped.
+	warnedUnknown sync.Map
+}
+
+// New returns a Runtime configured by the supplied options. With no
+// options the Runtime has zero declared queues; ResolveQueue then
+// returns DefaultQueue for every input and codegen sendAsync falls
+// back to immediate (no-queue) execution, matching the pre-queue
+// behavior of the adapter.
+func New(opts ...Option) *Runtime {
+	cfg := runtimeConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return &Runtime{
+		queues: cfg.queues,
+		strict: cfg.strict,
+	}
+}
+
+// ErrUnknownQueue is returned by ResolveQueue in strict mode when the
+// resolved queue name is not present in the declared queues. The
+// framework propagates this up from sendAsync so HandleCmd's caller
+// can act on it — typically log + retry with a known queue, or
+// fall back to default explicitly.
+var ErrUnknownQueue = errors.New("cmdworkflow/dbos: queue not declared")
+
+// ResolveQueue maps a cmdworkflow.WithQueue routing hint to a declared
+// queue. Behavior:
+//
+//   - If the resolved name matches a declared queue, return its name
+//     and a non-nil *dbossdk.WorkflowQueue. Callers should pass
+//     dbossdk.WithQueue(name) to dbossdk.RunWorkflow.
+//   - If the resolved name is "default" but no queue named "default"
+//     was declared, return ("default", nil, nil) — callers should
+//     invoke dbossdk.RunWorkflow without a queue option. This is the
+//     "queue routing not configured for this name" path; not an error.
+//   - If the resolved name is not "default" and not declared:
+//     non-strict mode logs WARN once per unique name (via slog
+//     Default()) and returns DefaultQueue's resolution; strict mode
+//     returns ErrUnknownQueue.
+//
+// Exported so codegen and adopter helpers can apply the result.
+func (r *Runtime) ResolveQueue(ctx context.Context) (string, *dbossdk.WorkflowQueue, error) {
+	name := cmdworkflow.QueueFromContext(ctx)
+
+	if r.queues != nil {
+		if q, ok := r.queues[name]; ok {
+			return name, q, nil
+		}
+	}
+
+	if name == cmdworkflow.DefaultQueue {
+		// Default with no declared queue is the no-queue (immediate)
+		// fallback; this is the zero-config path and must not warn.
+		return cmdworkflow.DefaultQueue, nil, nil
+	}
+
+	if r.strict {
+		return "", nil, fmt.Errorf("%w: %q", ErrUnknownQueue, name)
+	}
+
+	// Non-strict unknown: WARN once per unique name, then resolve as
+	// default. The dedup is best-effort sync.Map LoadOrStore — a tiny
+	// race can produce a second log entry from concurrent dispatch,
+	// which is acceptable for a one-time-per-name warning.
+	if _, loaded := r.warnedUnknown.LoadOrStore(name, struct{}{}); !loaded {
+		slog.Warn(
+			"cmdworkflow/dbos: queue not declared, falling back to default",
+			"queue", name,
+		)
+	}
+	if r.queues != nil {
+		if q, ok := r.queues[cmdworkflow.DefaultQueue]; ok {
+			return cmdworkflow.DefaultQueue, q, nil
+		}
+	}
+	return cmdworkflow.DefaultQueue, nil, nil
+}
 
 // Run implements cmdworkflow.WorkflowRuntime.Run by delegating to
 // dbos.RunAsStep[[]byte] with the supplied step name.
@@ -177,3 +271,32 @@ func (r *Runtime) Spawn(
 
 // Compile-time interface satisfaction check.
 var _ cmdworkflow.WorkflowRuntime = (*Runtime)(nil)
+
+// QueueOption returns the *dbossdk.WorkflowOption to apply to a
+// dbossdk.RunWorkflow call based on the queue routing hint in ctx.
+// Returns nil (no option) when:
+//
+//   - The Runtime is nil (queue routing disabled at construction).
+//   - The resolved queue name is DefaultQueue but no "default" queue
+//     was declared via WithQueues — falls through to immediate
+//     (no-queue) execution.
+//
+// Returns an error from strict-mode resolution; callers MUST surface
+// this rather than swallowing it, so HandleCmd's caller sees the
+// configuration mistake.
+//
+// Codegen sendAsync and adopter helpers call this to apply queue
+// routing uniformly. See ADR 0031 for the cross-adapter contract.
+func (r *Runtime) QueueOption(ctx context.Context) (dbossdk.WorkflowOption, error) {
+	if r == nil {
+		return nil, nil
+	}
+	name, q, err := r.ResolveQueue(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if q == nil {
+		return nil, nil
+	}
+	return dbossdk.WithQueue(name), nil
+}
