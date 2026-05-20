@@ -60,12 +60,18 @@ func TestDBOS_AsyncQueueRouting(t *testing.T) {
 		},
 	})
 	svc := invoicev1dbos.NewDBOSService(wf)
-	dbossdk.RegisterWorkflow(env.DCtx, svc.Create, dbossdk.WithWorkflowName("InvoiceQ.Create"))
-	dbossdk.RegisterWorkflow(env.DCtx, svc.AsyncDispatch, dbossdk.WithWorkflowName("InvoiceQ.AsyncDispatch"))
-	if err := env.DCtx.Launch(); err != nil {
-		t.Fatalf("DBOS Launch: %v", err)
-	}
 
+	// DBOS forbids RegisterWorkflow after Launch. Define + register
+	// the wrapper workflow alongside the other registrations so we
+	// can call Launch ONCE. The closure captures `wf` (set above)
+	// and `cmd` (set just below) — both live by the time the
+	// wrapped workflow actually runs, after Launch returns.
+	cmd := &invoicev1.Create{
+		TenantId: "acme", InvoiceId: "queued-1",
+		CustomerId: "alice", Currency: "USD",
+		LineItems:   []*invoicev1.LineItem{{Sku: "X", Quantity: 1, UnitCents: 100}},
+		CreatedAtMs: time.Now().UnixMilli(),
+	}
 	// Wrap the DBOSContext as stdctx + attach the routing hint. The
 	// codegen Service.Create reads queue from the stdctx via
 	// cmdworkflow.QueueFromContext inside sendAsync's resolution.
@@ -75,26 +81,13 @@ func TestDBOS_AsyncQueueRouting(t *testing.T) {
 	// subscriber's AsyncDispatch child workflow lands on the "high"
 	// queue because the workflow's context carried that hint into
 	// sendAsync.
-
-	cmd := &invoicev1.Create{
-		TenantId: "acme", InvoiceId: "queued-1",
-		CustomerId: "alice", Currency: "USD",
-		LineItems:   []*invoicev1.LineItem{{Sku: "X", Quantity: 1, UnitCents: 100}},
-		CreatedAtMs: time.Now().UnixMilli(),
-	}
+	//
 	// The hint travels via the DBOSContext's stdlib values channel —
 	// queue context value is propagated by Service.Create when it
-	// builds stdCtx. We need queue to be present in the workflow's
-	// stdCtx. Since codegen Service.Create builds stdCtx from a fresh
-	// Background, the queue value would not propagate. The cleanest
-	// way to test queue propagation is to set queue inside a
-	// subscriber-side override or to inject via dbos.WithLocalValues.
-	// For this scenario, exercise the simpler path: call HandleCmd
-	// directly with a stdctx that already carries the queue hint.
-	//
-	// To do that against the live DBOS journal, we need a workflow
-	// scope. Easiest: build a tiny wrapper workflow that calls
-	// HandleCmd with a queue-tagged stdctx.
+	// builds stdCtx. Since codegen Service.Create builds stdCtx from
+	// a fresh Background, we can't rely on the value flowing through
+	// RunWorkflow's call site. Instead, run HandleCmd directly inside
+	// a wrapper workflow whose stdctx we control end-to-end.
 	wrappedWorkflow := func(dctx dbossdk.DBOSContext, _ struct{}) (struct{}, error) {
 		stdCtx := cwdbos.WithContext(es.WithTenant(context.Background(), "acme"), dctx)
 		stdCtx = cmdworkflow.WithQueue(stdCtx, "high")
@@ -102,11 +95,13 @@ func TestDBOS_AsyncQueueRouting(t *testing.T) {
 		_, err := wf.HandleCmd(stdCtx, sid, cmd)
 		return struct{}{}, err
 	}
+
+	dbossdk.RegisterWorkflow(env.DCtx, svc.Create, dbossdk.WithWorkflowName("InvoiceQ.Create"))
+	dbossdk.RegisterWorkflow(env.DCtx, svc.AsyncDispatch, dbossdk.WithWorkflowName("InvoiceQ.AsyncDispatch"))
 	dbossdk.RegisterWorkflow(env.DCtx, wrappedWorkflow, dbossdk.WithWorkflowName("WrappedCreateHigh"))
-	// Re-launch is implicit — DBOS doesn't require it for newly-
-	// registered workflows in some SDK versions; if Launch must run
-	// once, the original Launch already ran above. Newly registered
-	// workflows are dispatchable immediately.
+	if err := env.DCtx.Launch(); err != nil {
+		t.Fatalf("DBOS Launch: %v", err)
+	}
 
 	h, err := dbossdk.RunWorkflow(env.DCtx, wrappedWorkflow, struct{}{})
 	if err != nil {
