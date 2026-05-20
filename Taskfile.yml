@@ -45,6 +45,20 @@ tasks:
           echo "=== go test in $mod ===" && (cd "$mod" && go test ./...) || exit 1
         done
 
+  test:integration:
+    desc: Run testcontainer-backed adapter tests (requires Docker; opt-in via build tags)
+    # The cmdworkflow/dbos and cmdworkflow/restate adapter tests sit
+    # behind //go:build {dbos,restate} tags because they spin up real
+    # Postgres / Restate containers via testcontainers-go. Excluded from
+    # `task test` so devs without Docker installed don't see spurious
+    # failures. `task ci:integration` (and the CI integration job) runs
+    # them in environments where Docker is guaranteed.
+    cmds:
+      - echo "=== go test -tags dbos in ./adapters/cmdworkflow/dbos ==="
+      - cd ./adapters/cmdworkflow/dbos && go test -tags dbos ./...
+      - echo "=== go test -tags restate in ./adapters/cmdworkflow/restate ==="
+      - cd ./adapters/cmdworkflow/restate && go test -tags restate ./...
+
   vet:
     desc: Run go vet across all workspace modules
     cmds:
@@ -101,6 +115,16 @@ tasks:
       - task: generate:check
       - task: lint:proto
       - task: lint:upcasters
+
+  ci:integration:
+    desc: CI integration gate — testcontainer-backed adapter tests (Docker required)
+    # Split from the main ci gate because these tests cost ~1-2 minutes
+    # each, need Docker, and historically have only run when a
+    # maintainer opted in via -tags manually. The new ci-integration
+    # job in .github/workflows/ci.yml runs this on every PR so DBOS /
+    # Restate adapter regressions are caught before merge, not after.
+    cmds:
+      - task: test:integration
 
   clean:
     desc: Remove build artifacts
