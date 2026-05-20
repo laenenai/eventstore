@@ -102,6 +102,17 @@ func (b *Workflow[S, C, E]) WithDLQ(dlq SubscriberDLQWriter) *Workflow[S, C, E] 
 	return b
 }
 
+// Runtime exposes the WorkflowRuntime adapter for codegen-emitted
+// Service wrappers that need to interrogate adapter-specific state
+// (e.g., the DBOS adapter's queue map when applying queue routing on
+// async-subscriber dispatch, per ADR 0031). The framework itself
+// invokes the adapter only through the WorkflowRuntime interface;
+// this accessor is for the narrow case where adapter integration
+// requires concrete-type knowledge that the interface can't carry.
+func (b *Workflow[S, C, E]) Runtime() WorkflowRuntime {
+	return b.wf
+}
+
 // Register appends a subscriber to the bus. Order matters only for
 // deterministic step naming during replay; subscribers do not see
 // one another's effects.

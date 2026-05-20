@@ -11,4 +11,13 @@
 // The package is transport-agnostic and runtime-agnostic. Plug in any
 // WorkflowRuntime adapter (inproc for tests, Restate / DBOS for
 // production) without changing handler or subscriber code.
+//
+// Routing hint: adopters can attach an advisory execution-queue name
+// to ctx via WithQueue(ctx, name). Each adapter interprets the hint
+// per its native model — DBOS routes to a declared dbos.Queue; Restate
+// and inproc log it for traceability and otherwise no-op. See ADR 0031
+// for the cross-adapter contract. The hint is advisory: code that
+// depends on queue routing for correctness (rather than for
+// performance / isolation) violates the contract and will degrade
+// silently on adapters that don't model queues.
 package cmdworkflow

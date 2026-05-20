@@ -71,14 +71,30 @@ func (s *DBOSService) AsyncDispatch(ctx dbos1.DBOSContext, payload cmdworkflow.A
 // sendAsync is the AsyncSend wired into the Workflow at construction.
 // Issues a fire-and-forget dbos.RunWorkflow to AsyncDispatch with the
 // workflow id as DBOS's WithWorkflowID — dedup against replays.
+//
+// Queue routing (ADR 0031): if the framework's WorkflowRuntime is
+// a *cwdbos.Runtime configured with WithQueues, the queue name
+// resolved from cmdworkflow.QueueFromContext(ctx) is passed as a
+// dbos.WithQueue option. A nil option (no declared queue, or the
+// default "no-queue" path) means immediate execution.
 func (s *DBOSService) sendAsync(ctx context.Context, subscriberName string, envBytes []byte, workflowID string) error {
 	dctx, ok := dbos.FromContext(ctx)
 	if !ok {
 		return dbos.ErrNoDBOSContext
 	}
+	opts := []dbos1.WorkflowOption{dbos1.WithWorkflowID(workflowID)}
+	if rt, ok := s.Workflow.Runtime().(*dbos.Runtime); ok {
+		qopt, qerr := rt.QueueOption(ctx)
+		if qerr != nil {
+			return qerr
+		}
+		if qopt != nil {
+			opts = append(opts, qopt)
+		}
+	}
 	_, err := dbos1.RunWorkflow(dctx, s.AsyncDispatch, cmdworkflow.AsyncPayload{
 		SubscriberName: subscriberName,
 		EnvBytes:       envBytes,
-	}, dbos1.WithWorkflowID(workflowID))
+	}, opts...)
 	return err
 }

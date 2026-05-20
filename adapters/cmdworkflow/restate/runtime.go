@@ -3,6 +3,8 @@ package restate
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync"
 
 	restatesdk "github.com/restatedev/sdk-go"
 
@@ -61,6 +63,14 @@ type Runtime struct {
 	// be registered to invoke a function-pointer registry by step
 	// name; see the cookbook for the standard pattern.
 	SpawnHandler string
+
+	// loggedQueues dedupes the one-time DEBUG log per unique queue
+	// name observed in HandleCmd dispatch. Restate doesn't model
+	// queues — its virtual-objects model serializes per-key — so the
+	// log is purely for traceability across adapters. sync.Map keeps
+	// the hot path lock-free; entries cleared only by process
+	// restart, which matches the lifetime of any sensible deployment.
+	loggedQueues sync.Map
 }
 
 // New returns a Runtime with default ServiceName / SpawnHandler.
@@ -71,6 +81,23 @@ func New() *Runtime { return &Runtime{} }
 // means the caller forgot the wrap line at the top of the Restate
 // handler.
 var ErrNoRestateContext = errors.New("cmdworkflow/restate: no restate.Context in context — call WithContext from your handler")
+
+// noteQueue emits a one-time DEBUG log per unique queue name observed
+// in ctx. Restate has no queue primitive — its virtual-objects model
+// already serializes execution per object key — so the log is
+// purely a traceability breadcrumb (ADR 0031): adopters who set
+// cmdworkflow.WithQueue on a context that reaches the Restate adapter
+// can confirm the wiring without runtime behavior changes.
+func (r *Runtime) noteQueue(ctx context.Context) {
+	q := cmdworkflow.QueueFromContext(ctx)
+	if _, loaded := r.loggedQueues.LoadOrStore(q, struct{}{}); loaded {
+		return
+	}
+	slog.Debug(
+		"cmdworkflow/restate: queue routing not modeled; virtual objects serialize per key",
+		"queue", q,
+	)
+}
 
 // Run implements cmdworkflow.WorkflowRuntime.Run by delegating to
 // restate.Run[[]byte] with the closure wrapped to honor the
@@ -84,6 +111,7 @@ func (r *Runtime) Run(
 	name string,
 	fn func(ctx context.Context) ([]byte, error),
 ) ([]byte, error) {
+	r.noteQueue(ctx)
 	rc, ok := FromContext(ctx)
 	if !ok {
 		return nil, ErrNoRestateContext
@@ -126,6 +154,7 @@ func (r *Runtime) RunAsync(
 	name string,
 	fn func(ctx context.Context) ([]byte, error),
 ) cmdworkflow.Future {
+	r.noteQueue(ctx)
 	rc, ok := FromContext(ctx)
 	if !ok {
 		// Surface the error lazily on Wait — keeps the signature
@@ -177,6 +206,7 @@ func (r *Runtime) Spawn(
 	name string,
 	fn func(ctx context.Context) error,
 ) error {
+	r.noteQueue(ctx)
 	rc, ok := FromContext(ctx)
 	if !ok {
 		return ErrNoRestateContext
