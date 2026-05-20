@@ -39,6 +39,7 @@ cookbook first. Often X is a five-line subscriber plus an aggregate.
 | 19 | [L2 — Periodic Merkle anchors](./19-merkle-anchors.md) | Bolt-on to ADR 0028's L1 chain that detects **truncation** by Merkle-rooting hashes into an `events_anchor` audit table on a scheduled cadence. |
 | 20 | [L3 — External witness anchoring](./20-external-witness.md) | Publish L2 Merkle roots to an external append-only log (internal ledger, Sigstore Rekor, OpenTimestamps/Bitcoin) so a hostile DBA who edits both `events` and `events_anchor` is still detectable. |
 | 21 | [Schema evolution — Tier-B upcaster (unit conversion)](./21-schema-evolution-upcaster.md) | Tier-B per ADR 0030: same wire encoding, different meaning. Pure-function upcaster that translates old units (ms) to new (µs) on read; events on disk stay byte-stable. Runnable fixture under `gen/test/unitsmigration/v1/`. |
+| 22 | [Sync read models with Subscriber](./22-sync-read-models-with-subscriber.md) | Per-command batch Subscriber (ADR 0029) wired Sync — read-after-write denormalised views in the same Postgres. Version-guarded UPSERT pattern, state-based vs event-based Handle, DLQ for failures, anti-patterns. |
 
 ## Conventions used in these recipes
 
