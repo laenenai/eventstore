@@ -41,7 +41,8 @@ adapters/httpedge/connect/               own go.mod (connectrpc.com/connect)
 adapters/{kms,publisher}/inproc/         part of root
 proto/                                   framework + example aggregate protos
 gen/                                     generated Go (DO NOT hand-edit)
-proto-gen/                               protoc-gen-es-go plugin source
+cmd/protoc-gen-es-go/                    protoc-gen-es-go plugin (part of root)
+cmd/esctl/                               operator CLI (own go.mod)
 examples/                                full worked examples (not published)
 scripts/release.sh                       synchronized release across all published modules
 ```
@@ -53,8 +54,9 @@ When adding a new adapter that pulls heavy deps, give it its own
 
 1. Author proto under `proto/<domain>/<v1>/`.
 2. Run `task generate` — buf invokes the standard protobuf-go plugin
-   and the local `protoc-gen-es-go` plugin (resolved via `go.work`,
-   no install step).
+   and the local `protoc-gen-es-go` plugin — a command in the root
+   module (`cmd/protoc-gen-es-go`), run by `go run` via its import
+   path, no install step.
 3. Generated files land in `gen/...` as `*.pb.go` (standard) and
    `*_es.pb.go` (framework-specific sum types, codecs, Restate/DBOS
    handlers). **Never hand-edit `_es.pb.go` files** — they're
@@ -148,7 +150,7 @@ directory first — each has its own `go.mod`.
   Discipline)](./docs/adr/0030-schema-migration-discipline.md) and
   pick a migration tier (A–F). Every PR that touches `proto/**`,
   `adapters/storage/*/migrations/`, `aggregate/runtime.go`,
-  `es/envelope.go`, or `proto-gen/emit_*.go` must declare its tier
+  `es/envelope.go`, or `cmd/protoc-gen-es-go/emit_*.go` must declare its tier
   in the PR template. Reviewers refuse "Not applicable" claims that
   contradict the diff.
 

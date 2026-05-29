@@ -26,7 +26,7 @@ If Tier E: link to the new ADR.
 
 > Reviewers: refuse "Not applicable" if the diff touches `proto/**/*.proto`,
 > `adapters/storage/*/migrations/*.sql`, `aggregate/runtime.go`,
-> `es/envelope.go`, or `proto-gen/emit_*.go`.
+> `es/envelope.go`, or `cmd/protoc-gen-es-go/emit_*.go`.
 
 ## Test plan
 

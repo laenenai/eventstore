@@ -153,7 +153,7 @@ ticked "Not applicable" but the diff touches any of:
 - `adapters/storage/*/migrations/*.sql`
 - `aggregate/runtime.go` (state semantics)
 - `es/envelope.go` (envelope shape)
-- `proto-gen/emit_*.go` (codegen behaviour)
+- `cmd/protoc-gen-es-go/emit_*.go` (codegen behaviour)
 
 CI does not enforce the checkbox itself (too brittle); reviewer
 discipline catches it.

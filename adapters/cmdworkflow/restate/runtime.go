@@ -198,7 +198,7 @@ func (f errFuture) Wait() ([]byte, error) { return nil, f.err }
 // the spawned work is best-effort within the process. Durable
 // async fan-out is provided by the codegen-emitted AsyncDispatch
 // handler in `adapters/cmdworkflow/restate/gen/<aggregate>/...`
-// (see `runtime=restate` mode in `proto-gen/main.go`); the
+// (see `runtime=restate` mode in `cmd/protoc-gen-es-go/main.go`); the
 // framework's `cmdworkflow.Workflow.SetAsyncSend` wires the codegen
 // service's `sendAsync` to issue durable `ServiceSend` calls.
 func (r *Runtime) Spawn(

@@ -619,7 +619,7 @@ hard error, not silent fallback.
 - `proto/es/v1/options.proto` — `DataClassification` enum.
 - `kms/` — KMS interface + in-process implementation.
 - `shred/` — Shredder + Encrypt/Decrypt + ForgetSubject + RewrapDEKs.
-- `proto-gen/main.go` — codegen for View / LogValue / Clone / PII
+- `cmd/protoc-gen-es-go/main.go` — codegen for View / LogValue / Clone / PII
   methods + manifest.
 - `examples/employee/` — the full worked aggregate.
 - `adapters/storage/postgres/shred.go` /

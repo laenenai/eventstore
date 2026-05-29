@@ -394,7 +394,7 @@ message CustomerView {
 }
 ```
 
-Implementation: `proto-gen/main.go` § `emitProjectionSpec`. Working
+Implementation: `cmd/protoc-gen-es-go/main.go` § `emitProjectionSpec`. Working
 example: `proto/myapp/customerview/v1/` + `gen/myapp/customerview/v1/`.
 
 This wins for:

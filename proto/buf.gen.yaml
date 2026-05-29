@@ -15,10 +15,11 @@ plugins:
   # sealed-interface sum types, Codecs, typed StreamID wrappers, and
   # decider stubs (ADRs 0004, 0008, 0013, 0016).
   #
-  # Invoked via `go run` so no separate `go install` step is needed —
-  # the workspace (go.work) resolves the proto-gen module to its local
-  # source. Go's build cache handles incremental compiles.
-  - local: ["go", "run", "../proto-gen"]
+  # Invoked via `go run` so no separate `go install` step is needed.
+  # The plugin is a command in the root module (cmd/protoc-gen-es-go),
+  # so any consumer can run it by its full import path without a
+  # workspace replace — Go's build cache handles incremental compiles.
+  - local: ["go", "run", "github.com/laenenai/eventstore/cmd/protoc-gen-es-go"]
     out: ../gen
     opt:
       - paths=source_relative
@@ -28,7 +29,7 @@ plugins:
   # (es.v1.tenant_id) annotations. Output lives in the cmdworkflow/
   # restate adapter's gen tree so the restate-sdk-go transitive dep
   # is contained to the adapter (ADR 0026 § 3).
-  - local: ["go", "run", "../proto-gen"]
+  - local: ["go", "run", "github.com/laenenai/eventstore/cmd/protoc-gen-es-go"]
     out: ../adapters/cmdworkflow/restate/gen
     opt:
       - paths=source_relative
@@ -37,7 +38,7 @@ plugins:
   # Same plugin, runtime=dbos mode. Emits DBOS workflow handlers for
   # annotated aggregates. Output lives in the cmdworkflow/dbos adapter's
   # gen tree, similar to the Restate codegen.
-  - local: ["go", "run", "../proto-gen"]
+  - local: ["go", "run", "github.com/laenenai/eventstore/cmd/protoc-gen-es-go"]
     out: ../adapters/cmdworkflow/dbos/gen
     opt:
       - paths=source_relative

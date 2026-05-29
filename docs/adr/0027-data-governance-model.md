@@ -363,7 +363,7 @@ categories at the audit layer if needed.
   developer/operator walkthrough).
 - `proto/es/v1/options.proto` — `DataClassification` enum definition.
 - `es/access.go` — `AccessLevel` ladder and `MinLevelFor`.
-- `proto-gen/main.go` — codegen emission for View / LogValue / Clone
+- `cmd/protoc-gen-es-go/main.go` — codegen emission for View / LogValue / Clone
   / EncryptPII / DecryptPII / manifest.
 - GDPR Article 4(1) — definition of "data subject".
 - GDPR Article 9 — special categories of personal data.

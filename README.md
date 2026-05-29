@@ -33,7 +33,8 @@ kms/              KeyStore interface
 estest/           Test harness (given/when/then)
 proto/            Framework's own .proto files
 gen/              Generated Go from framework protos (DO NOT hand-edit)
-proto-gen/        protoc-gen-es-go codegen plugin source
+cmd/
+  protoc-gen-es-go/ protoc-gen-es-go codegen plugin source (root module)
 adapters/
   storage/
     postgres/         Postgres adapter (pgx)            [own go.mod]

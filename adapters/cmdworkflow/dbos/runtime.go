@@ -229,7 +229,7 @@ func (f errFuture) Wait() ([]byte, error) { return nil, f.err }
 // Durable Async fan-out is provided by the codegen-emitted
 // AsyncDispatch handler in
 // `adapters/cmdworkflow/dbos/gen/<aggregate>/...` (see
-// `runtime=dbos` mode in `proto-gen/main.go`); the framework's
+// `runtime=dbos` mode in `cmd/protoc-gen-es-go/main.go`); the framework's
 // `cmdworkflow.Workflow.SetAsyncSend` wires the codegen service's
 // `sendAsync` to issue durable `dbos.RunWorkflow` calls.
 //

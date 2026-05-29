@@ -11,14 +11,13 @@ use (
 	./adapters/storage/sqlite
 	./cmd/esctl
 	./examples/cmdworkflow
+	./examples/cmdworkflow-dbos
+	./examples/cmdworkflow-restate
+	./examples/connectedge
 	./examples/customerview
 	./examples/employee
 	./examples/invoice
 	./examples/orderfulfillment
 	./examples/party
-	./examples/cmdworkflow-dbos
-	./examples/cmdworkflow-restate
-	./examples/connectedge
 	./examples/statestream
-	./proto-gen
 )
