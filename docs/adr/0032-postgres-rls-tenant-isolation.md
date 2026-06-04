@@ -214,6 +214,31 @@ that catches the bug the application layer did not.
   and re-grant before enabling the policies. This is a one-time
   operator action and belongs in the upgrade notes.
 
+### Migration ramp
+
+The intended deploy sequence — apply the migration, split the role,
+ship the new binary, wire up the admin pool — is hard to do
+atomically. The adapter therefore exposes `WithoutRLSEnforcement()`
+as a transitional opt-in. When set, cross-tenant code paths fall back
+to the main pool instead of erroring with `ErrAdminPoolRequired`,
+which lets operators ship the new binary *before* migration 00015
+runs or before the role split is complete.
+
+The option is safe in two states only: when migration 00015 has not
+been applied (no policies to enforce), or when the main pool's role
+has `BYPASSRLS` (a superuser used in development, or a transitional
+grant). Once the migration is applied *and* the main pool's role is
+non-privileged, the fallback silently returns zero rows from
+cross-tenant queries — the outbox publisher and any other
+cross-tenant consumer would stop making progress without any error
+to alert the operator. The option's doc string spells this out and
+the production path is to remove it as soon as `WithAdminPool` is
+wired.
+
+This is a deliberate compromise: strict-by-default behavior catches
+mistakes loudly, and the escape hatch exists only so the upgrade can
+happen in two steps instead of being all-or-nothing.
+
 ### Neutral but load-bearing
 
 - **SQLite remains outside this regime.** The trust boundary on

@@ -22,7 +22,11 @@ type Adapter struct {
 	queries      *db.Queries
 	adminPool    *pgxpool.Pool
 	adminQueries *db.Queries
-	lockKey      int64
+	// allowMainPoolForCrossTenant routes cross-tenant calls to the main
+	// pool when no admin pool is configured. Set by WithoutRLSEnforcement
+	// during the migration ramp described in ADR 0032.
+	allowMainPoolForCrossTenant bool
+	lockKey                     int64
 
 	// drainLocks holds connections for currently-held session-level
 	// advisory locks (es.DrainLocker contract). Populated lazily on
@@ -68,7 +72,8 @@ func WithLockKey(key int64) Option {
 // WithAdminPool configures the connection pool used for cross-tenant
 // operations (ADR 0032). The pool's connections must run as a role
 // with BYPASSRLS — typically `eventstore_admin`. If unset, cross-tenant
-// methods fail with ErrAdminPoolRequired.
+// methods fail with ErrAdminPoolRequired unless WithoutRLSEnforcement
+// is also set.
 //
 // The admin pool is a separate identity from the tenant-scoped pool by
 // design: reviewers and operators see at a glance that a code path is
@@ -81,6 +86,35 @@ func WithAdminPool(pool *pgxpool.Pool) Option {
 			a.adminQueries = db.New(pool)
 		}
 	}
+}
+
+// WithoutRLSEnforcement allows cross-tenant operations to run on the
+// main pool when no admin pool is configured. It exists solely as the
+// migration ramp described in ADR 0032 — operators upgrading from a
+// single-pool deployment can ship the new binary first, then apply
+// migration 00015 and wire up an admin pool in a separate change.
+//
+// Safe states:
+//
+//  1. Migration 00015 has not been applied. There are no RLS policies,
+//     so cross-tenant queries on the main pool work normally.
+//  2. Migration 00015 has been applied and the main pool's role has
+//     BYPASSRLS (e.g., a superuser used for development, or a role
+//     explicitly granted BYPASSRLS during a transitional period).
+//     Cross-tenant queries bypass the policies.
+//
+// Unsafe state — DO NOT leave the option set:
+//
+//   - Migration 00015 has been applied and the main pool's role does
+//     not have BYPASSRLS. Cross-tenant queries will return zero rows
+//     (the RLS policy filters everything out because `app.tenant_id`
+//     is unset), silently breaking the outbox publisher and any other
+//     cross-tenant consumer. There will be no error to alert you.
+//
+// Remove this option once WithAdminPool is wired. Production deployments
+// should never ship with it set after the role split is complete.
+func WithoutRLSEnforcement() Option {
+	return func(a *Adapter) { a.allowMainPoolForCrossTenant = true }
 }
 
 // New constructs an Adapter against an existing pgxpool.Pool. The
@@ -125,14 +159,18 @@ func (a *Adapter) withTenantTx(ctx context.Context, tenantID string, fn func(*db
 	})
 }
 
-// admin returns the *db.Queries bound to the admin pool, or
-// ErrAdminPoolRequired if the adapter was constructed without one.
-// Cross-tenant code paths call this to get queries that bypass RLS.
+// admin returns the *db.Queries bound to the admin pool. When no admin
+// pool is configured, the behavior depends on WithoutRLSEnforcement:
+// if set, the main pool's queries are returned as a fallback (migration
+// ramp per ADR 0032); otherwise ErrAdminPoolRequired surfaces.
 func (a *Adapter) admin() (*db.Queries, error) {
-	if a.adminQueries == nil {
-		return nil, ErrAdminPoolRequired
+	if a.adminQueries != nil {
+		return a.adminQueries, nil
 	}
-	return a.adminQueries, nil
+	if a.allowMainPoolForCrossTenant {
+		return a.queries, nil
+	}
+	return nil, ErrAdminPoolRequired
 }
 
 // runForTenant routes fn to either the tenant-bound app pool (when

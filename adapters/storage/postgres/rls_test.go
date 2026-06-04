@@ -102,6 +102,44 @@ func TestRLS_AppPoolNoLeakageWithoutBinding(t *testing.T) {
 	}
 }
 
+// TestRLS_WithoutRLSEnforcement_FallsBackToMainPool verifies the
+// migration-ramp option: when WithoutRLSEnforcement is set and no
+// admin pool is configured, cross-tenant operations route to the main
+// pool instead of erroring with ErrAdminPoolRequired.
+//
+// The fixture's adminPool runs as eventstore_admin (BYPASSRLS), so
+// using it as the main pool simulates the production state where the
+// operator has not yet split roles — the main pool's role is
+// privileged enough to bypass policies, and the binary is happy to
+// drain cross-tenant work through it. This is the safe ramp state
+// called out in the WithoutRLSEnforcement doc string.
+func TestRLS_WithoutRLSEnforcement_FallsBackToMainPool(t *testing.T) {
+	ctx := context.Background()
+	agg := newCounterRuntime(t)
+	tA := tnt(t, "ramp-a")
+	tB := tnt(t, "ramp-b")
+	// Seed via the normal adapter (writes tenant-scoped on appPool).
+	seedEvents(t, agg, []string{tA, tB}, 1)
+
+	// Construct a ramp adapter: main pool = adminPool (has BYPASSRLS),
+	// no admin pool, escape hatch on.
+	ramp := pgadapter.New(adminPool, pgadapter.WithoutRLSEnforcement())
+
+	rows, err := ramp.ReadAll(ctx, 0, 100)
+	if err != nil {
+		t.Fatalf("ReadAll with ramp option: %v", err)
+	}
+	if len(rows) < 2 {
+		t.Errorf("ReadAll returned %d rows; expected at least 2 (one per tenant)", len(rows))
+	}
+
+	// Cross-tenant outbox drain — the canonical case the ramp option
+	// protects.
+	if _, err := ramp.PendingOutbox(ctx, "", 100, 0); err != nil {
+		t.Errorf("PendingOutbox(\"\") with ramp option: %v", err)
+	}
+}
+
 // TestRLS_AdminPoolRequired verifies that constructing the adapter
 // without WithAdminPool causes cross-tenant methods to fail with
 // ErrAdminPoolRequired, rather than silently falling through to the
