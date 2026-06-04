@@ -42,6 +42,7 @@ ADRs are immutable. If a decision changes, write a new ADR that
 | 0029 | [Per-Command Subscriber Batch Delivery](./0029-per-command-subscriber-batch-delivery.md) | Accepted (amends 0025) |
 | 0030 | [Schema Migration Discipline](./0030-schema-migration-discipline.md)                    | Accepted   |
 | 0031 | [Execution Queues — Backend-Neutral Routing Hint](./0031-execution-queues.md)            | Accepted (amends 0025, 0026) |
+| 0032 | [Postgres RLS for Tenant Isolation](./0032-postgres-rls-tenant-isolation.md)             | Accepted   |
 
 ## Conventions
 

@@ -10,24 +10,27 @@ import (
 	"github.com/laenenai/eventstore/es"
 )
 
-// PendingOutbox implements es.OutboxStore.
+// PendingOutbox implements es.OutboxStore. Empty tenantID drains across
+// every tenant (publisher / billing aggregation use cases) — that path
+// runs on the admin pool per ADR 0032.
 func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int, maxAttempts int32) ([]es.OutboxRow, error) {
 	now := time.Now().UTC()
-	rows, err := a.queries.PendingOutboxWithEnvelope(ctx, db.PendingOutboxWithEnvelopeParams{
-		Now:         &now,
-		MaxAttempts: safeMaxAttempts(maxAttempts),
-		MaxRows:     int32(limit),
+	var rows []db.PendingOutboxWithEnvelopeRow
+
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.PendingOutboxWithEnvelope(ctx, db.PendingOutboxWithEnvelopeParams{
+			Now:         &now,
+			MaxAttempts: safeMaxAttempts(maxAttempts),
+			MaxRows:     int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err
 	}
 	out := make([]es.OutboxRow, 0, len(rows))
 	for _, r := range rows {
-		// PendingOutboxWithEnvelope is cross-tenant; filter here for
-		// the tenant-scoped variant.
-		if tenantID != "" && r.TenantID != tenantID {
-			continue
-		}
 		env, err := rowToEnvelopeOutbox(r)
 		if err != nil {
 			return nil, err
@@ -37,39 +40,52 @@ func (a *Adapter) PendingOutbox(ctx context.Context, tenantID string, limit int,
 	return out, nil
 }
 
-// QuarantinedStreams implements es.OutboxStore.
+// QuarantinedStreams implements es.OutboxStore. Empty tenantID lists
+// quarantined streams across every tenant (admin tooling) and runs on
+// the admin pool per ADR 0032.
 func (a *Adapter) QuarantinedStreams(ctx context.Context, tenantID string, maxAttempts int32) ([]es.StreamRef, error) {
 	maxA := safeMaxAttempts(maxAttempts)
+	out := []es.StreamRef{}
 	if tenantID == "" {
-		rows, err := a.queries.QuarantinedStreamsAllTenants(ctx, maxA)
+		q, err := a.admin()
 		if err != nil {
 			return nil, err
 		}
-		out := make([]es.StreamRef, 0, len(rows))
+		rows, err := q.QuarantinedStreamsAllTenants(ctx, maxA)
+		if err != nil {
+			return nil, err
+		}
 		for _, r := range rows {
 			out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
 		}
 		return out, nil
 	}
-	rows, err := a.queries.QuarantinedStreams(ctx, db.QuarantinedStreamsParams{
-		MaxAttempts: maxA,
-		TenantID:    tenantID,
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		rows, inner := q.QuarantinedStreams(ctx, db.QuarantinedStreamsParams{
+			MaxAttempts: maxA,
+			TenantID:    tenantID,
+		})
+		if inner != nil {
+			return inner
+		}
+		for _, r := range rows {
+			out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-	out := make([]es.StreamRef, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, es.StreamRef{TenantID: r.TenantID, StreamID: r.StreamID})
 	}
 	return out, nil
 }
 
 // MarkOutboxPublished implements es.OutboxStore.
 func (a *Adapter) MarkOutboxPublished(ctx context.Context, tenantID string, globalPosition uint64) error {
-	return a.queries.MarkOutboxPublished(ctx, db.MarkOutboxPublishedParams{
-		TenantID:       tenantID,
-		GlobalPosition: int64(globalPosition),
+	return a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		return q.MarkOutboxPublished(ctx, db.MarkOutboxPublishedParams{
+			TenantID:       tenantID,
+			GlobalPosition: int64(globalPosition),
+		})
 	})
 }
 
@@ -80,21 +96,26 @@ func (a *Adapter) MarkOutboxFailed(ctx context.Context, tenantID string, globalP
 		truncated = truncated[:2048]
 	}
 	nextAt := nextAttemptAt.UTC()
-	return a.queries.MarkOutboxFailed(ctx, db.MarkOutboxFailedParams{
-		LastError:      &truncated,
-		NextAttemptAt:  &nextAt,
-		TenantID:       tenantID,
-		GlobalPosition: int64(globalPosition),
+	return a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		return q.MarkOutboxFailed(ctx, db.MarkOutboxFailedParams{
+			LastError:      &truncated,
+			NextAttemptAt:  &nextAt,
+			TenantID:       tenantID,
+			GlobalPosition: int64(globalPosition),
+		})
 	})
 }
 
 // CleanupPublishedOutbox implements es.OutboxStore.
 func (a *Adapter) CleanupPublishedOutbox(ctx context.Context, tenantID string, olderThan time.Time) (int, error) {
 	cutoff := olderThan.UTC()
-	if err := a.queries.CleanupPublished(ctx, db.CleanupPublishedParams{
-		TenantID:  tenantID,
-		OlderThan: &cutoff,
-	}); err != nil {
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		return q.CleanupPublished(ctx, db.CleanupPublishedParams{
+			TenantID:  tenantID,
+			OlderThan: &cutoff,
+		})
+	})
+	if err != nil {
 		return 0, err
 	}
 	return -1, nil

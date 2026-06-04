@@ -61,6 +61,14 @@ func (a *Adapter) Append(ctx context.Context, p es.AppendParams) (es.AppendResul
 	err := pgx.BeginFunc(ctx, a.pool, func(tx pgx.Tx) error {
 		q := a.queries.WithTx(tx)
 
+		// 0. Bind tenant for RLS policies (ADR 0032). set_config(..., true)
+		//    is the parameterized form of SET LOCAL — auto-cleared on
+		//    commit/rollback, so the binding never leaks past this
+		//    transaction onto the next pool checkout.
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", p.StreamID.Tenant); err != nil {
+			return fmt.Errorf("bind tenant: %w", err)
+		}
+
 		// 1. Acquire store-wide advisory lock. Auto-released on
 		//    commit/rollback.
 		if err := q.AdvisoryLock(ctx, a.lockKey); err != nil {

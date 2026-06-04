@@ -12,25 +12,40 @@ import (
 
 // HasProcessedEvent implements projection.DedupStore.
 func (a *Adapter) HasProcessedEvent(ctx context.Context, name, tenantID string, eventID uuid.UUID) (bool, error) {
-	return a.queries.HasProcessedEvent(ctx, db.HasProcessedEventParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
-		EventID:        eventID,
+	var seen bool
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		seen, inner = q.HasProcessedEvent(ctx, db.HasProcessedEventParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+			EventID:        eventID,
+		})
+		return inner
 	})
+	return seen, err
 }
 
 // MarkProcessedEvent implements projection.DedupStore.
 func (a *Adapter) MarkProcessedEvent(ctx context.Context, name, tenantID string, eventID uuid.UUID) error {
-	return a.queries.MarkProcessedEvent(ctx, db.MarkProcessedEventParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
-		EventID:        eventID,
+	return a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		return q.MarkProcessedEvent(ctx, db.MarkProcessedEventParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+			EventID:        eventID,
+		})
 	})
 }
 
-// CleanupProcessedEvents implements projection.DedupStore.
+// CleanupProcessedEvents implements projection.DedupStore. Cross-tenant
+// by signature (no tenant arg) — sweeps a projection's processed rows
+// across every tenant after the retention window, so it runs on the
+// admin pool per ADR 0032.
 func (a *Adapter) CleanupProcessedEvents(ctx context.Context, name string, olderThan time.Time) (int64, error) {
-	return a.queries.CleanupProcessedEvents(ctx, db.CleanupProcessedEventsParams{
+	q, err := a.admin()
+	if err != nil {
+		return 0, err
+	}
+	return q.CleanupProcessedEvents(ctx, db.CleanupProcessedEventsParams{
 		ProjectionName: name,
 		OlderThan:      olderThan.UTC(),
 	})

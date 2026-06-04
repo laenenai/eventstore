@@ -17,13 +17,15 @@ func (a *Adapter) InsertProjectionDLQ(ctx context.Context, name, tenantID string
 	if len(truncated) > 2048 {
 		truncated = truncated[:2048]
 	}
-	return a.queries.InsertProjectionDLQ(ctx, db.InsertProjectionDLQParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
-		GlobalPosition: int64(globalPosition),
-		EventID:        eventID,
-		TypeUrl:        typeURL,
-		LastError:      truncated,
+	return a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		return q.InsertProjectionDLQ(ctx, db.InsertProjectionDLQParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+			GlobalPosition: int64(globalPosition),
+			EventID:        eventID,
+			TypeUrl:        typeURL,
+			LastError:      truncated,
+		})
 	})
 }
 
@@ -34,11 +36,16 @@ func (a *Adapter) ListProjectionDLQ(ctx context.Context, name, tenantID string,
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := a.queries.ListProjectionDLQ(ctx, db.ListProjectionDLQParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
-		AfterPosition:  int64(afterPosition),
-		MaxRows:        int32(limit),
+	var rows []db.ProjectionDlq
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ListProjectionDLQ(ctx, db.ListProjectionDLQParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+			AfterPosition:  int64(afterPosition),
+			MaxRows:        int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err
@@ -60,27 +67,41 @@ func (a *Adapter) ListProjectionDLQ(ctx context.Context, name, tenantID string,
 
 // CountProjectionDLQ implements es.ProjectionDLQAdmin.
 func (a *Adapter) CountProjectionDLQ(ctx context.Context, name, tenantID string) (int64, error) {
-	return a.queries.CountProjectionDLQ(ctx, db.CountProjectionDLQParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
+	var n int64
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		n, inner = q.CountProjectionDLQ(ctx, db.CountProjectionDLQParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+		})
+		return inner
 	})
+	return n, err
 }
 
 // AbandonProjectionDLQ implements es.ProjectionDLQAdmin.
 func (a *Adapter) AbandonProjectionDLQ(ctx context.Context, name, tenantID string, globalPosition uint64) error {
-	return a.queries.DeleteProjectionDLQ(ctx, db.DeleteProjectionDLQParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
-		GlobalPosition: int64(globalPosition),
+	return a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		return q.DeleteProjectionDLQ(ctx, db.DeleteProjectionDLQParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+			GlobalPosition: int64(globalPosition),
+		})
 	})
 }
 
 // AbandonAllProjectionDLQ implements es.ProjectionDLQAdmin.
 func (a *Adapter) AbandonAllProjectionDLQ(ctx context.Context, name, tenantID string) (int64, error) {
-	return a.queries.AbandonAllProjectionDLQ(ctx, db.AbandonAllProjectionDLQParams{
-		ProjectionName: name,
-		TenantID:       tenantID,
+	var n int64
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		n, inner = q.AbandonAllProjectionDLQ(ctx, db.AbandonAllProjectionDLQParams{
+			ProjectionName: name,
+			TenantID:       tenantID,
+		})
+		return inner
 	})
+	return n, err
 }
 
 var (

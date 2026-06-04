@@ -17,16 +17,18 @@ func (a *Adapter) InsertSubscriberDLQ(ctx context.Context, row cmdworkflow.Subsc
 	if len(row.EventIDs) == 0 {
 		return nil
 	}
-	return a.queries.InsertSubscriberDLQ(ctx, db.InsertSubscriberDLQParams{
-		SubscriberName: row.SubscriberName,
-		TenantID:       row.TenantID,
-		StreamID:       row.StreamID,
-		FirstEventID:   row.EventIDs[0],
-		EventIds:       row.EventIDs,
-		TypeUrls:       row.TypeURLs,
-		LastError:      row.LastError,
-		Attempts:       int32(row.Attempts),
-		EnqueuedAt:     row.EnqueuedAt.UTC(),
+	return a.runForTenant(ctx, row.TenantID, func(q *db.Queries) error {
+		return q.InsertSubscriberDLQ(ctx, db.InsertSubscriberDLQParams{
+			SubscriberName: row.SubscriberName,
+			TenantID:       row.TenantID,
+			StreamID:       row.StreamID,
+			FirstEventID:   row.EventIDs[0],
+			EventIds:       row.EventIDs,
+			TypeUrls:       row.TypeURLs,
+			LastError:      row.LastError,
+			Attempts:       int32(row.Attempts),
+			EnqueuedAt:     row.EnqueuedAt.UTC(),
+		})
 	})
 }
 
@@ -35,10 +37,15 @@ func (a *Adapter) ListSubscriberDLQ(ctx context.Context, subscriberName, tenant 
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := a.queries.ListSubscriberDLQ(ctx, db.ListSubscriberDLQParams{
-		SubscriberName: subscriberName,
-		TenantID:       tenant,
-		MaxRows:        int32(limit),
+	var rows []db.SubscriberDlq
+	err := a.runForTenant(ctx, tenant, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ListSubscriberDLQ(ctx, db.ListSubscriberDLQParams{
+			SubscriberName: subscriberName,
+			TenantID:       tenant,
+			MaxRows:        int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err
@@ -61,9 +68,14 @@ func (a *Adapter) ListSubscriberDLQ(ctx context.Context, subscriberName, tenant 
 
 // ClearSubscriberDLQ implements cmdworkflow.SubscriberDLQAdmin.
 func (a *Adapter) ClearSubscriberDLQ(ctx context.Context, subscriberName, tenant string) (int, error) {
-	n, err := a.queries.ClearSubscriberDLQ(ctx, db.ClearSubscriberDLQParams{
-		SubscriberName: subscriberName,
-		TenantID:       tenant,
+	var n int64
+	err := a.runForTenant(ctx, tenant, func(q *db.Queries) error {
+		var inner error
+		n, inner = q.ClearSubscriberDLQ(ctx, db.ClearSubscriberDLQParams{
+			SubscriberName: subscriberName,
+			TenantID:       tenant,
+		})
+		return inner
 	})
 	return int(n), err
 }
@@ -71,9 +83,11 @@ func (a *Adapter) ClearSubscriberDLQ(ctx context.Context, subscriberName, tenant
 // DeleteSubscriberDLQRow implements cmdworkflow.SubscriberDLQAdmin.
 // Keyed by the first event id in the batch.
 func (a *Adapter) DeleteSubscriberDLQRow(ctx context.Context, subscriberName, tenant, firstEventID string) error {
-	return a.queries.DeleteSubscriberDLQRow(ctx, db.DeleteSubscriberDLQRowParams{
-		SubscriberName: subscriberName,
-		TenantID:       tenant,
-		FirstEventID:   firstEventID,
+	return a.runForTenant(ctx, tenant, func(q *db.Queries) error {
+		return q.DeleteSubscriberDLQRow(ctx, db.DeleteSubscriberDLQRowParams{
+			SubscriberName: subscriberName,
+			TenantID:       tenant,
+			FirstEventID:   firstEventID,
+		})
 	})
 }

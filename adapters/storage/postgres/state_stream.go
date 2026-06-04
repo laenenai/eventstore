@@ -7,15 +7,22 @@ import (
 	"github.com/laenenai/eventstore/es"
 )
 
-// ListStreamsBehind implements es.StateStreamStore.
+// ListStreamsBehind implements es.StateStreamStore. Empty tenantID is
+// the cross-tenant subscriber case (default tenant_id column = '');
+// routes through the admin pool per ADR 0032.
 func (a *Adapter) ListStreamsBehind(ctx context.Context, subscriberName, tenantID string, limit int) ([]es.StateEnvelope, error) {
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := a.queries.ListStreamsBehind(ctx, db.ListStreamsBehindParams{
-		Name:     subscriberName,
-		TenantID: tenantID,
-		MaxRows:  int32(limit),
+	var rows []db.ListStreamsBehindRow
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ListStreamsBehind(ctx, db.ListStreamsBehindParams{
+			Name:     subscriberName,
+			TenantID: tenantID,
+			MaxRows:  int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err
@@ -37,11 +44,13 @@ func (a *Adapter) ListStreamsBehind(ctx context.Context, subscriberName, tenantI
 
 // AdvanceStateStreamPosition implements es.StateStreamStore.
 func (a *Adapter) AdvanceStateStreamPosition(ctx context.Context, subscriberName, tenantID, streamID string, version uint64) error {
-	return a.queries.UpsertStateStreamPosition(ctx, db.UpsertStateStreamPositionParams{
-		Name:     subscriberName,
-		TenantID: tenantID,
-		StreamID: streamID,
-		Version:  int64(version),
+	return a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		return q.UpsertStateStreamPosition(ctx, db.UpsertStateStreamPositionParams{
+			Name:     subscriberName,
+			TenantID: tenantID,
+			StreamID: streamID,
+			Version:  int64(version),
+		})
 	})
 }
 
@@ -49,9 +58,14 @@ func (a *Adapter) AdvanceStateStreamPosition(ctx context.Context, subscriberName
 
 // StateStreamStatus implements es.StateStreamAdmin.
 func (a *Adapter) StateStreamStatus(ctx context.Context, subscriberName, tenantID string) (es.StateStreamSubscriberStatus, error) {
-	row, err := a.queries.CountStateStreamLag(ctx, db.CountStateStreamLagParams{
-		Name:     subscriberName,
-		TenantID: tenantID,
+	var row db.CountStateStreamLagRow
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		row, inner = q.CountStateStreamLag(ctx, db.CountStateStreamLagParams{
+			Name:     subscriberName,
+			TenantID: tenantID,
+		})
+		return inner
 	})
 	if err != nil {
 		return es.StateStreamSubscriberStatus{}, err
@@ -66,24 +80,38 @@ func (a *Adapter) StateStreamStatus(ctx context.Context, subscriberName, tenantI
 
 // ResetStateStreamSubscriber implements es.StateStreamAdmin.
 func (a *Adapter) ResetStateStreamSubscriber(ctx context.Context, subscriberName, tenantID string) (int64, error) {
-	return a.queries.ResetStateStreamSubscriber(ctx, db.ResetStateStreamSubscriberParams{
-		Name:     subscriberName,
-		TenantID: tenantID,
+	var n int64
+	err := a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		n, inner = q.ResetStateStreamSubscriber(ctx, db.ResetStateStreamSubscriberParams{
+			Name:     subscriberName,
+			TenantID: tenantID,
+		})
+		return inner
 	})
+	return n, err
 }
 
 // ResetStateStreamSubscriberForStream implements es.StateStreamAdmin.
 func (a *Adapter) ResetStateStreamSubscriberForStream(ctx context.Context, subscriberName, tenantID, streamID string) error {
-	return a.queries.ResetStateStreamSubscriberForStream(ctx, db.ResetStateStreamSubscriberForStreamParams{
-		Name:     subscriberName,
-		TenantID: tenantID,
-		StreamID: streamID,
+	return a.runForTenant(ctx, tenantID, func(q *db.Queries) error {
+		return q.ResetStateStreamSubscriberForStream(ctx, db.ResetStateStreamSubscriberForStreamParams{
+			Name:     subscriberName,
+			TenantID: tenantID,
+			StreamID: streamID,
+		})
 	})
 }
 
-// ListStateStreamSubscribers implements es.StateStreamAdmin.
+// ListStateStreamSubscribers implements es.StateStreamAdmin. Lists every
+// subscriber name across every tenant — runs on the admin pool per
+// ADR 0032.
 func (a *Adapter) ListStateStreamSubscribers(ctx context.Context) ([]string, error) {
-	return a.queries.ListStateStreamSubscribers(ctx)
+	q, err := a.admin()
+	if err != nil {
+		return nil, err
+	}
+	return q.ListStateStreamSubscribers(ctx)
 }
 
 var (
