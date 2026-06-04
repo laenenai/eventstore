@@ -12,9 +12,14 @@ import (
 
 // GetState implements es.StateCacheReader.
 func (a *Adapter) GetState(ctx context.Context, tenantID, streamID string) (es.StateCacheRow, error) {
-	row, err := a.queries.GetState(ctx, db.GetStateParams{
-		TenantID: tenantID,
-		StreamID: streamID,
+	var row db.GetStateRow
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		row, inner = q.GetState(ctx, db.GetStateParams{
+			TenantID: tenantID,
+			StreamID: streamID,
+		})
+		return inner
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -39,11 +44,16 @@ func (a *Adapter) ListStates(ctx context.Context, tenantID, typeURL, afterStream
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := a.queries.ListStates(ctx, db.ListStatesParams{
-		TenantID:      tenantID,
-		TypeUrl:       typeURL,
-		AfterStreamID: afterStreamID,
-		MaxRows:       int32(limit),
+	var rows []db.ListStatesRow
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ListStates(ctx, db.ListStatesParams{
+			TenantID:      tenantID,
+			TypeUrl:       typeURL,
+			AfterStreamID: afterStreamID,
+			MaxRows:       int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err
@@ -64,15 +74,27 @@ func (a *Adapter) ListStates(ctx context.Context, tenantID, typeURL, afterStream
 	return out, nil
 }
 
-// WipeStateCacheForType implements es.StateCacheWriter.
+// WipeStateCacheForType implements es.StateCacheWriter. Empty tenantID
+// invalidates the cache across every tenant — used for schema-version
+// rollouts (ADR 0023) — and runs on the admin pool (ADR 0032).
 func (a *Adapter) WipeStateCacheForType(ctx context.Context, tenantID, typeURL string) (int64, error) {
 	if tenantID == "" {
-		return a.queries.DeleteStateCacheForTypeAllTenants(ctx, typeURL)
+		q, err := a.admin()
+		if err != nil {
+			return 0, err
+		}
+		return q.DeleteStateCacheForTypeAllTenants(ctx, typeURL)
 	}
-	return a.queries.DeleteStateCacheForType(ctx, db.DeleteStateCacheForTypeParams{
-		TenantID: tenantID,
-		TypeUrl:  typeURL,
+	var n int64
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		n, inner = q.DeleteStateCacheForType(ctx, db.DeleteStateCacheForTypeParams{
+			TenantID: tenantID,
+			TypeUrl:  typeURL,
+		})
+		return inner
 	})
+	return n, err
 }
 
 // UpsertCachedState implements es.StateCacheUpserter. Used by
@@ -82,14 +104,16 @@ func (a *Adapter) UpsertCachedState(ctx context.Context, row es.StateCacheRow) e
 	if schema == 0 {
 		schema = 1
 	}
-	return a.queries.UpsertStateCache(ctx, db.UpsertStateCacheParams{
-		TenantID:           row.TenantID,
-		StreamID:           row.StreamID,
-		TypeUrl:            row.TypeURL,
-		State:              row.State,
-		Version:            int64(row.Version),
-		Terminal:           row.Terminal,
-		StateSchemaVersion: int32(schema),
+	return a.withTenantTx(ctx, row.TenantID, func(q *db.Queries) error {
+		return q.UpsertStateCache(ctx, db.UpsertStateCacheParams{
+			TenantID:           row.TenantID,
+			StreamID:           row.StreamID,
+			TypeUrl:            row.TypeURL,
+			State:              row.State,
+			Version:            int64(row.Version),
+			Terminal:           row.Terminal,
+			StateSchemaVersion: int32(schema),
+		})
 	})
 }
 

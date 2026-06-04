@@ -12,9 +12,14 @@ import (
 
 // GetSubjectKey implements shred.SubjectStore.
 func (a *Adapter) GetSubjectKey(ctx context.Context, tenantID, subject string) (shred.SubjectKey, error) {
-	row, err := a.queries.GetSubjectKey(ctx, db.GetSubjectKeyParams{
-		TenantID: tenantID,
-		Subject:  subject,
+	var row db.SubjectKey
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		row, inner = q.GetSubjectKey(ctx, db.GetSubjectKeyParams{
+			TenantID: tenantID,
+			Subject:  subject,
+		})
+		return inner
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -34,19 +39,23 @@ func (a *Adapter) GetSubjectKey(ctx context.Context, tenantID, subject string) (
 
 // UpsertSubjectKey implements shred.SubjectStore.
 func (a *Adapter) UpsertSubjectKey(ctx context.Context, tenantID, subject string, dekWrapped []byte, kekVersion uint32) error {
-	return a.queries.UpsertSubjectKey(ctx, db.UpsertSubjectKeyParams{
-		TenantID:   tenantID,
-		Subject:    subject,
-		DekWrapped: dekWrapped,
-		KekVersion: int32(kekVersion),
+	return a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		return q.UpsertSubjectKey(ctx, db.UpsertSubjectKeyParams{
+			TenantID:   tenantID,
+			Subject:    subject,
+			DekWrapped: dekWrapped,
+			KekVersion: int32(kekVersion),
+		})
 	})
 }
 
 // ForgetSubject implements shred.SubjectStore.
 func (a *Adapter) ForgetSubject(ctx context.Context, tenantID, subject string) error {
-	return a.queries.ForgetSubject(ctx, db.ForgetSubjectParams{
-		TenantID: tenantID,
-		Subject:  subject,
+	return a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		return q.ForgetSubject(ctx, db.ForgetSubjectParams{
+			TenantID: tenantID,
+			Subject:  subject,
+		})
 	})
 }
 
@@ -55,10 +64,15 @@ func (a *Adapter) ListStaleSubjectKeys(ctx context.Context, tenantID string, cur
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := a.queries.ListStaleSubjectKeys(ctx, db.ListStaleSubjectKeysParams{
-		TenantID:          tenantID,
-		CurrentKekVersion: int32(currentKEKVersion),
-		MaxRows:           int32(limit),
+	var rows []db.SubjectKey
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ListStaleSubjectKeys(ctx, db.ListStaleSubjectKeysParams{
+			TenantID:          tenantID,
+			CurrentKekVersion: int32(currentKEKVersion),
+			MaxRows:           int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err

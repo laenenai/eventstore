@@ -22,11 +22,16 @@ import (
 // is defensive: a correct caller has already verified via ReadStream
 // that the row's Hash is empty before invoking this.
 func (a *Adapter) BackfillEventHash(ctx context.Context, tenantID string, eventID uuid.UUID, hash, prevHash []byte) error {
-	n, err := a.queries.BackfillEventHash(ctx, db.BackfillEventHashParams{
-		Hash:     hash,
-		PrevHash: prevHash,
-		TenantID: tenantID,
-		EventID:  eventID,
+	var n int64
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		n, inner = q.BackfillEventHash(ctx, db.BackfillEventHashParams{
+			Hash:     hash,
+			PrevHash: prevHash,
+			TenantID: tenantID,
+			EventID:  eventID,
+		})
+		return inner
 	})
 	if err != nil {
 		return fmt.Errorf("postgres: backfill event hash: %w", err)

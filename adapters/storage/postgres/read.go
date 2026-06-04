@@ -28,10 +28,15 @@ func (a *Adapter) ReadStream(ctx context.Context, sid es.StreamID, fromVersion u
 	defer span.End()
 	start := time.Now()
 
-	rows, err := a.queries.ReadStreamFromVersion(ctx, db.ReadStreamFromVersionParams{
-		TenantID:     sid.Tenant,
-		StreamID:     sid.Canonical(),
-		AfterVersion: int64(fromVersion),
+	var rows []db.Event
+	err := a.withTenantTx(ctx, sid.Tenant, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ReadStreamFromVersion(ctx, db.ReadStreamFromVersionParams{
+			TenantID:     sid.Tenant,
+			StreamID:     sid.Canonical(),
+			AfterVersion: int64(fromVersion),
+		})
+		return inner
 	})
 
 	obs.StoreReadStreamDuration.Record(ctx, time.Since(start).Seconds(),
@@ -58,9 +63,14 @@ func (a *Adapter) ReadStream(ctx context.Context, sid es.StreamID, fromVersion u
 }
 
 // ReadAll returns events store-wide with global_position > fromPosition,
-// limited to `limit` rows.
+// limited to `limit` rows. Cross-tenant by design (ADR 0009) — uses the
+// admin pool so RLS does not filter out other tenants' rows.
 func (a *Adapter) ReadAll(ctx context.Context, fromPosition uint64, limit int) ([]es.Envelope, error) {
-	rows, err := a.queries.ReadAllFromPosition(ctx, db.ReadAllFromPositionParams{
+	q, err := a.admin()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.ReadAllFromPosition(ctx, db.ReadAllFromPositionParams{
 		AfterPosition: int64(fromPosition),
 		MaxRows:       int32(limit),
 	})
@@ -80,10 +90,15 @@ func (a *Adapter) ReadAll(ctx context.Context, fromPosition uint64, limit int) (
 
 // ReadAllForTenant is ReadAll scoped to a single tenant.
 func (a *Adapter) ReadAllForTenant(ctx context.Context, tenantID string, fromPosition uint64, limit int) ([]es.Envelope, error) {
-	rows, err := a.queries.ReadAllFromPositionTenant(ctx, db.ReadAllFromPositionTenantParams{
-		TenantID:      tenantID,
-		AfterPosition: int64(fromPosition),
-		MaxRows:       int32(limit),
+	var rows []db.Event
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ReadAllFromPositionTenant(ctx, db.ReadAllFromPositionTenantParams{
+			TenantID:      tenantID,
+			AfterPosition: int64(fromPosition),
+			MaxRows:       int32(limit),
+		})
+		return inner
 	})
 	if err != nil {
 		return nil, err
@@ -105,9 +120,14 @@ func (a *Adapter) CurrentStreamVersion(ctx context.Context, sid es.StreamID) (ui
 	if err := sid.Validate(); err != nil {
 		return 0, err
 	}
-	v, err := a.queries.CurrentStreamVersion(ctx, db.CurrentStreamVersionParams{
-		TenantID: sid.Tenant,
-		StreamID: sid.Canonical(),
+	var v int64
+	err := a.withTenantTx(ctx, sid.Tenant, func(q *db.Queries) error {
+		var inner error
+		v, inner = q.CurrentStreamVersion(ctx, db.CurrentStreamVersionParams{
+			TenantID: sid.Tenant,
+			StreamID: sid.Canonical(),
+		})
+		return inner
 	})
 	if err != nil {
 		return 0, err
@@ -118,9 +138,14 @@ func (a *Adapter) CurrentStreamVersion(ctx context.Context, sid es.StreamID) (ui
 // GetEventByID returns one event by id. Returns ErrEventNotFound when
 // the row does not exist for the tenant.
 func (a *Adapter) GetEventByID(ctx context.Context, tenantID string, eventID uuid.UUID) (es.Envelope, error) {
-	row, err := a.queries.GetEventByID(ctx, db.GetEventByIDParams{
-		TenantID: tenantID,
-		EventID:  eventID,
+	var row db.Event
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		row, inner = q.GetEventByID(ctx, db.GetEventByIDParams{
+			TenantID: tenantID,
+			EventID:  eventID,
+		})
+		return inner
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return es.Envelope{}, es.ErrEventNotFound
