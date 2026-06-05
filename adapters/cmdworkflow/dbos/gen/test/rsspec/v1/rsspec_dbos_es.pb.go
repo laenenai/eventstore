@@ -16,17 +16,41 @@ import (
 // DBOS workflows. Register each method with dbos.RegisterWorkflow
 // before calling dctx.Launch().
 type DBOSService struct {
-	Workflow *cmdworkflow.Workflow[*v1.RsState, v1.Command, v1.Event]
+	Workflow   *cmdworkflow.Workflow[*v1.RsState, v1.Command, v1.Event]
+	handleOpts func(cmd any) ([]cmdworkflow.HandleCmdOption, error)
+}
+
+// DBOSServiceOption configures a DBOSService at construction.
+type DBOSServiceOption func(*DBOSService)
+
+// WithHandleOptions installs a hook that derives per-command
+// HandleCmdOption values (e.g. actor provenance) from each command
+// before dispatch. Returning an error fails the dispatch closed —
+// nothing is appended. nil hook = no extra options (default).
+func WithHandleOptions(fn func(cmd any) ([]cmdworkflow.HandleCmdOption, error)) DBOSServiceOption {
+	return func(s *DBOSService) { s.handleOpts = fn }
 }
 
 // NewDBOSService returns a DBOS-registerable service backed by wf.
 // Also wires durable Async fan-out: subsequent Async subscriber
 // dispatches go through dbos.RunWorkflow targeting AsyncDispatch,
 // keyed by <streamType>:<subscriberName>:<firstEventID> for dedup.
-func NewDBOSService(wf *cmdworkflow.Workflow[*v1.RsState, v1.Command, v1.Event]) *DBOSService {
+func NewDBOSService(wf *cmdworkflow.Workflow[*v1.RsState, v1.Command, v1.Event], opts ...DBOSServiceOption) *DBOSService {
 	s := &DBOSService{Workflow: wf}
+	for _, o := range opts {
+		o(s)
+	}
 	wf.SetAsyncSend(s.sendAsync)
 	return s
+}
+
+// cmdOpts resolves the per-command HandleCmdOption values via the
+// installed hook (nil hook → no options).
+func (s *DBOSService) cmdOpts(cmd any) ([]cmdworkflow.HandleCmdOption, error) {
+	if s.handleOpts == nil {
+		return nil, nil
+	}
+	return s.handleOpts(cmd)
 }
 
 func (s *DBOSService) CreateRs(ctx dbos1.DBOSContext, cmd *v1.CreateRs) (*v1.RsState, error) {
@@ -36,7 +60,11 @@ func (s *DBOSService) CreateRs(ctx dbos1.DBOSContext, cmd *v1.CreateRs) (*v1.RsS
 		return nil, err
 	}
 	stdCtx := dbos.WithContext(es.WithTenant(context.Background(), tenant), ctx)
-	return s.Workflow.HandleCmd(stdCtx, sid, cmd)
+	opts, err := s.cmdOpts(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return s.Workflow.HandleCmd(stdCtx, sid, cmd, opts...)
 }
 
 func (s *DBOSService) UpdateRs(ctx dbos1.DBOSContext, cmd *v1.UpdateRs) (*v1.RsState, error) {
@@ -46,7 +74,11 @@ func (s *DBOSService) UpdateRs(ctx dbos1.DBOSContext, cmd *v1.UpdateRs) (*v1.RsS
 		return nil, err
 	}
 	stdCtx := dbos.WithContext(es.WithTenant(context.Background(), tenant), ctx)
-	return s.Workflow.HandleCmd(stdCtx, sid, cmd)
+	opts, err := s.cmdOpts(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return s.Workflow.HandleCmd(stdCtx, sid, cmd, opts...)
 }
 
 func (s *DBOSService) DeleteRs(ctx dbos1.DBOSContext, cmd *v1.DeleteRs) (*v1.RsState, error) {
@@ -56,7 +88,11 @@ func (s *DBOSService) DeleteRs(ctx dbos1.DBOSContext, cmd *v1.DeleteRs) (*v1.RsS
 		return nil, err
 	}
 	stdCtx := dbos.WithContext(es.WithTenant(context.Background(), tenant), ctx)
-	return s.Workflow.HandleCmd(stdCtx, sid, cmd)
+	opts, err := s.cmdOpts(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return s.Workflow.HandleCmd(stdCtx, sid, cmd, opts...)
 }
 
 // AsyncDispatch is the DBOS workflow that runs an Async subscriber's
