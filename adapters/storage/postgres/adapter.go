@@ -24,9 +24,14 @@ type Adapter struct {
 	adminQueries *db.Queries
 	// allowMainPoolForCrossTenant routes cross-tenant calls to the main
 	// pool when no admin pool is configured. Set by WithoutRLSEnforcement
-	// during the migration ramp described in ADR 0032.
+	// during the migration ramp described in ADR 0032, and by WithoutRLS
+	// for deployments that opt out of RLS entirely.
 	allowMainPoolForCrossTenant bool
-	lockKey                     int64
+	// skipRLSMigration excludes migration 00015 (role creation + RLS
+	// policies) from Migrate. Set by WithoutRLS for single-tenant /
+	// non-RLS deployments. See WithoutRLS.
+	skipRLSMigration bool
+	lockKey          int64
 
 	// drainLocks holds connections for currently-held session-level
 	// advisory locks (es.DrainLocker contract). Populated lazily on
@@ -115,6 +120,38 @@ func WithAdminPool(pool *pgxpool.Pool) Option {
 // should never ship with it set after the role split is complete.
 func WithoutRLSEnforcement() Option {
 	return func(a *Adapter) { a.allowMainPoolForCrossTenant = true }
+}
+
+// WithoutRLS opts the deployment out of row-level security entirely. It
+// is the right choice for single-tenant deployments (one logical tenant
+// per database) that do not need — and cannot grant the privileges for —
+// the role split and RLS policies that ADR 0032 introduces.
+//
+// It does two things:
+//
+//  1. Migrate excludes migration 00015. No `eventstore_app` /
+//     `eventstore_admin` roles are created (so the migrating role needs
+//     no CREATEROLE/superuser privilege — important on managed Postgres
+//     such as Neon), and no RLS policies are installed. The tables are
+//     left unprotected by RLS; isolation, if any, rests entirely on the
+//     app layer (estenant.From + leading tenant_id columns, ADR 0007).
+//  2. Cross-tenant operations run on the main pool without requiring a
+//     separate BYPASSRLS admin pool — there are no policies to bypass.
+//     This is documented safe state (1) of WithoutRLSEnforcement.
+//
+// Set this option BOTH on the adapter used to Migrate and on the adapter
+// used at runtime, so the two agree on whether RLS exists.
+//
+// This is not a migration ramp — unlike WithoutRLSEnforcement, it is a
+// stable terminal state for deployments that will never use RLS. If you
+// later decide to adopt RLS, drop the option: Migrate will then apply
+// migration 00015 on the next run (it remains the highest version, so
+// goose applies it with no gap), and you must wire WithAdminPool.
+func WithoutRLS() Option {
+	return func(a *Adapter) {
+		a.skipRLSMigration = true
+		a.allowMainPoolForCrossTenant = true
+	}
 }
 
 // New constructs an Adapter against an existing pgxpool.Pool. The
