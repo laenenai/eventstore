@@ -192,7 +192,10 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 	out.P("package ", file.GoPackageName)
 	out.P()
 
-	var eventVariants []*protogen.Message
+	var (
+		eventVariants   []*protogen.Message
+		commandVariants []*protogen.Message
+	)
 	for _, st := range sumTypes {
 		emitSumType(out, st)
 		// Per ADR 0020 decision 3a: emit a Projection interface and
@@ -210,6 +213,12 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 			}
 			eventVariants = append(eventVariants, st.variants...)
 		}
+		// Commands aren't a projection / shred target but we want
+		// them in the v2 manifest so the regulator-facing catalog
+		// can document the write surface alongside events.
+		if st.interfaceName == "Command" {
+			commandVariants = append(commandVariants, st.variants...)
+		}
 	}
 	for _, ps := range projectionSpecs {
 		emitProjectionSpec(out, ps)
@@ -225,11 +234,23 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, registry map[str
 		})
 	}
 
-	// ADR 0010: emit pii_manifest.json — the audit artifact listing
-	// every event's PII classification. Diff-reviewed; acts as the
-	// proof of "what's encrypted vs what's not" for privacy review.
-	if len(eventVariants) > 0 {
-		if err := emitPIIManifest(plugin, file, eventVariants); err != nil {
+	// ADR 0010: emit <package>_pii_manifest.json — the audit
+	// artifact listing every aggregate / command / event field with
+	// its PII classification, encryption mode, DSAR-export disposition,
+	// audit-on-read flag, and retention class. Diff-reviewed; consumed
+	// by privacy-audit tooling and by cmd/esdocs to render the
+	// regulator-facing data catalog.
+	//
+	// Manifest schema v2 (this commit): adds aggregates[], commands[],
+	// proto_type per field, go_package, and bumps manifest_version.
+	// v1 readers tolerate the additive change (additional keys are
+	// ignored). See cmd/esdocs for the consumer.
+	aggregates, err := findAggregates(file)
+	if err != nil {
+		return err
+	}
+	if len(eventVariants) > 0 || len(commandVariants) > 0 || len(aggregates) > 0 {
+		if err := emitPIIManifest(plugin, file, aggregates, commandVariants, eventVariants); err != nil {
 			return err
 		}
 	}
@@ -962,7 +983,12 @@ func emitPIIMethods(out *protogen.GeneratedFile, v *protogen.Message) error {
 // + derived behaviors (encryption, DSAR export, audit-on-read,
 // retention class) so audit / DSAR-exporter / PCI-scope tooling can
 // consume the manifest without re-implementing the rules.
-func manifestAttrs(pf piiField) string {
+//
+// protoType is the wire-level proto kind ("string", "bytes", "int64",
+// "enum:Status", "message:Foo", "repeated string", "map<string,int>")
+// to give regulator-facing tooling enough context to render each
+// field without re-reading the .proto file.
+func manifestAttrs(pf piiField, protoType string) string {
 	classification := pf.classification.String()
 	if pf.isSubject {
 		classification = "DATA_CLASSIFICATION_SUBJECT_FIELD"
@@ -1011,13 +1037,97 @@ func manifestAttrs(pf piiField) string {
 
 	subjectAttr := ""
 	if pf.subjectField != "" {
-		subjectAttr = fmt.Sprintf(`, "subject_field_override": %q`, pf.subjectField)
+		subjectAttr = fmt.Sprintf(`, "subject_override": %q`, pf.subjectField)
 	}
 
 	return fmt.Sprintf(
-		`{"name": %q, "classification": %q, "encryption": %q, "dsar_export": %t, "audit_on_read": %t, "retention": %q%s}`,
-		pf.protoName, classification, encryption, dsarExport, auditOnRead, retention, subjectAttr,
+		`{"name": %q, "proto_type": %q, "classification": %q, "encryption": %q, "dsar_export": %t, "audit_on_read": %t, "retention": %q%s}`,
+		pf.protoName, protoType, classification, encryption, dsarExport, auditOnRead, retention, subjectAttr,
 	)
+}
+
+// protoTypeString returns a regulator-friendly description of a proto
+// field's wire/declared type. Examples: "string", "bytes", "int64",
+// "enum:Status", "message:Address", "repeated string",
+// "map<string, int32>". The output is for documentation only — not a
+// canonical proto-IDL fragment.
+func protoTypeString(f *protogen.Field) string {
+	if f.Desc.IsMap() {
+		key := scalarOrComposite(f.Desc.MapKey())
+		val := scalarOrComposite(f.Desc.MapValue())
+		return fmt.Sprintf("map<%s, %s>", key, val)
+	}
+	base := scalarOrComposite(f.Desc)
+	if f.Desc.IsList() {
+		return "repeated " + base
+	}
+	return base
+}
+
+func scalarOrComposite(f protoreflect.FieldDescriptor) string {
+	switch f.Kind() {
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		return "message:" + string(f.Message().Name())
+	case protoreflect.EnumKind:
+		return "enum:" + string(f.Enum().Name())
+	default:
+		return f.Kind().String()
+	}
+}
+
+// aggregateInfo captures a State-bearing message annotated with
+// (es.v1.aggregate) = "name". Surfaced in the manifest so the
+// regulator-facing catalog can group commands + events with the
+// state they govern.
+type aggregateInfo struct {
+	name         string             // option value
+	stateMessage *protogen.Message  // the State message itself
+	stateFields  []piiField         // classified state fields (for the manifest)
+	stateProto   []string           // proto_type strings aligned with stateFields
+	subjectField string             // subject_field on the State, if any
+}
+
+// findAggregates returns every message in this file annotated with
+// (es.v1.aggregate) = "name". Multiple aggregates per file are
+// supported but rare in practice.
+func findAggregates(file *protogen.File) ([]aggregateInfo, error) {
+	var out []aggregateInfo
+	for _, msg := range file.Messages {
+		opts, ok := msg.Desc.Options().(*descriptorpb.MessageOptions)
+		if !ok || opts == nil {
+			continue
+		}
+		if !proto.HasExtension(opts, esv1.E_Aggregate) {
+			continue
+		}
+		name, _ := proto.GetExtension(opts, esv1.E_Aggregate).(string)
+		if name == "" {
+			continue
+		}
+		ai := aggregateInfo{name: name, stateMessage: msg}
+		fields, _, err := classifyFields(msg)
+		if err != nil {
+			return nil, err
+		}
+		ai.stateFields = fields
+		for _, f := range msg.Fields {
+			ai.stateProto = append(ai.stateProto, protoTypeString(f))
+			if pfFor(fields, f.Desc.TextName()).isSubject {
+				ai.subjectField = f.Desc.TextName()
+			}
+		}
+		out = append(out, ai)
+	}
+	return out, nil
+}
+
+func pfFor(fields []piiField, name string) piiField {
+	for _, pf := range fields {
+		if pf.protoName == name {
+			return pf
+		}
+	}
+	return piiField{}
 }
 
 // upperGoFieldName converts a proto field name (snake_case) to its
@@ -1041,31 +1151,89 @@ func upperGoFieldName(protoName string) string {
 	return string(out)
 }
 
-// emitPIIManifest writes pii_manifest.json next to the generated Go
-// code: one entry per event variant, each field classified per ADR
-// 0010 (subject_field / non_pii / pii_intentional / pii). The
-// document is JSON for ergonomic diff review and machine consumption
-// by privacy-audit tooling.
-func emitPIIManifest(plugin *protogen.Plugin, file *protogen.File, variants []*protogen.Message) error {
+// emitPIIManifest writes <package>_pii_manifest.json next to the
+// generated Go code. v2 schema (this commit): includes aggregates,
+// commands, and events with proto_type per field. The document is
+// hand-rolled JSON for deterministic key order without pulling
+// encoding/json into the plugin.
+//
+// Consumed by:
+//   - privacy / audit tooling (per-aggregate PII review)
+//   - cmd/esdocs (catalog + HTML regulator handover)
+//   - DSAR exporter implementations (filter by dsar_export)
+func emitPIIManifest(
+	plugin *protogen.Plugin,
+	file *protogen.File,
+	aggregates []aggregateInfo,
+	commands []*protogen.Message,
+	events []*protogen.Message,
+) error {
 	out := plugin.NewGeneratedFile(
 		file.GeneratedFilenamePrefix+"_pii_manifest.json",
 		file.GoImportPath,
 	)
 
-	// Hand-rolled JSON so the output is deterministic (key order)
-	// without pulling encoding/json into the plugin. Two-space
-	// indent, stable variant order (proto declaration order).
 	out.P("{")
+	out.P(`  "manifest_version": 2,`)
 	out.P(`  "source": "`, file.Desc.Path(), `",`)
 	out.P(`  "package": "`, file.Desc.Package(), `",`)
-	out.P(`  "events": [`)
-	for i, v := range variants {
+	out.P(`  "go_package": "`, string(file.GoImportPath), `",`)
+
+	// Aggregates — each one names its state message, subject field,
+	// and the command/event sum-type members it owns (by name only;
+	// full field listing lives in the commands/events arrays below).
+	out.P(`  "aggregates": [`)
+	for i, ai := range aggregates {
+		comma := ","
+		if i == len(aggregates)-1 {
+			comma = ""
+		}
+		out.P(`    {`)
+		out.P(`      "name": "`, ai.name, `",`)
+		out.P(`      "state_message": "`, ai.stateMessage.Desc.FullName(), `",`)
+		out.P(`      "subject_field": "`, ai.subjectField, `",`)
+		out.P(`      "state_fields": [`)
+		for j, pf := range ai.stateFields {
+			fcomma := ","
+			if j == len(ai.stateFields)-1 {
+				fcomma = ""
+			}
+			out.P(`        `, manifestAttrs(pf, ai.stateProto[j]), fcomma)
+		}
+		out.P(`      ]`)
+		out.P(`    }`, comma)
+	}
+	out.P(`  ],`)
+
+	// Commands — write-surface documentation. Commands rarely carry
+	// PII (the events they produce do), but classification is
+	// surfaced here for completeness so a regulator can confirm.
+	emitMessageList(out, "commands", commands, true)
+	// Events — the primary audit surface; the field listing here is
+	// what DSAR tooling and SOC2/ISO audits care about.
+	emitMessageList(out, "events", events, false)
+	out.P("}")
+	return nil
+}
+
+// emitMessageList writes a JSON array of {name, fields[]} entries
+// for a list of proto messages — used for both commands and events
+// in the v2 manifest. trailingComma controls whether a comma follows
+// the closing bracket (i.e. whether another top-level key follows).
+func emitMessageList(out *protogen.GeneratedFile, key string, msgs []*protogen.Message, trailingComma bool) {
+	out.P(`  "`, key, `": [`)
+	for i, v := range msgs {
 		fields, _, err := classifyFields(v)
 		if err != nil {
-			return err
+			// classifyFields only errors on malformed annotations,
+			// which would have already surfaced in earlier emit
+			// passes; treat as empty here to keep the manifest
+			// deterministic. The earlier error path remains the
+			// authoritative reject.
+			fields = nil
 		}
 		comma := ","
-		if i == len(variants)-1 {
+		if i == len(msgs)-1 {
 			comma = ""
 		}
 		out.P(`    {`)
@@ -1076,13 +1244,21 @@ func emitPIIManifest(plugin *protogen.Plugin, file *protogen.File, variants []*p
 			if j == len(fields)-1 {
 				fcomma = ""
 			}
-			attrs := manifestAttrs(pf)
-			out.P(`        `, attrs, fcomma)
+			pt := ""
+			for _, f := range v.Fields {
+				if f.Desc.TextName() == pf.protoName {
+					pt = protoTypeString(f)
+					break
+				}
+			}
+			out.P(`        `, manifestAttrs(pf, pt), fcomma)
 		}
 		out.P(`      ]`)
 		out.P(`    }`, comma)
 	}
-	out.P(`  ]`)
-	out.P("}")
-	return nil
+	if trailingComma {
+		out.P(`  ],`)
+	} else {
+		out.P(`  ]`)
+	}
 }

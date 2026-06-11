@@ -1,12 +1,18 @@
 {
+  "manifest_version": 2,
   "source": "test/unitsmigration/v1/unitsmigration.proto",
   "package": "test.unitsmigration.v1",
+  "go_package": "github.com/laenenai/eventstore/gen/test/unitsmigration/v1",
+  "aggregates": [
+  ],
+  "commands": [
+  ],
   "events": [
     {
       "name": "test.unitsmigration.v1.MeasurementRecorded",
       "fields": [
-        {"name": "measurement_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "latency_us", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "measurement_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "latency_us", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]
