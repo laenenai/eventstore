@@ -1,25 +1,62 @@
 {
+  "manifest_version": 2,
   "source": "test/counter/v1/counter.proto",
   "package": "test.counter.v1",
+  "go_package": "github.com/laenenai/eventstore/gen/test/counter/v1",
+  "aggregates": [
+    {
+      "name": "counter",
+      "state_message": "test.counter.v1.Counter",
+      "subject_field": "",
+      "state_fields": [
+        {"name": "initialized", "proto_type": "bool", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "count", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "min", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "max", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "test.counter.v1.Init",
+      "fields": [
+        {"name": "min", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "max", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "initial", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    },
+    {
+      "name": "test.counter.v1.Increment",
+      "fields": [
+        {"name": "by", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    },
+    {
+      "name": "test.counter.v1.Decrement",
+      "fields": [
+        {"name": "by", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
   "events": [
     {
       "name": "test.counter.v1.Initialized",
       "fields": [
-        {"name": "min", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "max", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "value", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "min", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "max", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "value", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.counter.v1.Incremented",
       "fields": [
-        {"name": "by", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "by", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.counter.v1.Decremented",
       "fields": [
-        {"name": "by", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "by", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

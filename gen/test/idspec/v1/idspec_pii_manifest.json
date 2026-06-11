@@ -1,35 +1,63 @@
 {
+  "manifest_version": 2,
   "source": "test/idspec/v1/idspec.proto",
   "package": "test.idspec.v1",
+  "go_package": "github.com/laenenai/eventstore/gen/test/idspec/v1",
+  "aggregates": [
+    {
+      "name": "id",
+      "state_message": "test.idspec.v1.IdState",
+      "subject_field": "id",
+      "state_fields": [
+        {"name": "id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "test.idspec.v1.CreateCmd",
+      "fields": [
+        {"name": "id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "label", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    },
+    {
+      "name": "test.idspec.v1.UpdateCmd",
+      "fields": [
+        {"name": "id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "new_label", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
   "events": [
     {
       "name": "test.idspec.v1.CreatedEv",
       "fields": [
-        {"name": "id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "email", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "region", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
+        {"name": "id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "name", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "region", "proto_type": "string", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.idspec.v1.RenamedEv",
       "fields": [
-        {"name": "id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "new_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "new_name", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.idspec.v1.CleanedEv",
       "fields": [
-        {"name": "id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "reason", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "reason", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.idspec.v1.SubjectLessEv",
       "fields": [
-        {"name": "trace_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "note", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "trace_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "note", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

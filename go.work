@@ -10,6 +10,7 @@ use (
 	./adapters/storage/postgres
 	./adapters/storage/sqlite
 	./cmd/esctl
+	./cmd/esdocs
 	./examples/cmdworkflow
 	./examples/cmdworkflow-dbos
 	./examples/cmdworkflow-restate

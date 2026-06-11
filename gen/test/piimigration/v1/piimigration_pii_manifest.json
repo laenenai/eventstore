@@ -1,13 +1,19 @@
 {
+  "manifest_version": 2,
   "source": "test/piimigration/v1/piimigration.proto",
   "package": "test.piimigration.v1",
+  "go_package": "github.com/laenenai/eventstore/gen/test/piimigration/v1",
+  "aggregates": [
+  ],
+  "commands": [
+  ],
   "events": [
     {
       "name": "test.piimigration.v1.Hired",
       "fields": [
-        {"name": "employee_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "legal_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "email", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "employee_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "legal_name", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]

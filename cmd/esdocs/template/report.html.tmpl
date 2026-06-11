@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Data Catalog — {{.Framework.Name}}{{with .Framework.Version}} {{.}}{{end}}</title>
+<meta name="generator" content="esdocs">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #fbfbfc; --fg: #1d1d1f; --muted: #6e6e73; --rule: #e6e6ea;
+    --tile: #fff; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 0 0 1px rgba(0,0,0,.04);
+    --high: #b80020; --med: #b76b00; --internal: #0064a8; --public: #4a4a4f;
+    --subject: #6c1d8a; --sad: #ff0030;
+    --warning-bg: #fff7e8; --warning-fg: #6b4a00; --warning-border: #f0d59a;
+  }
+  *,*::before,*::after { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         color: var(--fg); background: var(--bg);
+         max-width: 1200px; margin: 0 auto; padding: 24px; line-height: 1.45; }
+  header { border-bottom: 1px solid var(--rule); padding-bottom: 16px; margin-bottom: 24px; }
+  h1 { font-size: 1.6em; margin: 0 0 4px 0; font-weight: 600; }
+  .subtitle { color: var(--muted); font-size: .9em; }
+  h2 { font-size: 1.25em; margin: 32px 0 12px 0; font-weight: 600;
+       border-bottom: 1px solid var(--rule); padding-bottom: 6px; }
+  h3 { font-size: 1.05em; margin: 20px 0 8px 0; font-weight: 600; }
+  h4 { font-size: .95em; margin: 16px 0 6px 0; font-weight: 600; color: var(--muted); }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+                font-size: .9em; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0 16px 0; font-size: .88em; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--rule); }
+  th { font-weight: 600; color: var(--muted); font-size: .82em;
+       text-transform: uppercase; letter-spacing: .02em; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+           gap: 12px; margin: 16px 0; }
+  .tile { background: var(--tile); padding: 14px 16px; border-radius: 8px;
+          box-shadow: var(--shadow); }
+  .tile .num { font-size: 1.8em; font-weight: 600; line-height: 1.1; }
+  .tile .lbl { font-size: .82em; color: var(--muted); text-transform: uppercase;
+               letter-spacing: .03em; margin-top: 4px; }
+  .histogram { display: grid; grid-template-columns: minmax(140px, max-content) 1fr auto;
+               gap: 6px 12px; align-items: center; margin: 8px 0 16px 0; }
+  .histogram .name { font-size: .88em; }
+  .histogram .bar { background: var(--rule); height: 10px; border-radius: 5px;
+                    overflow: hidden; }
+  .histogram .bar > span { display: block; height: 100%; background: var(--internal); }
+  .histogram .count { font-size: .85em; color: var(--muted); min-width: 24px;
+                      text-align: right; font-variant-numeric: tabular-nums; }
+  .toc { background: var(--tile); border-radius: 8px; box-shadow: var(--shadow);
+         padding: 14px 18px; margin: 16px 0; }
+  .toc ul { margin: 4px 0 0 0; padding-left: 18px; }
+  .toc li { margin: 2px 0; }
+  details { margin: 8px 0; }
+  details > summary { cursor: pointer; padding: 4px 0; user-select: none; }
+  details > summary:hover { color: var(--internal); }
+  .pkg { background: var(--tile); padding: 16px 18px; border-radius: 8px;
+         box-shadow: var(--shadow); margin: 16px 0; }
+  .pkg .meta { font-size: .85em; color: var(--muted); margin-bottom: 12px; }
+  .pkg .meta strong { color: var(--fg); }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
+           font-size: .76em; font-weight: 600; }
+  .c-pii-high { color: var(--high); }
+  .c-pii-med  { color: var(--med); }
+  .c-sad      { color: var(--sad); font-weight: 700; }
+  .c-internal { color: var(--internal); }
+  .c-public   { color: var(--public); }
+  .c-subject  { color: var(--subject); }
+  .c-other    { color: var(--muted); }
+  .enc-rejected { color: var(--sad); font-weight: 700; }
+  .warnings { background: var(--warning-bg); color: var(--warning-fg);
+              border: 1px solid var(--warning-border); padding: 12px 16px;
+              border-radius: 8px; margin: 16px 0; font-size: .9em; }
+  .filter-bar { background: var(--tile); padding: 10px 14px; border-radius: 8px;
+                box-shadow: var(--shadow); margin: 16px 0; display: flex;
+                flex-wrap: wrap; gap: 12px; align-items: center; font-size: .9em; }
+  .filter-bar label { margin-right: 4px; color: var(--muted); }
+  .filter-bar select, .filter-bar input { font: inherit; padding: 4px 8px;
+                                          border: 1px solid var(--rule);
+                                          border-radius: 6px; background: white; }
+  .hidden { display: none !important; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--rule);
+           color: var(--muted); font-size: .82em; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Data Catalog</h1>
+  <div class="subtitle">
+    {{.Framework.Name}}{{with .Framework.Version}} · version {{.}}{{end}} ·
+    generated {{.GeneratedAt.Format "2006-01-02 15:04 UTC"}} ·
+    {{.Summary.PackageCount}} packages
+  </div>
+</header>
+
+<section>
+  <h2>At a glance</h2>
+  <div class="tiles">
+    <div class="tile"><div class="num">{{.Summary.AggregateCount}}</div><div class="lbl">Aggregates</div></div>
+    <div class="tile"><div class="num">{{.Summary.CommandCount}}</div><div class="lbl">Commands</div></div>
+    <div class="tile"><div class="num">{{.Summary.EventCount}}</div><div class="lbl">Events</div></div>
+    <div class="tile"><div class="num">{{.Summary.FieldCount}}</div><div class="lbl">Fields total</div></div>
+    <div class="tile"><div class="num">{{.Summary.PIIFieldCount}}</div><div class="lbl">PII fields</div></div>
+    <div class="tile"><div class="num">{{.Summary.SADRejectedCount}}</div><div class="lbl">SAD (rejected)</div></div>
+  </div>
+
+  <h4>Classification breakdown</h4>
+  <div class="histogram">
+    {{- $maxClass := 1 -}}
+    {{- range $k, $v := .Summary.Classifications -}}
+      {{- if gt $v $maxClass -}}{{- $maxClass = $v -}}{{- end -}}
+    {{- end -}}
+    {{- range $k := sortedKeys .Summary.Classifications}}
+    <div class="name {{classColor $k}}">{{$k}}</div>
+    <div class="bar"><span style="width: {{percent (index $.Summary.Classifications $k) $maxClass}}%"></span></div>
+    <div class="count">{{index $.Summary.Classifications $k}}</div>
+    {{- end}}
+  </div>
+
+  <h4>Encryption modes</h4>
+  <div class="histogram">
+    {{- $maxEnc := 1 -}}
+    {{- range $k, $v := .Summary.EncryptionModes -}}
+      {{- if gt $v $maxEnc -}}{{- $maxEnc = $v -}}{{- end -}}
+    {{- end -}}
+    {{- range $k := sortedKeys .Summary.EncryptionModes}}
+    <div class="name">{{$k}}</div>
+    <div class="bar"><span style="width: {{percent (index $.Summary.EncryptionModes $k) $maxEnc}}%"></span></div>
+    <div class="count">{{index $.Summary.EncryptionModes $k}}</div>
+    {{- end}}
+  </div>
+</section>
+
+{{if .Warnings}}
+<div class="warnings">
+  <strong>Warnings:</strong>
+  <ul style="margin:6px 0 0 18px;padding:0">
+    {{- range .Warnings}}<li>{{.}}</li>{{end}}
+  </ul>
+</div>
+{{end}}
+
+<div class="filter-bar">
+  <label for="filter-class">Classification:</label>
+  <select id="filter-class" onchange="applyFilter()">
+    <option value="">all</option>
+    <option value="DATA_CLASSIFICATION_PERSONAL">PERSONAL</option>
+    <option value="DATA_CLASSIFICATION_QUASI_IDENTIFIER">QUASI_IDENTIFIER</option>
+    <option value="DATA_CLASSIFICATION_SENSITIVE">SENSITIVE</option>
+    <option value="DATA_CLASSIFICATION_FINANCIAL">FINANCIAL</option>
+    <option value="DATA_CLASSIFICATION_CARDHOLDER">CARDHOLDER</option>
+    <option value="DATA_CLASSIFICATION_CREDENTIAL">CREDENTIAL</option>
+    <option value="DATA_CLASSIFICATION_INTERNAL">INTERNAL</option>
+    <option value="DATA_CLASSIFICATION_PUBLIC">PUBLIC</option>
+    <option value="DATA_CLASSIFICATION_SAD">SAD</option>
+  </select>
+  <label for="filter-dsar"><input type="checkbox" id="filter-dsar" onchange="applyFilter()"> DSAR-exportable only</label>
+  <label for="filter-pii"><input type="checkbox" id="filter-pii" onchange="applyFilter()"> PII only</label>
+  <span style="flex:1"></span>
+  <button onclick="expandAll()">expand all</button>
+  <button onclick="collapseAll()">collapse all</button>
+</div>
+
+<section class="toc">
+  <strong>Contents</strong>
+  <ul>
+  {{- range .Packages}}
+    <li><a href="#pkg-{{.Package | anchor}}"><code>{{.Package}}</code></a>
+        {{- range .Aggregates}} → {{.Name}}{{end}}</li>
+  {{- end}}
+  </ul>
+</section>
+
+{{range .Packages}}
+<div class="pkg" id="pkg-{{.Package | anchor}}">
+  <h2><code>{{.Package}}</code></h2>
+  <div class="meta">
+    <strong>Source:</strong> <code>{{.Source}}</code><br>
+    {{with .GoPackage}}<strong>Go package:</strong> <code>{{.}}</code><br>{{end}}
+    <strong>Manifest version:</strong> v{{.ManifestVersion}}
+  </div>
+
+  {{range .Aggregates}}
+  <h3>Aggregate — {{.Name}} <code>{{.StateMessage}}</code></h3>
+  <div class="meta">{{with .SubjectField}}<strong>Subject field:</strong> <code>{{.}}</code>{{end}}</div>
+  <h4>State fields</h4>
+  {{template "fieldTable" .StateFields}}
+  {{end}}
+
+  {{if .Commands}}
+  <h3>Commands</h3>
+  {{range .Commands}}
+  <details>
+    <summary><strong>{{.Name}}</strong>
+      <span style="color:var(--muted);font-weight:400;font-size:.9em">
+        — {{fieldCount .Fields}} field{{if ne (fieldCount .Fields) 1}}s{{end}},
+        {{piiFieldCount .Fields}} PII
+      </span>
+    </summary>
+    {{template "fieldTable" .Fields}}
+  </details>
+  {{end}}
+  {{end}}
+
+  {{if .Events}}
+  <h3>Events</h3>
+  {{range .Events}}
+  <details>
+    <summary><strong>{{.Name}}</strong>
+      <span style="color:var(--muted);font-weight:400;font-size:.9em">
+        — {{fieldCount .Fields}} field{{if ne (fieldCount .Fields) 1}}s{{end}},
+        {{piiFieldCount .Fields}} PII
+      </span>
+    </summary>
+    {{template "fieldTable" .Fields}}
+  </details>
+  {{end}}
+  {{end}}
+</div>
+{{end}}
+
+{{define "fieldTable"}}
+<table class="field-table">
+  <thead><tr>
+    <th>Field</th><th>Proto type</th><th>Classification</th>
+    <th>Encryption</th><th>DSAR</th><th>Audit-on-read</th><th>Retention</th>
+  </tr></thead>
+  <tbody>
+  {{range .}}
+    <tr class="field-row" data-class="{{.Classification}}" data-dsar="{{.DSARExport}}" data-pii="{{isPIIClass .Classification}}">
+      <td class="mono">{{.Name}}</td>
+      <td class="mono" style="color:var(--muted)">{{.ProtoType}}</td>
+      <td class="{{classColor (shortClass .Classification)}}">{{shortClass .Classification}}{{with .SubjectOverride}} <span class="badge" style="background:#eef;color:#558">→ {{.}}</span>{{end}}</td>
+      <td class="mono {{if eq .Encryption "rejected_sad"}}enc-rejected{{end}}">{{shortEncryption .Encryption}}</td>
+      <td>{{checkmark .DSARExport}}</td>
+      <td>{{checkmark .AuditOnRead}}</td>
+      <td>{{.Retention}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{end}}
+
+<footer>
+  Generated by esdocs (catalog schema v{{.SchemaVersion}}, manifest schema v2).
+  Each per-package manifest is the audit-of-record artifact emitted by
+  <code>protoc-gen-es-go</code> per ADR 0010 / ADR 0027. This HTML view
+  is a regulator-facing rendering of those manifests; the JSON catalog
+  is the machine-readable source of truth.
+</footer>
+
+<script>
+function applyFilter() {
+  const klass = document.getElementById('filter-class').value;
+  const dsar  = document.getElementById('filter-dsar').checked;
+  const pii   = document.getElementById('filter-pii').checked;
+  for (const row of document.querySelectorAll('.field-row')) {
+    let show = true;
+    if (klass && row.dataset.class !== klass) show = false;
+    if (dsar && row.dataset.dsar !== 'true') show = false;
+    if (pii  && row.dataset.pii  !== 'true') show = false;
+    row.classList.toggle('hidden', !show);
+  }
+}
+function expandAll()   { document.querySelectorAll('details').forEach(d => d.open = true);  }
+function collapseAll() { document.querySelectorAll('details').forEach(d => d.open = false); }
+</script>
+</body>
+</html>

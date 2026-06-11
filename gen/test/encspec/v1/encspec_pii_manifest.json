@@ -1,43 +1,57 @@
 {
+  "manifest_version": 2,
   "source": "test/encspec/v1/encspec.proto",
   "package": "test.encspec.v1",
+  "go_package": "github.com/laenenai/eventstore/gen/test/encspec/v1",
+  "aggregates": [
+    {
+      "name": "enc",
+      "state_message": "test.encspec.v1.EncState",
+      "subject_field": "subject_id",
+      "state_fields": [
+        {"name": "subject_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
+  "commands": [
+  ],
   "events": [
     {
       "name": "test.encspec.v1.CleanPII",
       "fields": [
-        {"name": "subject_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_public", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_public_explicit", "classification": "DATA_CLASSIFICATION_PUBLIC", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_internal", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"},
-        {"name": "i_public", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "i_internal", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_personal", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_quasi", "classification": "DATA_CLASSIFICATION_QUASI_IDENTIFIER", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_sensitive", "classification": "DATA_CLASSIFICATION_SENSITIVE", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": true, "retention": "shorter"},
-        {"name": "s_financial", "classification": "DATA_CLASSIFICATION_FINANCIAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "tax_locked"},
-        {"name": "s_cardholder", "classification": "DATA_CLASSIFICATION_CARDHOLDER", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": true, "retention": "pci_scope"},
-        {"name": "s_credential", "classification": "DATA_CLASSIFICATION_CREDENTIAL", "encryption": "subject_string_base64", "dsar_export": false, "audit_on_read": true, "retention": "standard"},
-        {"name": "s_unstructured", "classification": "DATA_CLASSIFICATION_UNSTRUCTURED", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "b_personal", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "b_credential", "classification": "DATA_CLASSIFICATION_CREDENTIAL", "encryption": "subject_bytes", "dsar_export": false, "audit_on_read": true, "retention": "standard"}
+        {"name": "subject_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_public", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_public_explicit", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PUBLIC", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_internal", "proto_type": "string", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"},
+        {"name": "i_public", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "i_internal", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_personal", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_quasi", "proto_type": "string", "classification": "DATA_CLASSIFICATION_QUASI_IDENTIFIER", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_sensitive", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SENSITIVE", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": true, "retention": "shorter"},
+        {"name": "s_financial", "proto_type": "string", "classification": "DATA_CLASSIFICATION_FINANCIAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "tax_locked"},
+        {"name": "s_cardholder", "proto_type": "string", "classification": "DATA_CLASSIFICATION_CARDHOLDER", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": true, "retention": "pci_scope"},
+        {"name": "s_credential", "proto_type": "string", "classification": "DATA_CLASSIFICATION_CREDENTIAL", "encryption": "subject_string_base64", "dsar_export": false, "audit_on_read": true, "retention": "standard"},
+        {"name": "s_unstructured", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSTRUCTURED", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "b_personal", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "b_credential", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_CREDENTIAL", "encryption": "subject_bytes", "dsar_export": false, "audit_on_read": true, "retention": "standard"}
       ]
     },
     {
       "name": "test.encspec.v1.SADBlocked",
       "fields": [
-        {"name": "subject_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_personal", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "s_sad", "classification": "DATA_CLASSIFICATION_SAD", "encryption": "rejected_sad", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
+        {"name": "subject_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_personal", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "s_sad", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SAD", "encryption": "rejected_sad", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.encspec.v1.MultiSubject",
       "fields": [
-        {"name": "from_user_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "to_user_id", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "amount_cents", "classification": "DATA_CLASSIFICATION_FINANCIAL", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "tax_locked"},
-        {"name": "from_note", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard", "subject_field_override": "from_user_id"},
-        {"name": "to_note", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard", "subject_field_override": "to_user_id"}
+        {"name": "from_user_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "to_user_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "amount_cents", "proto_type": "int64", "classification": "DATA_CLASSIFICATION_FINANCIAL", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "tax_locked"},
+        {"name": "from_note", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard", "subject_override": "from_user_id"},
+        {"name": "to_note", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard", "subject_override": "to_user_id"}
       ]
     }
   ]

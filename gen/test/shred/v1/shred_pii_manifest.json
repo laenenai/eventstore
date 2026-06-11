@@ -1,29 +1,58 @@
 {
+  "manifest_version": 2,
   "source": "test/shred/v1/shred.proto",
   "package": "test.shred.v1",
+  "go_package": "github.com/laenenai/eventstore/gen/test/shred/v1",
+  "aggregates": [
+    {
+      "name": "person",
+      "state_message": "test.shred.v1.Person",
+      "subject_field": "person_id",
+      "state_fields": [
+        {"name": "person_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "display_name", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "name": "test.shred.v1.Register",
+      "fields": [
+        {"name": "person_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_UNSPECIFIED", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "display_name", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    },
+    {
+      "name": "test.shred.v1.UpdateName",
+      "fields": [
+        {"name": "new_display_name", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+      ]
+    }
+  ],
   "events": [
     {
       "name": "test.shred.v1.Registered",
       "fields": [
-        {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "display_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "email", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "referrer_id", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
+        {"name": "person_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "display_name", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "email", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "referrer_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_INTERNAL", "encryption": "none", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.shred.v1.NameChanged",
       "fields": [
-        {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "new_display_name", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
+        {"name": "person_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "new_display_name", "proto_type": "bytes", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_bytes", "dsar_export": true, "audit_on_read": false, "retention": "standard"}
       ]
     },
     {
       "name": "test.shred.v1.AuthorizedWithSAD",
       "fields": [
-        {"name": "person_id", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "auth_code", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
-        {"name": "cvv", "classification": "DATA_CLASSIFICATION_SAD", "encryption": "rejected_sad", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
+        {"name": "person_id", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SUBJECT_FIELD", "encryption": "none", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "auth_code", "proto_type": "string", "classification": "DATA_CLASSIFICATION_PERSONAL", "encryption": "subject_string_base64", "dsar_export": true, "audit_on_read": false, "retention": "standard"},
+        {"name": "cvv", "proto_type": "string", "classification": "DATA_CLASSIFICATION_SAD", "encryption": "rejected_sad", "dsar_export": false, "audit_on_read": false, "retention": "standard"}
       ]
     }
   ]
