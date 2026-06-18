@@ -134,7 +134,10 @@ func run(
 			conversationID, len(state.GetTurns()))
 	}
 
-	llm := conversations.NewOllama(ollamaURL)
+	llm, err := conversations.NewGenkitOllama(ctx, ollamaURL)
+	if err != nil {
+		return fmt.Errorf("init genkit/ollama: %w", err)
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 

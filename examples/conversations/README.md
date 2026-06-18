@@ -13,6 +13,11 @@ flagged below land in follow-up commits without breaking changes.
 
 ## Run it
 
+The LLM driver uses [Genkit](https://genkit.dev/go/docs/) with its
+Ollama plugin. Swapping to Anthropic / Vertex / OpenAI in production
+is one import + one model definition — the conversation aggregate
+stays provider-agnostic via the framework-internal `LLM` interface.
+
 ```sh
 # 1. Start Ollama and pull a small model
 ollama serve &
@@ -29,7 +34,7 @@ go run ./examples/conversations/cmd/chat \
 # 3. Talk. Type :quit to close cleanly.
 ```
 
-Tests run without Ollama (they use a stub LLM):
+Tests run without Ollama (they use a stub `LLM`):
 
 ```sh
 go test ./examples/conversations/...
