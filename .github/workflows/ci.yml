@@ -1,11 +1,23 @@
 name: ci
 
-# Two responsibilities, sequenced:
+# Three responsibilities:
 #
-#   1. ci job — runs the quality gate (vet, tests, examples, generated-
-#      code freshness, proto lint). Fires on PRs and on push to main.
+#   1. ci job — fast quality gate (vet, tests, examples, generated-code
+#      freshness, proto lint). Fires on PRs and on push to main.
 #
-#   2. tag job — only on push to main, only after ci passes. Reads the
+#   2. ci-integration job — testcontainer-backed adapter tests for
+#      cmdworkflow/dbos and cmdworkflow/restate. Runs in parallel with
+#      ci so total wall time isn't paying for sequential runs. Docker
+#      is available on github-hosted ubuntu runners; testcontainers-go
+#      uses the host Docker socket directly.
+#
+#      Both ci and ci-integration are required for merge. Until this
+#      job existed, DBOS/Restate adapter tests only ran when a
+#      maintainer typed `go test -tags dbos ./...` locally — a real
+#      hole given those adapters carry the framework's production
+#      command-bus story.
+#
+#   3. tag job — only on push to main, only after ci passes. Reads the
 #      HEAD commit subject; if it carries a conventional-commits prefix
 #      (feat:/fix:), computes the next synchronized version and runs
 #      scripts/release.sh. Anything else (docs:, chore:, refactor:, …)
@@ -56,8 +68,29 @@ jobs:
 
       - run: task ci
 
+  ci-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Same main-ref materialization as the ci job — testcontainer
+      # tests don't need it, but mise + go workspace setup expects a
+      # consistent checkout shape.
+      - name: Materialize main ref for buf breaking
+        if: github.ref != 'refs/heads/main'
+        run: git fetch origin main:refs/heads/main
+
+      - uses: jdx/mise-action@v2
+
+      # Docker is preinstalled on github-hosted ubuntu runners;
+      # testcontainers-go uses the host Docker socket. No services:
+      # block needed.
+      - run: task ci:integration
+
   tag:
-    needs: ci
+    needs: [ci, ci-integration]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:

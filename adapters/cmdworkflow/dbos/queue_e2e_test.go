@@ -111,12 +111,8 @@ func TestDBOS_AsyncQueueRouting(t *testing.T) {
 		t.Fatalf("wrapped result: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && delivered.Load() == 0 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if delivered.Load() != 1 {
-		t.Fatalf("async delivered: got %d want 1", delivered.Load())
+	if !waitForAsyncDelivery(&delivered, 1, asyncDeliveryTimeout()) {
+		t.Fatalf("async delivered: got %d want 1 (after %s)", delivered.Load(), asyncDeliveryTimeout())
 	}
 
 	// Read back the child workflow's queue_name from dbos.workflow_status.
@@ -196,12 +192,8 @@ func TestDBOS_AsyncUnknownQueueFallback(t *testing.T) {
 		t.Fatalf("GetResult: %v", err)
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && delivered.Load() == 0 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if delivered.Load() != 1 {
-		t.Fatalf("async delivered: got %d want 1", delivered.Load())
+	if !waitForAsyncDelivery(&delivered, 1, asyncDeliveryTimeout()) {
+		t.Fatalf("async delivered: got %d want 1 (after %s)", delivered.Load(), asyncDeliveryTimeout())
 	}
 
 	// Assert the AsyncDispatch landed on "default" (the declared fallback).
