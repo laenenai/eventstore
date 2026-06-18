@@ -80,6 +80,7 @@ func main() {
 			commands.OutboxCommand(),
 			commands.EventsCommand(),
 			commands.StateCacheCommand(),
+			commands.SubjectCommand(),
 		},
 	}
 

@@ -150,6 +150,54 @@ func (q *Queries) ListStaleSubjectKeys(ctx context.Context, arg ListStaleSubject
 	return items, nil
 }
 
+const listSubjectsCreatedBefore = `-- name: ListSubjectsCreatedBefore :many
+SELECT tenant_id, subject, dek_wrapped, kek_version, created_at, shredded_at
+FROM subject_keys
+WHERE tenant_id   = $1
+  AND shredded_at IS NULL
+  AND created_at  < $2
+ORDER BY subject
+LIMIT $3
+`
+
+type ListSubjectsCreatedBeforeParams struct {
+	TenantID string
+	Cutoff   time.Time
+	MaxRows  int32
+}
+
+// Returns non-shredded subject_keys rows whose DEK was minted before
+// the cutoff. Used by shred.RetentionWorker to identify subjects
+// eligible for retention shredding. Shredded rows are skipped — their
+// DEKs are already destroyed. Pagination by subject keeps the order
+// stable across resumed sweeps.
+func (q *Queries) ListSubjectsCreatedBefore(ctx context.Context, arg ListSubjectsCreatedBeforeParams) ([]SubjectKey, error) {
+	rows, err := q.db.Query(ctx, listSubjectsCreatedBefore, arg.TenantID, arg.Cutoff, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubjectKey
+	for rows.Next() {
+		var i SubjectKey
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.Subject,
+			&i.DekWrapped,
+			&i.KekVersion,
+			&i.CreatedAt,
+			&i.ShreddedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertSubjectKey = `-- name: UpsertSubjectKey :exec
 INSERT INTO subject_keys (tenant_id, subject, dek_wrapped, kek_version)
 VALUES ($1, $2, $3, $4)

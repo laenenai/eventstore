@@ -87,14 +87,20 @@ tasks:
       # point at the parent's .git from inside proto/.
       - cd proto && buf breaking --against '../.git#branch=main,subdir=proto'
 
+  lint:upcasters:
+    desc: Verify every event with schema_version > 1 has a MigratingCodec (ADR 0013)
+    cmds:
+      - go run ./cmd/eslint-upcasters
+
   ci:
-    desc: CI gate — vet, tests, examples, generated-code freshness, proto lint
+    desc: CI gate — vet, tests, examples, generated-code freshness, proto lint, upcaster discipline
     cmds:
       - task: vet
       - task: test
       - task: test:examples
       - task: generate:check
       - task: lint:proto
+      - task: lint:upcasters
 
   clean:
     desc: Remove build artifacts

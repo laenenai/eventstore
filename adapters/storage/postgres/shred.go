@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -91,4 +92,40 @@ func (a *Adapter) ListStaleSubjectKeys(ctx context.Context, tenantID string, cur
 	return out, nil
 }
 
-var _ shred.SubjectStore = (*Adapter)(nil)
+// ListSubjectsCreatedBefore implements shred.RetentionScanner. Used by
+// shred.RetentionWorker to drive periodic retention sweeps.
+func (a *Adapter) ListSubjectsCreatedBefore(ctx context.Context, tenantID string, cutoff time.Time, limit int) ([]shred.SubjectKey, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	var rows []db.SubjectKey
+	err := a.withTenantTx(ctx, tenantID, func(q *db.Queries) error {
+		var inner error
+		rows, inner = q.ListSubjectsCreatedBefore(ctx, db.ListSubjectsCreatedBeforeParams{
+			TenantID: tenantID,
+			Cutoff:   cutoff,
+			MaxRows:  int32(limit),
+		})
+		return inner
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]shred.SubjectKey, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, shred.SubjectKey{
+			TenantID:   r.TenantID,
+			Subject:    r.Subject,
+			DEKWrapped: r.DekWrapped,
+			KEKVersion: uint32(r.KekVersion),
+			CreatedAt:  r.CreatedAt,
+			ShreddedAt: r.ShreddedAt,
+		})
+	}
+	return out, nil
+}
+
+var (
+	_ shred.SubjectStore     = (*Adapter)(nil)
+	_ shred.RetentionScanner = (*Adapter)(nil)
+)
