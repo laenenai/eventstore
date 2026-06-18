@@ -84,6 +84,11 @@ type Querier interface {
 	// json(state) converts the BLOB JSONB back to text bytes so the Go
 	// side gets the protojson form (ADR 0021).
 	ListStreamsBehind(ctx context.Context, arg ListStreamsBehindParams) ([]ListStreamsBehindRow, error)
+	// Returns non-shredded subject_keys rows whose DEK was minted before
+	// the cutoff. Used by shred.RetentionWorker. SQLite stores timestamps
+	// as ISO-8601 strings; lexicographic < works correctly when both
+	// sides are formatted the same way.
+	ListSubjectsCreatedBefore(ctx context.Context, arg ListSubjectsCreatedBeforeParams) ([]SubjectKey, error)
 	ListSubscriberDLQ(ctx context.Context, arg ListSubscriberDLQParams) ([]SubscriberDlq, error)
 	// projection_checkpoint queries for SQLite (ADR 0020 Tier 3).
 	// See the Postgres sibling for the canonical doc comments.

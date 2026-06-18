@@ -166,6 +166,12 @@ type Querier interface {
 	// payload comes from state_cache (no duplication of state bytes).
 	// Tenant filter: pass @tenant_id = '' for cross-tenant drain.
 	ListStreamsBehind(ctx context.Context, arg ListStreamsBehindParams) ([]ListStreamsBehindRow, error)
+	// Returns non-shredded subject_keys rows whose DEK was minted before
+	// the cutoff. Used by shred.RetentionWorker to identify subjects
+	// eligible for retention shredding. Shredded rows are skipped — their
+	// DEKs are already destroyed. Pagination by subject keeps the order
+	// stable across resumed sweeps.
+	ListSubjectsCreatedBefore(ctx context.Context, arg ListSubjectsCreatedBeforeParams) ([]SubjectKey, error)
 	// Operator dashboard query. Tenant filter: '' = cross-tenant.
 	ListSubscriberDLQ(ctx context.Context, arg ListSubscriberDLQParams) ([]SubscriberDlq, error)
 	// projection_checkpoint queries (ADR 0020 Tier 3, decision 3e).

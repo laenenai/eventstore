@@ -50,3 +50,17 @@ WHERE tenant_id    = @tenant_id
   AND shredded_at IS NULL
 ORDER BY subject
 LIMIT @max_rows;
+
+-- name: ListSubjectsCreatedBefore :many
+-- Returns non-shredded subject_keys rows whose DEK was minted before
+-- the cutoff. Used by shred.RetentionWorker to identify subjects
+-- eligible for retention shredding. Shredded rows are skipped — their
+-- DEKs are already destroyed. Pagination by subject keeps the order
+-- stable across resumed sweeps.
+SELECT tenant_id, subject, dek_wrapped, kek_version, created_at, shredded_at
+FROM subject_keys
+WHERE tenant_id   = @tenant_id
+  AND shredded_at IS NULL
+  AND created_at  < @cutoff
+ORDER BY subject
+LIMIT @max_rows;
