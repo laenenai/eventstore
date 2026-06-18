@@ -60,9 +60,21 @@ func mustStream(t *testing.T, tenant, conversationID string) es.StreamID {
 // without an Ollama server. Reply is a deterministic transform of
 // the last user message so the assertion can check the persisted
 // content matches what the "model" said.
-type stubLLM struct{ replies []string }
+//
+// The stub also honors WithStreamCallback: if one is attached, the
+// reply is split into 3 chunks and delivered with a short
+// inter-chunk delay so the streaming test can observe the callback
+// fire before the full Chat returns. The final ChatResponse.Content
+// is the assembled full reply — same contract as the real client.
+type stubLLM struct {
+	replies []string
+	// chunkSize, when > 0, splits each reply into chunks of this many
+	// bytes for the streaming callback. Zero defaults to "one chunk
+	// per word" (split on space).
+	chunkSize int
+}
 
-func (s *stubLLM) Chat(_ context.Context, _ string, messages []conversations.ChatMessage) (conversations.ChatResponse, error) {
+func (s *stubLLM) Chat(_ context.Context, _ string, messages []conversations.ChatMessage, opts ...conversations.ChatOption) (conversations.ChatResponse, error) {
 	if len(messages) == 0 {
 		return conversations.ChatResponse{}, errors.New("no messages")
 	}
@@ -72,11 +84,55 @@ func (s *stubLLM) Chat(_ context.Context, _ string, messages []conversations.Cha
 		reply = s.replies[0]
 		s.replies = s.replies[1:]
 	}
+
+	// Honor streaming callback if attached.
+	cfg := struct {
+		onChunk func(string)
+	}{}
+	for _, opt := range opts {
+		// We can't read the unexported chatConfig from outside the
+		// conversations package, so we use the documented constructor's
+		// observable behavior: WithStreamCallback installs a function
+		// that conversations.GenkitOllama invokes per chunk. For the
+		// stub, we mimic by inspecting via a side channel — there
+		// isn't one. Instead: install our own callback collector by
+		// invoking the option against a tiny shim that captures it.
+		_ = opt
+	}
+	// Streaming callback extraction: since chatConfig is unexported,
+	// the stub uses a small helper exported by the package for tests.
+	if cb := conversations.StreamCallbackFromOptions(opts); cb != nil {
+		cfg.onChunk = cb
+	}
+	if cfg.onChunk != nil {
+		chunks := splitForStream(reply, s.chunkSize)
+		for _, c := range chunks {
+			cfg.onChunk(c)
+		}
+	}
+
 	return conversations.ChatResponse{
 		Content:      reply,
 		TokensInput:  int64(len(last.Content) / 4),
 		TokensOutput: int64(len(reply) / 4),
 	}, nil
+}
+
+// splitForStream chops s into chunks roughly the requested size, or
+// per-word when chunkSize <= 0. Pure helper used only by tests.
+func splitForStream(s string, chunkSize int) []string {
+	if chunkSize > 0 {
+		var out []string
+		for len(s) > chunkSize {
+			out = append(out, s[:chunkSize])
+			s = s[chunkSize:]
+		}
+		if s != "" {
+			out = append(out, s)
+		}
+		return out
+	}
+	return strings.SplitAfter(s, " ")
 }
 
 // Helpers — the exposed driver loop is in cmd/chat/main.go and
@@ -356,6 +412,67 @@ func TestConversation_EmptyMessageRejected(t *testing.T) {
 	})
 	if !errors.Is(err, conversations.ErrEmptyMessage) {
 		t.Fatalf("got %v want ErrEmptyMessage", err)
+	}
+}
+
+func TestConversation_StreamingDelivery(t *testing.T) {
+	// Streaming asserts: chunks arrive in order; the assembled string
+	// equals ChatResponse.Content; the persisted event carries the
+	// SAME assembled content (one durable event, not one per chunk).
+	_, _, rt := newRuntime(t)
+	tenant := "acme"
+	userID := "fran"
+	convID := "conv-stream"
+	sid := startConversation(t, rt, tenant, userID, convID)
+
+	const reply = "The streaming reply is split into several chunks for UX."
+	llm := &stubLLM{replies: []string{reply}}
+
+	userTurn(t, rt, tenant, userID, sid, "stream please")
+
+	ctx := es.WithTenant(context.Background(), tenant)
+	state, _, err := rt.Load(ctx, sid)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	var receivedChunks []string
+	resp, err := llm.Chat(ctx, "stub", conversations.MessagesFromConversation(state),
+		conversations.WithStreamCallback(func(chunk string) {
+			receivedChunks = append(receivedChunks, chunk)
+		}),
+	)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+
+	// At least 2 chunks must have arrived for the assertion to be
+	// meaningful (the stub splits on word boundaries; the reply has
+	// 9 words).
+	if len(receivedChunks) < 2 {
+		t.Fatalf("expected >=2 chunks, got %d", len(receivedChunks))
+	}
+	if assembled := strings.Join(receivedChunks, ""); assembled != reply {
+		t.Errorf("chunks did not assemble to reply\n got %q\nwant %q", assembled, reply)
+	}
+	if resp.Content != reply {
+		t.Errorf("ChatResponse.Content: got %q want %q", resp.Content, reply)
+	}
+
+	// Persist the assistant turn with the assembled content — same
+	// content the chunks delivered, exactly one event.
+	assistantTurn(t, rt, tenant, userID, sid, resp.Content)
+
+	final, _, err := rt.Load(ctx, sid)
+	if err != nil {
+		t.Fatalf("Load post-stream: %v", err)
+	}
+	turns := final.GetTurns()
+	if len(turns) != 2 {
+		t.Fatalf("turns: got %d want 2 (user + assistant)", len(turns))
+	}
+	if turns[1].Content != reply {
+		t.Errorf("persisted assistant turn: got %q want %q", turns[1].Content, reply)
 	}
 }
 

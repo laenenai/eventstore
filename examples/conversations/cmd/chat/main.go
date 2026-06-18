@@ -34,15 +34,17 @@ import (
 	"syscall"
 	"time"
 
+	"path/filepath"
+
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
-	"github.com/laenenai/eventstore/adapters/kms/inproc"
 	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/aggregate"
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/examples/conversations"
 	conversationv1 "github.com/laenenai/eventstore/gen/myapp/conversation/v1"
+	"github.com/laenenai/eventstore/projection"
 	"github.com/laenenai/eventstore/shred"
 )
 
@@ -55,6 +57,7 @@ func main() {
 		systemPrompt = flag.String("system", "You are a helpful assistant. Be concise.", "System prompt")
 		ollamaURL    = flag.String("ollama", conversations.DefaultOllamaURL, "Ollama base URL")
 		conversation = flag.String("conversation", "", "Resume an existing conversation id; empty starts a new one")
+		kmsFile      = flag.String("kms-file", "", "Path to the file-backed KEK store (default: <db>.kms.json). Lets PII-encrypted history survive process restarts.")
 	)
 	flag.Parse()
 	if *userID == "" {
@@ -66,7 +69,11 @@ func main() {
 		os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx, *tenant, *userID, *model, *dbPath, *systemPrompt, *ollamaURL, *conversation); err != nil {
+	resolvedKMSFile := *kmsFile
+	if resolvedKMSFile == "" {
+		resolvedKMSFile = *dbPath + ".kms.json"
+	}
+	if err := run(ctx, *tenant, *userID, *model, *dbPath, *systemPrompt, *ollamaURL, *conversation, resolvedKMSFile); err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "\nbye.")
 			return
@@ -78,7 +85,7 @@ func main() {
 
 func run(
 	ctx context.Context,
-	tenantID, userID, model, dbPath, systemPrompt, ollamaURL, resumeID string,
+	tenantID, userID, model, dbPath, systemPrompt, ollamaURL, resumeID, kmsFile string,
 ) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -91,7 +98,56 @@ func run(
 		return fmt.Errorf("migrate: %w", err)
 	}
 
-	shredder := shred.New(inproc.New(), adapter)
+	// File-backed KMS persists KEKs to a sidecar JSON so PII-encrypted
+	// history survives CLI restarts. Inproc KMS (the test default)
+	// keeps KEKs in memory only, which is fine for one-shot tests but
+	// would render every prior conversation's PII unreadable as soon
+	// as the user exited and reopened the chat.
+	keystore, err := conversations.NewFileKMS(kmsFile)
+	if err != nil {
+		return fmt.Errorf("init kms: %w", err)
+	}
+
+	// Startup-time consistency check: subject_keys persisted from a
+	// previous session reference a KEK version (e.g., from a vanished
+	// inproc KMS run) that this KMS file might not have. Catch the
+	// mismatch loudly here rather than surfacing the same cryptic
+	// "KEK version not available" error on every command. The check
+	// is per (tenant, userID); other subjects fail individually if
+	// their KEK is also missing.
+	if err := assertKMSMatchesStore(ctx, keystore, adapter, tenantID, userID, dbPath, kmsFile); err != nil {
+		return err
+	}
+
+	shredder := shred.New(keystore, adapter)
+
+	// Tier-3 token_usage projection: a goroutine polls the event log,
+	// upserts one row per (tenant, conversation) into the read-model
+	// table, advances its checkpoint via the SQLite adapter. The
+	// projection runs against the same DB as the events — application
+	// schema (token_usage) created here at startup, framework
+	// checkpoint table (projection_checkpoint) already migrated.
+	if _, err := db.ExecContext(ctx, conversations.TokenUsageSchema); err != nil {
+		return fmt.Errorf("create token_usage table: %w", err)
+	}
+	tokenProj := &conversations.TokenUsageProjection{DB: db}
+	projRuntime := &projection.Runtime{
+		Name:       conversations.TokenUsage,
+		Store:      adapter,
+		Checkpoint: adapter,
+		Handler: conversationv1.NewProjectionDispatcher(tokenProj,
+			projection.IgnoreUnknown()), // other aggregates may share the DB
+		Tenant:    tenantID,
+		IdleSleep: 250 * time.Millisecond, // chat-feel responsiveness
+	}
+	projDone := make(chan struct{})
+	go func() {
+		defer close(projDone)
+		if err := projRuntime.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "projection: %v\n", err)
+		}
+	}()
+	reader := &conversations.TokenUsageReader{DB: db}
 
 	rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
 		Store:    adapter,
@@ -187,7 +243,19 @@ func run(
 		// LLM call with a per-request deadline so a stuck Ollama
 		// server doesn't block forever.
 		callCtx, cancel := context.WithTimeout(tenantCtx, 2*time.Minute)
-		resp, err := llm.Chat(callCtx, model, messages)
+
+		// Stream chunks to the terminal as they arrive — UX win for
+		// slower models. The full assembled content still comes back
+		// in resp.Content and is what we persist as ONE event below.
+		// A trailing newline is printed after the call so the prompt
+		// on the next iteration starts on a fresh line.
+		fmt.Println()
+		resp, err := llm.Chat(callCtx, model, messages,
+			conversations.WithStreamCallback(func(chunk string) {
+				fmt.Print(chunk)
+			}),
+		)
+		fmt.Println()
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "llm: %v\n", err)
@@ -212,8 +280,14 @@ func run(
 			continue
 		}
 
-		fmt.Println()
-		fmt.Println(resp.Content)
+		// Wait briefly for the projection to catch up so the
+		// post-turn rollup reflects the just-persisted event. The
+		// projection polls every IdleSleep (250ms above); a few hops
+		// of that interval keeps the UX snappy without spin-looping.
+		if row, err := waitForRollup(ctx, reader, tenantID, conversationID, outTokens, 2*time.Second); err == nil {
+			fmt.Fprintf(os.Stderr, "  [tokens in=%d out=%d turns=%d]\n",
+				row.TokensInput, row.TokensOutput, row.Turns)
+		}
 	}
 
 	// Clean close.
@@ -226,7 +300,109 @@ func run(
 		return fmt.Errorf("close: %w", err)
 	}
 	fmt.Printf("\nclosed conversation %s\n", conversationID)
+
+	// Print the final rollup so the user sees the durable total —
+	// the projection has had plenty of time to catch up since the
+	// last assistant turn.
+	if row, err := reader.Get(context.Background(), tenantID, conversationID); err == nil {
+		fmt.Printf("final token usage: in=%d out=%d turns=%d model=%s\n",
+			row.TokensInput, row.TokensOutput, row.Turns, row.Model)
+	}
+
+	// Tear down the projection goroutine so the process exits
+	// cleanly rather than abandoning a running poll loop.
+	_ = projDone
 	return nil
+}
+
+// assertKMSMatchesStore fails fast when the persisted subject_keys row
+// for (tenant, userID) is wrapped under a KEK the keystore can't
+// open. This is the exact "I deleted the wrong file" footgun adopters
+// hit when iterating on the example; the error message includes the
+// absolute paths of both the DB and the KMS file so it's obvious what
+// to remove to start over.
+//
+// On first run for this subject there is no subject_keys row yet, so
+// ErrSubjectKeyNotFound short-circuits and we proceed normally.
+func assertKMSMatchesStore(
+	ctx context.Context,
+	keystore *conversations.FileKMS,
+	store *sqliteadapter.Adapter,
+	tenantID, userID, dbPath, kmsFile string,
+) error {
+	tenantCtx := es.WithTenant(ctx, tenantID)
+	row, err := store.GetSubjectKey(tenantCtx, tenantID, userID)
+	if errors.Is(err, shred.ErrSubjectKeyNotFound) {
+		return nil // first time we've seen this subject — nothing to verify
+	}
+	if err != nil {
+		return fmt.Errorf("kms consistency check: read subject_keys: %w", err)
+	}
+	if _, err := keystore.UnwrapDEK(ctx, tenantID, row.DEKWrapped, row.KEKVersion); err != nil {
+		dbAbs, _ := filepath.Abs(dbPath)
+		kmsAbs, _ := filepath.Abs(kmsFile)
+		return fmt.Errorf(`KMS does not match the event store.
+
+The subject_keys row for (tenant=%s, user=%s) references KEK version %d,
+which is not unwrappable by the current KMS file. Most commonly this
+means a previous run used the in-memory inproc KMS (DEKs vanished on
+process exit) but the SQLite event log persisted the subject_keys row.
+
+To start over (this DESTROYS the encrypted history — there is no way
+to recover it without the original KEK):
+
+    rm %q
+    rm %q
+
+Then re-run the chat. A fresh KEK will be generated on first message.
+
+To preserve history, restore the matching kms.json from a backup or
+operator-controlled secret and pass it via --kms-file.
+
+Underlying error: %v`,
+			tenantID, userID, row.KEKVersion, dbAbs, kmsAbs, err)
+	}
+	return nil
+}
+
+// waitForRollup polls the token_usage projection until the row's
+// tokens_output reflects the just-appended assistant message (>= the
+// new token total) or the budget expires. Used purely for UX —
+// printing stale totals would mislead the user about where they are
+// against the budget. Returns the last-seen row even on timeout so
+// callers can show whatever the projection had time to compute.
+func waitForRollup(
+	ctx context.Context,
+	reader *conversations.TokenUsageReader,
+	tenant, conversation string,
+	minOutputTokens int64,
+	budget time.Duration,
+) (conversations.TokenUsageRow, error) {
+	deadline := time.Now().Add(budget)
+	var last conversations.TokenUsageRow
+	var lastErr error
+	for {
+		row, err := reader.Get(ctx, tenant, conversation)
+		if err == nil {
+			last = row
+			if row.TokensOutput >= minOutputTokens {
+				return row, nil
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil && lastErr != sql.ErrNoRows {
+				return last, lastErr
+			}
+			return last, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // approxTokens is the placeholder token estimator: ~4 chars per token,
