@@ -3,6 +3,7 @@ package conversations
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/firebase/genkit/go/ai"
@@ -221,9 +222,20 @@ func (l *GenkitOllama) Chat(ctx context.Context, modelName string, messages []Ch
 		ai.WithModel(model),
 		ai.WithMessages(aiMsgs...),
 	}
+
+	// Always assemble chunks ourselves when streaming is configured —
+	// Genkit's Ollama plugin (as of v1.9.0) delivers the full reply
+	// through stream chunks AND leaves *ModelResponse.Text() empty on
+	// the terminal frame. Without our own assembly, the conversation
+	// driver would persist an empty AssistantMessageAppended and the
+	// Decider would (correctly) reject it as ErrEmptyMessage. Building
+	// the buffer in-band gives us a reliable fallback regardless of
+	// what the underlying plugin chooses to set on the response.
+	var assembled strings.Builder
 	if cfg.OnChunk != nil {
 		genOpts = append(genOpts, ai.WithStreaming(func(_ context.Context, chunk *ai.ModelResponseChunk) error {
 			if t := chunk.Text(); t != "" {
+				assembled.WriteString(t)
 				cfg.OnChunk(t)
 			}
 			return nil
@@ -235,7 +247,19 @@ func (l *GenkitOllama) Chat(ctx context.Context, modelName string, messages []Ch
 		return ChatResponse{}, fmt.Errorf("ollama: generate: %w", err)
 	}
 
-	out := ChatResponse{Content: resp.Text()}
+	// Prefer the final ModelResponse.Text(); fall back to the
+	// assembled stream buffer when it's empty. This makes the
+	// contract — ChatResponse.Content always carries the assembled
+	// reply — robust against plugin behaviour drift.
+	content := resp.Text()
+	if content == "" {
+		content = assembled.String()
+	}
+	if content == "" {
+		return ChatResponse{}, fmt.Errorf("ollama: generate returned empty content (model %q produced no text)", modelName)
+	}
+
+	out := ChatResponse{Content: content}
 	// Genkit exposes usage on *ModelResponse when the underlying model
 	// reports it. Older Ollama models don't always return prompt /
 	// completion counts; the CLI falls back to an estimator in that
