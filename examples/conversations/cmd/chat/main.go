@@ -44,6 +44,7 @@ import (
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/examples/conversations"
 	conversationv1 "github.com/laenenai/eventstore/gen/myapp/conversation/v1"
+	"github.com/laenenai/eventstore/projection"
 	"github.com/laenenai/eventstore/shred"
 )
 
@@ -119,6 +120,34 @@ func run(
 	}
 
 	shredder := shred.New(keystore, adapter)
+
+	// Tier-3 token_usage projection: a goroutine polls the event log,
+	// upserts one row per (tenant, conversation) into the read-model
+	// table, advances its checkpoint via the SQLite adapter. The
+	// projection runs against the same DB as the events — application
+	// schema (token_usage) created here at startup, framework
+	// checkpoint table (projection_checkpoint) already migrated.
+	if _, err := db.ExecContext(ctx, conversations.TokenUsageSchema); err != nil {
+		return fmt.Errorf("create token_usage table: %w", err)
+	}
+	tokenProj := &conversations.TokenUsageProjection{DB: db}
+	projRuntime := &projection.Runtime{
+		Name:       conversations.TokenUsage,
+		Store:      adapter,
+		Checkpoint: adapter,
+		Handler: conversationv1.NewProjectionDispatcher(tokenProj,
+			projection.IgnoreUnknown()), // other aggregates may share the DB
+		Tenant:    tenantID,
+		IdleSleep: 250 * time.Millisecond, // chat-feel responsiveness
+	}
+	projDone := make(chan struct{})
+	go func() {
+		defer close(projDone)
+		if err := projRuntime.Run(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "projection: %v\n", err)
+		}
+	}()
+	reader := &conversations.TokenUsageReader{DB: db}
 
 	rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
 		Store:    adapter,
@@ -251,6 +280,14 @@ func run(
 			continue
 		}
 
+		// Wait briefly for the projection to catch up so the
+		// post-turn rollup reflects the just-persisted event. The
+		// projection polls every IdleSleep (250ms above); a few hops
+		// of that interval keeps the UX snappy without spin-looping.
+		if row, err := waitForRollup(ctx, reader, tenantID, conversationID, outTokens, 2*time.Second); err == nil {
+			fmt.Fprintf(os.Stderr, "  [tokens in=%d out=%d turns=%d]\n",
+				row.TokensInput, row.TokensOutput, row.Turns)
+		}
 	}
 
 	// Clean close.
@@ -263,6 +300,18 @@ func run(
 		return fmt.Errorf("close: %w", err)
 	}
 	fmt.Printf("\nclosed conversation %s\n", conversationID)
+
+	// Print the final rollup so the user sees the durable total —
+	// the projection has had plenty of time to catch up since the
+	// last assistant turn.
+	if row, err := reader.Get(context.Background(), tenantID, conversationID); err == nil {
+		fmt.Printf("final token usage: in=%d out=%d turns=%d model=%s\n",
+			row.TokensInput, row.TokensOutput, row.Turns, row.Model)
+	}
+
+	// Tear down the projection goroutine so the process exits
+	// cleanly rather than abandoning a running poll loop.
+	_ = projDone
 	return nil
 }
 
@@ -314,6 +363,46 @@ Underlying error: %v`,
 			tenantID, userID, row.KEKVersion, dbAbs, kmsAbs, err)
 	}
 	return nil
+}
+
+// waitForRollup polls the token_usage projection until the row's
+// tokens_output reflects the just-appended assistant message (>= the
+// new token total) or the budget expires. Used purely for UX —
+// printing stale totals would mislead the user about where they are
+// against the budget. Returns the last-seen row even on timeout so
+// callers can show whatever the projection had time to compute.
+func waitForRollup(
+	ctx context.Context,
+	reader *conversations.TokenUsageReader,
+	tenant, conversation string,
+	minOutputTokens int64,
+	budget time.Duration,
+) (conversations.TokenUsageRow, error) {
+	deadline := time.Now().Add(budget)
+	var last conversations.TokenUsageRow
+	var lastErr error
+	for {
+		row, err := reader.Get(ctx, tenant, conversation)
+		if err == nil {
+			last = row
+			if row.TokensOutput >= minOutputTokens {
+				return row, nil
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil && lastErr != sql.ErrNoRows {
+				return last, lastErr
+			}
+			return last, nil
+		}
+		select {
+		case <-ctx.Done():
+			return last, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // approxTokens is the placeholder token estimator: ~4 chars per token,

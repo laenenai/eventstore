@@ -65,7 +65,7 @@ This example wires them up.
 | Ollama-backed local LLM loop                 | ✅ MVP   | `examples/conversations/cmd/chat`                                |
 | Multi-tenant isolation                       | ✅ MVP   | `es.WithTenant` + `StreamID` (proven in `TestConversation_TenantIsolation`) |
 | Read-your-writes (no replay on every turn)   | ✅ MVP   | Tier-1 `state_cache` via `aggregate.Runtime` (ADR 0023)         |
-| Token accounting per-tenant, per-model       | follow-up | Tier-3 projection `token_usage` table                           |
+| Token accounting per-tenant, per-model       | ✅ MVP   | Tier-3 `TokenUsageProjection` → `token_usage` table; chat CLI shows live rollup after each turn |
 | RAG / semantic recall                        | follow-up | Tier-3 projection upserts embeddings to a vector store          |
 | Streaming LLM responses (token-by-token)     | ✅ MVP   | `WithStreamCallback` ChatOption; chunks render live, one event persisted with assembled content |
 | Tool-call / tool-result events               | follow-up | New event variants — proto-additive, no breaking change         |
