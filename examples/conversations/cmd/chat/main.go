@@ -37,7 +37,6 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
-	"github.com/laenenai/eventstore/adapters/kms/inproc"
 	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/aggregate"
 	"github.com/laenenai/eventstore/es"
@@ -55,6 +54,7 @@ func main() {
 		systemPrompt = flag.String("system", "You are a helpful assistant. Be concise.", "System prompt")
 		ollamaURL    = flag.String("ollama", conversations.DefaultOllamaURL, "Ollama base URL")
 		conversation = flag.String("conversation", "", "Resume an existing conversation id; empty starts a new one")
+		kmsFile      = flag.String("kms-file", "", "Path to the file-backed KEK store (default: <db>.kms.json). Lets PII-encrypted history survive process restarts.")
 	)
 	flag.Parse()
 	if *userID == "" {
@@ -66,7 +66,11 @@ func main() {
 		os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx, *tenant, *userID, *model, *dbPath, *systemPrompt, *ollamaURL, *conversation); err != nil {
+	resolvedKMSFile := *kmsFile
+	if resolvedKMSFile == "" {
+		resolvedKMSFile = *dbPath + ".kms.json"
+	}
+	if err := run(ctx, *tenant, *userID, *model, *dbPath, *systemPrompt, *ollamaURL, *conversation, resolvedKMSFile); err != nil {
 		if errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "\nbye.")
 			return
@@ -78,7 +82,7 @@ func main() {
 
 func run(
 	ctx context.Context,
-	tenantID, userID, model, dbPath, systemPrompt, ollamaURL, resumeID string,
+	tenantID, userID, model, dbPath, systemPrompt, ollamaURL, resumeID, kmsFile string,
 ) error {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -91,7 +95,16 @@ func run(
 		return fmt.Errorf("migrate: %w", err)
 	}
 
-	shredder := shred.New(inproc.New(), adapter)
+	// File-backed KMS persists KEKs to a sidecar JSON so PII-encrypted
+	// history survives CLI restarts. Inproc KMS (the test default)
+	// keeps KEKs in memory only, which is fine for one-shot tests but
+	// would render every prior conversation's PII unreadable as soon
+	// as the user exited and reopened the chat.
+	keystore, err := conversations.NewFileKMS(kmsFile)
+	if err != nil {
+		return fmt.Errorf("init kms: %w", err)
+	}
+	shredder := shred.New(keystore, adapter)
 
 	rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
 		Store:    adapter,
