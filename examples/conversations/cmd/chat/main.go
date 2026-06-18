@@ -34,6 +34,8 @@ import (
 	"syscall"
 	"time"
 
+	"path/filepath"
+
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
@@ -104,6 +106,18 @@ func run(
 	if err != nil {
 		return fmt.Errorf("init kms: %w", err)
 	}
+
+	// Startup-time consistency check: subject_keys persisted from a
+	// previous session reference a KEK version (e.g., from a vanished
+	// inproc KMS run) that this KMS file might not have. Catch the
+	// mismatch loudly here rather than surfacing the same cryptic
+	// "KEK version not available" error on every command. The check
+	// is per (tenant, userID); other subjects fail individually if
+	// their KEK is also missing.
+	if err := assertKMSMatchesStore(ctx, keystore, adapter, tenantID, userID, dbPath, kmsFile); err != nil {
+		return err
+	}
+
 	shredder := shred.New(keystore, adapter)
 
 	rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
@@ -249,6 +263,56 @@ func run(
 		return fmt.Errorf("close: %w", err)
 	}
 	fmt.Printf("\nclosed conversation %s\n", conversationID)
+	return nil
+}
+
+// assertKMSMatchesStore fails fast when the persisted subject_keys row
+// for (tenant, userID) is wrapped under a KEK the keystore can't
+// open. This is the exact "I deleted the wrong file" footgun adopters
+// hit when iterating on the example; the error message includes the
+// absolute paths of both the DB and the KMS file so it's obvious what
+// to remove to start over.
+//
+// On first run for this subject there is no subject_keys row yet, so
+// ErrSubjectKeyNotFound short-circuits and we proceed normally.
+func assertKMSMatchesStore(
+	ctx context.Context,
+	keystore *conversations.FileKMS,
+	store *sqliteadapter.Adapter,
+	tenantID, userID, dbPath, kmsFile string,
+) error {
+	tenantCtx := es.WithTenant(ctx, tenantID)
+	row, err := store.GetSubjectKey(tenantCtx, tenantID, userID)
+	if errors.Is(err, shred.ErrSubjectKeyNotFound) {
+		return nil // first time we've seen this subject — nothing to verify
+	}
+	if err != nil {
+		return fmt.Errorf("kms consistency check: read subject_keys: %w", err)
+	}
+	if _, err := keystore.UnwrapDEK(ctx, tenantID, row.DEKWrapped, row.KEKVersion); err != nil {
+		dbAbs, _ := filepath.Abs(dbPath)
+		kmsAbs, _ := filepath.Abs(kmsFile)
+		return fmt.Errorf(`KMS does not match the event store.
+
+The subject_keys row for (tenant=%s, user=%s) references KEK version %d,
+which is not unwrappable by the current KMS file. Most commonly this
+means a previous run used the in-memory inproc KMS (DEKs vanished on
+process exit) but the SQLite event log persisted the subject_keys row.
+
+To start over (this DESTROYS the encrypted history — there is no way
+to recover it without the original KEK):
+
+    rm %q
+    rm %q
+
+Then re-run the chat. A fresh KEK will be generated on first message.
+
+To preserve history, restore the matching kms.json from a backup or
+operator-controlled secret and pass it via --kms-file.
+
+Underlying error: %v`,
+			tenantID, userID, row.KEKVersion, dbAbs, kmsAbs, err)
+	}
 	return nil
 }
 
