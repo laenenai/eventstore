@@ -5,6 +5,7 @@ package dbos_test
 import (
 	"context"
 	"errors"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,43 @@ import (
 	"github.com/laenenai/eventstore/es"
 	invoicev1 "github.com/laenenai/eventstore/gen/myapp/invoice/v1"
 )
+
+// asyncDeliveryTimeout caps the polling window for async-subscriber
+// fan-out tests. The DBOS queue runner picks up child workflows
+// asynchronously; the wall time between RunWorkflow completing and
+// the subscriber's Handle firing depends on queue-runner scheduling,
+// DBOS internal transaction load, and (on first connection) Postgres
+// query planning. Locally that's <100ms; on a cold GitHub-hosted
+// runner with a fresh testcontainer Postgres it can spike to several
+// seconds.
+//
+// Defaults to 30s — generous enough to absorb CI variance, still
+// flags a real hang quickly. Override via DBOS_E2E_TIMEOUT (e.g.
+// `DBOS_E2E_TIMEOUT=2s go test -tags dbos ...` for fast local
+// feedback loops).
+func asyncDeliveryTimeout() time.Duration {
+	if v := os.Getenv("DBOS_E2E_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return 30 * time.Second
+}
+
+// waitForAsyncDelivery polls counter until it reaches want or the
+// budget expires. Returns true on success, false on timeout. Single
+// helper across every async-fan-out test in this package — when the
+// budget changes (CI variance, slower runners), one knob.
+func waitForAsyncDelivery(counter *atomic.Int32, want int32, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if counter.Load() >= want {
+			return true
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return counter.Load() >= want
+}
 
 // Build-tagged `dbos` — pulls a real Postgres container via
 // testcontainers + uses the DBOS Go SDK against it. Skip the default
@@ -309,12 +347,8 @@ func TestDBOS_AsyncSubscriberDelivered(t *testing.T) {
 		t.Fatalf("GetResult: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && delivered.Load() == 0 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if delivered.Load() != 1 {
-		t.Errorf("async delivered: got %d want 1", delivered.Load())
+	if !waitForAsyncDelivery(&delivered, 1, asyncDeliveryTimeout()) {
+		t.Errorf("async delivered: got %d want 1 (after %s)", delivered.Load(), asyncDeliveryTimeout())
 	}
 }
 
@@ -351,12 +385,8 @@ func TestDBOS_AsyncDurable(t *testing.T) {
 	}
 
 	// Wait for the child workflow's effect to land.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && delivered.Load() == 0 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if delivered.Load() != 1 {
-		t.Fatalf("async delivered: got %d want 1", delivered.Load())
+	if !waitForAsyncDelivery(&delivered, 1, asyncDeliveryTimeout()) {
+		t.Fatalf("async delivered: got %d want 1 (after %s)", delivered.Load(), asyncDeliveryTimeout())
 	}
 
 	// Find the EventID of the Created event we just produced.

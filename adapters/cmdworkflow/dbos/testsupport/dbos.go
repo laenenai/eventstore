@@ -86,7 +86,14 @@ func Start(t *testing.T) *Env {
 	if err != nil {
 		t.Fatalf("NewDBOSContext: %v", err)
 	}
-	t.Cleanup(func() { dctx.Shutdown(5 * time.Second) })
+	// Drain DBOS workers before testcontainers terminates Postgres
+	// (LIFO cleanup order: this t.Cleanup runs FIRST). 10s is generous
+	// — the alternative is "context canceled" / "tx is closed" log
+	// noise as queue runner, system_database listener, and reconciler
+	// goroutines race the Postgres shutdown. The cost of a longer
+	// drain is paid only on test exit; the cost of getting it wrong
+	// is misleading log lines that mask real failures.
+	t.Cleanup(func() { dctx.Shutdown(10 * time.Second) })
 
 	return &Env{
 		Container: pgContainer,
