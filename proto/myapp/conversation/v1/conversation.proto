@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package myapp.conversation.v1;
+
+import "es/v1/options.proto";
+
+option go_package = "github.com/laenenai/eventstore/gen/myapp/conversation/v1;conversationv1";
+
+// Conversation — worked example of an AI-application backend on
+// eventstore. One stream per conversation; each turn (user / assistant)
+// becomes one append-only event. User-visible message bodies are
+// PERSONAL-classified so ForgetSubject (ADR 0010) erases them in O(1)
+// without rewriting history.
+//
+// MVP scope: bare chat lifecycle. Tool calls / results and the
+// token-usage projection are documented in examples/conversations/README.md
+// and land in follow-up commits — adding them requires no breaking
+// change to this proto (new event variants are codegen-safe per
+// ADR 0004 + 0020 Decision 3a).
+
+// State — the rolling shape of one conversation. Turns are kept in
+// state so the LLM call has the full history without replay. Bounded
+// in the Decider (MaxTurns) to keep the state_cache row small enough
+// for sub-ms JSONB deserialization.
+message Conversation {
+  option (es.v1.aggregate) = "conversation";
+
+  string conversation_id = 1;
+  string user_id         = 2 [(es.v1.subject_field) = true];
+  string model           = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  string system_prompt   = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+
+  repeated Turn turns    = 5;
+
+  int64  tokens_input    = 6;
+  int64  tokens_output   = 7;
+
+  bool   closed          = 8;
+  string close_reason    = 9 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+}
+
+// Turn — one entry in the dialogue. The role enum is plaintext so
+// regulators can derive structure without decryption; the content is
+// PERSONAL so it follows the subject's DEK.
+message Turn {
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_USER        = 1;
+    ROLE_ASSISTANT   = 2;
+  }
+  Role   role    = 1;
+  string content = 2 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  int64  tokens  = 3;
+}
+
+// ---- Commands ------------------------------------------------------------
+
+message Start {
+  string tenant_id       = 1;
+  string conversation_id = 2;
+  string user_id         = 3 [(es.v1.subject_field) = true];
+  string model           = 4;
+  string system_prompt   = 5 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+}
+
+message AppendUserMessage {
+  string tenant_id       = 1;
+  string conversation_id = 2;
+  string user_id         = 3 [(es.v1.subject_field) = true];
+  string content         = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  int64  tokens          = 5;
+}
+
+message AppendAssistantMessage {
+  string tenant_id       = 1;
+  string conversation_id = 2;
+  string user_id         = 3 [(es.v1.subject_field) = true];
+  string content         = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  int64  tokens          = 5;
+}
+
+message Close {
+  string tenant_id       = 1;
+  string conversation_id = 2;
+  string user_id         = 3 [(es.v1.subject_field) = true];
+  string reason          = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+}
+
+message Commands {
+  option (es.v1.sum_type) = "Command";
+  oneof variant {
+    Start                  start                    = 1;
+    AppendUserMessage      append_user_message      = 2;
+    AppendAssistantMessage append_assistant_message = 3;
+    Close                  close                    = 4;
+  }
+}
+
+// ---- Events --------------------------------------------------------------
+
+message Started {
+  string conversation_id = 1;
+  string user_id         = 2 [(es.v1.subject_field) = true];
+  string model           = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+  string system_prompt   = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+}
+
+message UserMessageAppended {
+  string conversation_id = 1;
+  string user_id         = 2 [(es.v1.subject_field) = true];
+  string content         = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  int64  tokens          = 4;
+}
+
+message AssistantMessageAppended {
+  string conversation_id = 1;
+  string user_id         = 2 [(es.v1.subject_field) = true];
+  string content         = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
+  int64  tokens          = 4;
+}
+
+message Closed {
+  string conversation_id = 1;
+  string user_id         = 2 [(es.v1.subject_field) = true];
+  string reason          = 3 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
+}
+
+message Events {
+  option (es.v1.sum_type) = "Event";
+  oneof variant {
+    Started                  started                    = 1;
+    UserMessageAppended      user_message_appended      = 2;
+    AssistantMessageAppended assistant_message_appended = 3;
+    Closed                   closed                     = 4;
+  }
+}

@@ -15,6 +15,7 @@ use (
 	./examples/cmdworkflow-dbos
 	./examples/cmdworkflow-restate
 	./examples/connectedge
+	./examples/conversations
 	./examples/customerview
 	./examples/employee
 	./examples/invoice
