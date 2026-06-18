@@ -6,8 +6,34 @@ user/agent dialogue as an event, with per-tenant crypto-shredding,
 token accounting, RAG embedding projection, and read-your-writes
 streaming responses.
 
-This README is the design doc. Implementation lands later; the shape
-below is the contract.
+This README is the design contract; the MVP ships the load-bearing
+pieces (proto + Decider + Ollama client + runnable CLI + the test
+matrix that proves crypto-shred works end-to-end). Optional layers
+flagged below land in follow-up commits without breaking changes.
+
+## Run it
+
+```sh
+# 1. Start Ollama and pull a small model
+ollama serve &
+ollama pull llama3.2
+
+# 2. Run the chat. SQLite file is created if missing; same --user
+#    + --conversation resumes the same stream via state_cache.
+go run ./examples/conversations/cmd/chat \
+    --tenant acme \
+    --user alice \
+    --model llama3.2 \
+    --db ./chat.db
+
+# 3. Talk. Type :quit to close cleanly.
+```
+
+Tests run without Ollama (they use a stub LLM):
+
+```sh
+go test ./examples/conversations/...
+```
 
 ## Why this example exists
 
@@ -26,17 +52,21 @@ This example wires them up.
 
 ## What you get
 
-| Capability                                   | Where it lives                                                  |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| Append-only conversation history             | `Conversation` aggregate, Decider pattern (ADR 0003)            |
-| User PII encrypted per-tenant                | `(es.v1.data_classification) = PERSONAL` on message bodies      |
-| Right-to-erasure ("forget this user")        | `shred.ForgetSubject(tenant, userID)` — O(1) DEK destruction    |
-| Token accounting per-tenant, per-model       | Tier-3 projection `token_usage` table                           |
-| RAG / semantic recall                        | Tier-3 projection upserts embeddings to a vector store          |
-| Streaming LLM responses + final durable event | Sync subscriber pattern (cookbook 22)                          |
-| Cost attribution / billing                   | Same `token_usage` projection, aggregated by `(tenant, month)`  |
-| DSAR export                                  | `shred.ExportSubject` (task 6 — implemented separately)         |
-| Conversation rebuild after schema change     | `RebuildStateCache` (ADR 0023)                                  |
+| Capability                                   | Status   | Where it lives                                                  |
+| -------------------------------------------- | -------- | --------------------------------------------------------------- |
+| Append-only conversation history             | ✅ MVP   | `Conversation` aggregate, Decider pattern (ADR 0003)            |
+| User PII encrypted per-tenant                | ✅ MVP   | `(es.v1.data_classification) = PERSONAL` on message bodies      |
+| Right-to-erasure ("forget this user")        | ✅ MVP   | `shred.ForgetSubject(tenant, userID)` — O(1) DEK destruction    |
+| Ollama-backed local LLM loop                 | ✅ MVP   | `examples/conversations/cmd/chat`                                |
+| Multi-tenant isolation                       | ✅ MVP   | `es.WithTenant` + `StreamID` (proven in `TestConversation_TenantIsolation`) |
+| Read-your-writes (no replay on every turn)   | ✅ MVP   | Tier-1 `state_cache` via `aggregate.Runtime` (ADR 0023)         |
+| Token accounting per-tenant, per-model       | follow-up | Tier-3 projection `token_usage` table                           |
+| RAG / semantic recall                        | follow-up | Tier-3 projection upserts embeddings to a vector store          |
+| Streaming LLM responses (token-by-token)     | follow-up | Sync subscriber pattern (cookbook 22)                          |
+| Tool-call / tool-result events               | follow-up | New event variants — proto-additive, no breaking change         |
+| Cost attribution / billing                   | follow-up | Same `token_usage` projection, aggregated by `(tenant, month)`  |
+| DSAR export                                  | framework-side | `shred.RunSubjectExport` + esctl raw mode (PR #26)          |
+| Conversation rebuild after schema change     | framework-side | `RebuildStateCache` (ADR 0023)                              |
 
 ## The aggregate
 
