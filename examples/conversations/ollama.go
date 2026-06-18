@@ -24,7 +24,55 @@ type LLM interface {
 	// Chat sends the full message history (incl. system prompt) and
 	// returns the assistant's reply text plus a token-count estimate.
 	// Honors ctx cancellation; deadline errors propagate verbatim.
-	Chat(ctx context.Context, model string, messages []ChatMessage) (ChatResponse, error)
+	//
+	// Options carry orthogonal knobs (streaming callback today;
+	// temperature / max-tokens / tool registries in follow-up commits).
+	// The same content is returned in ChatResponse even when a
+	// streaming callback is attached — chunks deliver partial text live
+	// for UX, but the final persisted event uses the assembled
+	// ChatResponse.Content so replay is deterministic.
+	Chat(ctx context.Context, model string, messages []ChatMessage, opts ...ChatOption) (ChatResponse, error)
+}
+
+// ChatOption configures one Chat call. Variadic options keep the LLM
+// interface stable as the example grows (streaming today; sampling
+// parameters, tool registries, JSON-mode in future).
+type ChatOption func(*chatConfig)
+
+// chatConfig is the internal aggregator the LLM implementation reads.
+// Unexported so adopters can only set fields via the documented
+// WithXxx constructors — keeps the contract surface small.
+type chatConfig struct {
+	OnChunk func(chunk string)
+}
+
+// WithStreamCallback attaches a token-delivery callback. The function
+// is invoked once per chunk the model emits (typically a few tokens at
+// a time on Ollama; provider-dependent). The callback runs on the
+// goroutine driving Chat — fast, non-blocking work only. Slow work
+// (network writes to a downstream client, file I/O, etc.) must hand
+// off to another goroutine via a channel.
+//
+// Streaming is purely a UX concern. The aggregate persists ONE
+// AssistantMessageAppended event with the assembled content after
+// Chat returns; intermediate chunks are NOT events. This keeps the
+// event log clean and replay-deterministic — the cookbook recipe 22
+// pattern.
+func WithStreamCallback(fn func(chunk string)) ChatOption {
+	return func(c *chatConfig) { c.OnChunk = fn }
+}
+
+// StreamCallbackFromOptions resolves a stream callback out of an
+// opaque ChatOption slice. Useful for adopters writing their own LLM
+// implementations or test stubs that need to honor a caller's
+// streaming preference without depending on the unexported chatConfig
+// shape. Returns nil when no callback was attached.
+func StreamCallbackFromOptions(opts []ChatOption) func(chunk string) {
+	cfg := chatConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	return cfg.OnChunk
 }
 
 // ChatMessage matches the chat wire shape: role + content. Role is
@@ -137,9 +185,21 @@ func (l *GenkitOllama) modelFor(name string) ai.Model {
 // NewModelTextMessage). Errors flow through verbatim; the runtime's
 // deadline drives both Genkit's own retries and the Ollama HTTP
 // timeout.
-func (l *GenkitOllama) Chat(ctx context.Context, modelName string, messages []ChatMessage) (ChatResponse, error) {
+//
+// Streaming: if a callback is attached via WithStreamCallback, each
+// model chunk's Text() is delivered to the callback as it arrives.
+// genkit.Generate still returns a *ModelResponse carrying the
+// assembled full text, so the assignment to ChatResponse.Content is
+// unchanged — the caller persists ONE assistant-message event with
+// the full content regardless of how the UX rendered intermediate
+// chunks.
+func (l *GenkitOllama) Chat(ctx context.Context, modelName string, messages []ChatMessage, opts ...ChatOption) (ChatResponse, error) {
 	if modelName == "" {
 		return ChatResponse{}, fmt.Errorf("ollama: model name is required")
+	}
+	cfg := chatConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 	model := l.modelFor(modelName)
 
@@ -157,10 +217,20 @@ func (l *GenkitOllama) Chat(ctx context.Context, modelName string, messages []Ch
 		}
 	}
 
-	resp, err := genkit.Generate(ctx, l.g,
+	genOpts := []ai.GenerateOption{
 		ai.WithModel(model),
 		ai.WithMessages(aiMsgs...),
-	)
+	}
+	if cfg.OnChunk != nil {
+		genOpts = append(genOpts, ai.WithStreaming(func(_ context.Context, chunk *ai.ModelResponseChunk) error {
+			if t := chunk.Text(); t != "" {
+				cfg.OnChunk(t)
+			}
+			return nil
+		}))
+	}
+
+	resp, err := genkit.Generate(ctx, l.g, genOpts...)
 	if err != nil {
 		return ChatResponse{}, fmt.Errorf("ollama: generate: %w", err)
 	}

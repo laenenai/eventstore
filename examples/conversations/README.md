@@ -67,7 +67,7 @@ This example wires them up.
 | Read-your-writes (no replay on every turn)   | ✅ MVP   | Tier-1 `state_cache` via `aggregate.Runtime` (ADR 0023)         |
 | Token accounting per-tenant, per-model       | follow-up | Tier-3 projection `token_usage` table                           |
 | RAG / semantic recall                        | follow-up | Tier-3 projection upserts embeddings to a vector store          |
-| Streaming LLM responses (token-by-token)     | follow-up | Sync subscriber pattern (cookbook 22)                          |
+| Streaming LLM responses (token-by-token)     | ✅ MVP   | `WithStreamCallback` ChatOption; chunks render live, one event persisted with assembled content |
 | Tool-call / tool-result events               | follow-up | New event variants — proto-additive, no breaking change         |
 | Cost attribution / billing                   | follow-up | Same `token_usage` projection, aggregated by `(tenant, month)`  |
 | DSAR export                                  | framework-side | `shred.RunSubjectExport` + esctl raw mode (PR #26)          |

@@ -187,7 +187,19 @@ func run(
 		// LLM call with a per-request deadline so a stuck Ollama
 		// server doesn't block forever.
 		callCtx, cancel := context.WithTimeout(tenantCtx, 2*time.Minute)
-		resp, err := llm.Chat(callCtx, model, messages)
+
+		// Stream chunks to the terminal as they arrive — UX win for
+		// slower models. The full assembled content still comes back
+		// in resp.Content and is what we persist as ONE event below.
+		// A trailing newline is printed after the call so the prompt
+		// on the next iteration starts on a fresh line.
+		fmt.Println()
+		resp, err := llm.Chat(callCtx, model, messages,
+			conversations.WithStreamCallback(func(chunk string) {
+				fmt.Print(chunk)
+			}),
+		)
+		fmt.Println()
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "llm: %v\n", err)
@@ -212,8 +224,6 @@ func run(
 			continue
 		}
 
-		fmt.Println()
-		fmt.Println(resp.Content)
 	}
 
 	// Clean close.
