@@ -34,3 +34,11 @@ vendor/
 .claude/
 kms-keys.json
 kms-keys.local.json
+
+# examples/conversations runtime artifacts (chat CLI default --db and
+# its sidecar KMS file). SQLite WAL/SHM journal files included.
+chat.db
+chat.db-shm
+chat.db-wal
+chat.db.kms.json
+*.kms.json
