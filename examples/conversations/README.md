@@ -82,7 +82,7 @@ Tests don't need Ollama — they use a stub LLM:
 ```sh
 go test ./examples/conversations/...
 # ok  github.com/laenenai/eventstore/examples/conversations  0.6s
-# 13 tests pass
+# 11 tests pass (plus the file KMS conformance suite runs in adapters/kms/file)
 ```
 
 Everything below explains what just happened.
@@ -270,7 +270,7 @@ db, _ := sql.Open("sqlite", dbPath)               // 1. the SQLite file
 adapter := sqliteadapter.New(db)
 adapter.Migrate(ctx)                              //    creates events, state_cache, subject_keys, projection_checkpoint, ...
 
-keystore, _ := conversations.NewFileKMS(kmsFile)  // 2. file-backed KEK store (more on this next)
+keystore, _ := filekms.New(kmsFile)               // 2. file-backed KEK store (more on this next)
 shredder := shred.New(keystore, adapter)          //    Shredder owns DEK lifecycle + crypto
 
 rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
@@ -333,9 +333,9 @@ example provides. ~150 lines of Go:
   strand the file half-encoded
 
 **Threat model**: anyone with read access to the JSON file can decrypt
-every wrapped DEK and from there every PERSONAL field. Use FileKMS
-locally; in production, wire AWS KMS, GCP KMS, Vault, or another
-HSM-backed adapter.
+every wrapped DEK and from there every PERSONAL field. Use the file
+adapter locally (`adapters/kms/file`); in production, wire AWS KMS,
+GCP KMS, Vault, or another HSM-backed adapter.
 
 There's a third moving part: a **startup consistency check** in the
 chat CLI (`assertKMSMatchesStore`). On boot it asks: is there a
@@ -554,7 +554,7 @@ gate. For local dev that's plenty.
 ## What this saved you from writing
 
 The example weighs ~500 lines of new Go (proto + Decider + Ollama
-client + projection + CLI + FileKMS + tests). The framework gives you
+client + projection + CLI + tests). The framework gives you
 the rest of the iceberg: the SQLite migrations, the OCC append, the
 state_cache, the projection runner, the checkpoint table, the shredder,
 the codec emitter, the type-safe sum-types, the projection-interface
@@ -603,7 +603,7 @@ Three follow-ups, all proto-additive (no breaking changes):
 
 ---
 
-## The 13 tests, what they prove
+## The 11 tests, what they prove
 
 | Test | What it proves |
 | --- | --- |
@@ -616,8 +616,7 @@ Three follow-ups, all proto-additive (no breaking changes):
 | `TestConversation_EmptyMessageRejected` | Empty / whitespace-only message bodies fail at `Decide` time |
 | `TestConversation_StreamingDelivery` | Stream callback fires per chunk in order; assembled chunks equal `ChatResponse.Content`; persisted event uses the assembled content |
 | `TestConversation_TenantIsolation` | tenant-b cannot `Load` tenant-a's stream with the same conversation_id |
-| `TestFileKMS_PersistsAcrossRestart` | A DEK wrapped by one FileKMS unwraps via a new instance loading the same file — the property the CLI depends on |
-| `TestFileKMS_UnknownVersionFails` | Fresh file with no KEK versions rejects `UnwrapDEK` rather than silently accepting |
+| (file KMS coverage) | The framework's `estest.RunKMSConformance` suite — incl. `PersistsAcrossInstances` — runs against the `adapters/kms/file` adapter; see `adapters/kms/file/file_test.go` |
 | `TestTokenUsageProjection_EndToEnd` | Codegen dispatcher routes events to the right `OnXxx`; read-model row converges with correct turn count + token totals |
 | `TestTokenUsageProjection_RuntimePolls` | The polling integration works: `aggregate.Runtime` writes events, `projection.Runtime.RunOnce` reads them, the row converges |
 

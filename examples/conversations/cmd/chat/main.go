@@ -39,11 +39,13 @@ import (
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
+	filekms "github.com/laenenai/eventstore/adapters/kms/file"
 	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/aggregate"
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/examples/conversations"
 	conversationv1 "github.com/laenenai/eventstore/gen/myapp/conversation/v1"
+	"github.com/laenenai/eventstore/kms"
 	"github.com/laenenai/eventstore/projection"
 	"github.com/laenenai/eventstore/shred"
 )
@@ -103,7 +105,7 @@ func run(
 	// keeps KEKs in memory only, which is fine for one-shot tests but
 	// would render every prior conversation's PII unreadable as soon
 	// as the user exited and reopened the chat.
-	keystore, err := conversations.NewFileKMS(kmsFile)
+	keystore, err := filekms.New(kmsFile)
 	if err != nil {
 		return fmt.Errorf("init kms: %w", err)
 	}
@@ -326,7 +328,7 @@ func run(
 // ErrSubjectKeyNotFound short-circuits and we proceed normally.
 func assertKMSMatchesStore(
 	ctx context.Context,
-	keystore *conversations.FileKMS,
+	keystore kms.KeyStore,
 	store *sqliteadapter.Adapter,
 	tenantID, userID, dbPath, kmsFile string,
 ) error {
