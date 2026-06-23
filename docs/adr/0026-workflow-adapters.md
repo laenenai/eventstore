@@ -1,6 +1,8 @@
 # ADR 0026: Workflow Adapters — Restate and DBOS
 
-- **Status:** Accepted (all phases shipped)
+- **Status:** Accepted (all phases shipped). Amended by ADR 0033
+  (2026-06-23): DBOS is the default; Restate is community-maintained;
+  the SQLite-incompatibility caveat below has been retracted.
 - **Date:** 2026-05-14
 - **Pairs with:** ADR 0012 (event delivery), ADR 0025 (workflow-orchestrated command bus).
 
@@ -153,10 +155,18 @@ primitive (the journaled-step equivalent of Restate's `Run`).
 `Spawn` uses DBOS's `StartChildWorkflow`. Idempotency key flows
 through DBOS's `IdempotencyKey` workflow option.
 
-When SQLite is the eventstore: DBOS requires Postgres for its
-journal, so SQLite eventstore + DBOS workflows is **not a supported
-combination**. Use the inproc adapter for SQLite + workflow tests,
-or run DBOS against a separate PG. Documented in the cookbook.
+**Amended 2026-06-23 by ADR 0033 — caveat retracted.** When this
+ADR landed, the DBOS Go SDK required Postgres for its workflow
+journal. `dbos-transact-golang` v0.16.0 added the
+`Config.SqliteSystemDB` hook, which accepts a `*sql.DB` handle
+pointing at SQLite. The framework's spike
+(`adapters/cmdworkflow/dbos/testsupport/StartSQLite` +
+`sqlite_spike_test.go`) confirms the full integration works:
+DBOS lays its workflow tables alongside the framework's event log
+in one SQLite file, the Sync command flow runs end-to-end, and the
+Async-subscriber queue runner services the SQLite handle. SQLite
+eventstore + DBOS workflows is now a **supported combination**;
+see ADR 0033 § 2 for the configuration.
 
 ### 5. Test scope (build-tagged, container-backed)
 
