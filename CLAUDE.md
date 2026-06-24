@@ -119,6 +119,41 @@ adapter `gen/` trees so the SDK deps stay scoped to the adapter.
   state_cache (ADR 0023). The historical `snapshots` table is dropped
   by migrations 00009 (sqlite) / 00010 (postgres); don't reintroduce it.
 
+## Commit classification
+
+The auto-release workflow in `.github/workflows/ci.yml` cuts a new
+synchronized version tag on every push to `main` whose squash
+subject carries a `feat:` or `fix:` prefix. The gate is a heuristic
+for "material adopter-facing change worth a release." Lean toward
+the heuristic catching the right things, not toward strict
+classification by code-diff shape.
+
+- **`feat:` when adopter capability expands**, even if the code
+  surface is tiny. Retracting a documented limitation, enabling a
+  new deployment shape, adding a supported configuration
+  combination, exposing a new test-support helper that unlocks a
+  workflow — all `feat:`. Code-diff size is not the primary signal;
+  adopter capability change is.
+- **`fix:` for bug fixes adopters experience.**
+- **`chore:` for repo-internal mechanics** with no adopter
+  visibility: dependency bumps where the public API surface is
+  unchanged, CI infrastructure, build tooling.
+- **`docs:` for documentation-only changes**: ADRs that capture
+  strategic direction without shipping code, README rewrites,
+  recipe additions. If the ADR *also* retracts a limitation that
+  changes what's supported, the PR landing it should be `feat:`,
+  not `docs:`.
+
+When in doubt, ask: "what can an adopter do now that they couldn't
+before?" A real answer → `feat:`. Just "they have a better mental
+model" → `docs:`.
+
+The cost of misclassifying down (`feat:` → `docs:`) is a missed
+release. The cost of misclassifying up (`docs:` → `feat:`) is an
+extra version bump on a non-material change. The first is harder
+to notice and harder to recover from. Bias toward `feat:` when
+genuinely uncertain.
+
 ## Commands
 
 All via [Taskfile](./Taskfile.yml):
