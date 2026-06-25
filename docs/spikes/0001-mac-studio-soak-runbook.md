@@ -114,42 +114,138 @@ Flags:
 ## Running the soak
 
 The 7-day soak is gated behind a build tag so it can't be
-accidentally launched. Build tag: `soak`.
+accidentally launched. Build tag: `soak`. The test is
+`TestSoak_1M_7Day` in `estest/bench/soak_test.go`.
+
+### Pre-flight: shakeout in three steps
+
+Don't kick off 7 days without first proving the rig works. Three
+escalating validations, cheapest first.
+
+#### Step A — 30-second code-path check (~1 min wall)
+
+Compiles the bench package against your Go toolchain and exercises
+every phase (seed → baseline → sustained writes → heartbeat →
+endpoint) against a real testcontainer in ~30 s. If this fails, the
+Docker tuning isn't right; do NOT proceed.
 
 ```sh
-# Verify everything is in order with a 1M smoke first (~60 min)
-BENCH_TIER=1m go test -timeout 90m -run TestSmoke_1M -v ./estest/bench/...
+cd ~/Documents/laenen-ai/github/eventstore
+go test -count=1 -run TestSoak_CodepathSmoke -timeout 5m -v ./estest/bench/...
+```
 
-# If the 1M smoke looks healthy, launch the 7-day soak:
+Expect `--- PASS` with `succ=~200 heartbeats=4-5 fail=0`.
+
+#### Step B — 1-hour shakeout at 100K (~1.5 h wall)
+
+Validates the full pipeline at meaningful scale on Mac Studio
+Docker. Catches: `caffeinate` behaviour, log file location,
+heartbeat cadence, memory pressure during seed, autovacuum
+threshold firing.
+
+```sh
+BENCH_SOAK_TENANTS=100000 \
+BENCH_SOAK_DURATION=1h \
+BENCH_SOAK_RATE=80 \
+BENCH_SOAK_HEARTBEAT=5m \
+BENCH_SOAK_LOG=$HOME/spike-0001-shakeout.log \
+caffeinate -d -i -s -- go test -tags soak -timeout 3h \
+  -run TestSoak_1M_7Day -v ./estest/bench/... \
+  | tee $HOME/spike-0001-shakeout-stdout.log
+```
+
+Why these values:
+
+- **100K tenants** — seed takes ~13 min instead of ~2-3 h at 1M;
+  still produces real `state_cache` pressure
+- **1 h soak** — long enough for autovacuum thresholds to fire on
+  the smaller tables (`projection_checkpoint` 0.02 × ~80K dead =
+  ~1,600 dead-tup threshold; reachable at 80/sec)
+- **80 writes/sec** — half the ~167 ceiling; same shape, no
+  saturation
+- **5-min heartbeat** — 12 heartbeats over 1 h, enough trajectory
+  to read
+- **Log in `$HOME`** — no sudo needed
+
+Tail in a second terminal:
+
+```sh
+tail -f $HOME/spike-0001-shakeout.log
+```
+
+What to look for, in order:
+
+1. `[seed progress] done=…/100000 rate=…/s` every 30 s during seed
+2. `[seed complete] tenants=100000 duration=…` — marks the transition
+3. `[heartbeat] at=… elapsed=5m … p50=…ms p99=…ms wal_bytes=…
+   state_cache.live=… state_cache.dead=… state_cache.av=…` every 5 min
+4. `[soak complete] duration=1h0m… succ=… fail=…` at the end
+
+#### Step C — Pass / fail signals
+
+| Signal | Verdict |
+| --- | --- |
+| `PASS` + `state_cache.av` count > 0 in the final heartbeats | ✅ Rig healthy; kick off the 7-day |
+| `PASS` but `state_cache.av = 0` throughout | ⚠️  Run the 7-day anyway — 1 h likely too short for the 5 % threshold at this rate |
+| `FAIL` from early termination | ❌ Read the log; usually Docker resource exhaustion |
+| `panic` or `database is locked` | ❌ Driver / concurrency issue; debug before re-launching |
+| Heartbeats fire but `succ=0` | ❌ Pacer or workers broken at this scale |
+
+### Kicking off the real 7-day
+
+After the shakeout passes:
+
+```sh
 caffeinate -d -i -s -- go test -tags soak -timeout 200h \
   -run TestSoak_1M_7Day -v ./estest/bench/... \
-  | tee /var/log/spike-0001-soak.log
+  | tee $HOME/spike-0001-soak-stdout.log
 ```
+
+The heartbeat log defaults to `./spike-0001-soak.log` (relative to
+where you run the test). Set `BENCH_SOAK_LOG=$HOME/spike-0001-soak.log`
+to match the shakeout location.
 
 The soak's expected wall time is 7 × 24 = 168 hours plus seed
 (~2-3 hours at 1M tenants on M3 Ultra Docker). Build a buffer:
 200 h timeout.
 
+### Available env overrides
+
+`TestSoak_1M_7Day` consults the following environment variables.
+Unset variables fall back to `DefaultConfigC` in `scenario_c.go`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `BENCH_SOAK_TENANTS` | `1000000` | Population size |
+| `BENCH_SOAK_DURATION` | `168h` | Soak length (any `time.ParseDuration` value) |
+| `BENCH_SOAK_RATE` | `167` | Aggregate writes/sec offered |
+| `BENCH_SOAK_HEARTBEAT` | `30m` | Heartbeat capture interval |
+| `BENCH_SOAK_LOG` | `./spike-0001-soak.log` | Heartbeat log file path |
+
 ## Monitoring during the soak
 
-The soak writes a heartbeat snapshot every 30 minutes to
-`/var/log/spike-0001-soak.log` containing:
+Heartbeat snapshots fire every 30 minutes (or whatever
+`BENCH_SOAK_HEARTBEAT` is set to). Each heartbeat line contains:
 
-- Current append latency (rolling 5-min p50/p99)
-- Cumulative successful + failed appends
-- `pg_stat_user_tables` snapshot for each hot table
-- `pg_total_relation_size` per table
-- `n_dead_tup`, `autovacuum_count`, `last_autovacuum`
+- Current append latency (rolling-window p50 / p99 / p99.9)
+- Cumulative successful + failed append counts
+- `pg_stat_user_tables` snapshot for each hot table (live tup, dead
+  tup, HOT %, autovacuum count, total size in KB)
+- Cumulative WAL bytes since `pg_lsn=0/0`
 
 Recommended monitoring rhythm:
 
-- **Day 0** (kick-off): tail the log for the first hour. Confirm the
-  seed completes, the run loop starts, the heartbeat is firing.
-- **Day 1-6**: glance once per day. Look for sustained increases
-  in dead-tuple count, growing total_relation_size (signal of
-  bloat the autovacuum isn't reclaiming), or sustained p99 drift.
-- **Day 7**: review the final report. Soak ends; harness writes
-  the markdown summary.
+- **Day 0** (kick-off): tail the log for the first hour. Confirm
+  the seed completes (`[seed complete]`), the run loop starts
+  (`[heartbeat]` lines appearing), the first heartbeat captures
+  real data (`window_n > 0`).
+- **Days 1-6**: glance once per day. Look for sustained increases
+  in dead-tuple counts that DON'T get reclaimed by an autovacuum
+  cycle, growing `total_relation_size` (signal of bloat the
+  autovacuum isn't keeping up with), or sustained p99 drift.
+- **Day 7**: review the final report. Soak ends; harness writes a
+  markdown summary via `ReportC` to `os.TempDir()` and logs the
+  path in the test output.
 
 If the harness or Postgres dies mid-soak, the failure mode is "no
 recovery, run again." A 7-day soak isn't checkpoint-able. Schedule
