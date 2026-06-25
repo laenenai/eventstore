@@ -1,6 +1,6 @@
 # Spike 0001 — Eventstore tenancy at `idi_*` scale
 
-**Status:** Planning (no measurements taken yet).
+**Status:** Audit complete (Step 1 of 4). Smoke + Phase 1 pending.
 **Date opened:** 2026-06-24.
 **Owner:** TBD.
 **Hard prerequisite for:** ADR 0008 §2 Phase 12a in the laenen.ai
@@ -278,9 +278,159 @@ nailed:
 
 ## 11. Results (to be filled in as we execute)
 
-### 11.1 Schema audit (Step 1)
+### 11.1 Schema audit (Step 1) — DONE 2026-06-25
 
-*Pending. Run by:* TBD. *Output:* will live in §11.1.
+The Postgres adapter ships 14 active migrations (00001–00015,
+with 00008 reserved/skipped and 00010 dropping a deprecated table).
+12 tables exist post-migration. The audit catalogs each against
+the spike's scenarios (A=steady-state, C=autovacuum, E=deletion).
+
+**Source of truth:**
+`adapters/storage/postgres/migrations/0000{1..15}_*.sql`.
+
+#### 11.1.1 Per-table audit
+
+Legend: ✅ partitioned (hash on `tenant_id`, 16 partitions). ❌
+single table. **C-risk** = autovacuum / churn risk at 1M tenants.
+**E-risk** = right-to-erasure cost at 1M tenants.
+
+| Table | Partitioning | Write frequency | Row growth at 1M tenants | C-risk | E-risk | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `events` | ✅ | Every command (1× per event) | Linear in events, 16 partitions ≈ 62.5K tenants each | Low | Low (cascading delete by tenant_id is partition-bounded) | PK `(tenant_id, stream_id, version)`. UNIQUE on `(tenant_id, event_id)`. Index on `global_position` is parent-level (btree across all 16). Append-only — no UPDATE churn. **Lowest concern.** |
+| `unique_claims` | ✅ | Per claim-issuing command | Linear in claim count | Low | Low | Insert-only in steady state. Per-claim row, scoped delete on tenant erasure works via partition. |
+| `subject_keys` | ✅ | Per new subject (rare); ForgetSubject UPDATE | One row per (tenant, subject); inactive | Low | Low | ForgetSubject is an UPDATE (zero the DEK), not delete — keeps the audit tombstone. Volume stays small. |
+| `outbox` | ✅ | Every event (1× per event) | High insert + DELETE churn at drain time | **MEDIUM** | Low | Drained then deleted on a cadence. Hot insert path; partial index `WHERE published_at IS NULL` keeps the pending scan cheap. **At 1M tenants the cleanup pass becomes a hot autovacuum target.** |
+| `state_cache` | ❌ | Every successful command (UPSERT) | One row per (tenant, stream); JSONB column rewritten in place | **HIGH** | **MEDIUM** | **Tier-1 read model; biggest concern.** Single unpartitioned table at 1M tenants holding the rolling state of every active stream. JSONB UPDATE churn drives autovacuum pressure. No fillfactor set (default 100) → HOT updates unlikely → bloat ratio likely > 1.3× under sustained burst write. **This is the table I'd bet hits the brief's autovacuum SLO first.** |
+| `projection_checkpoint` | ❌ | Per projection batch (every IdleSleep, ~250ms-1s) | One row per (name, tenant) | **HIGH** | Low | Row count stays small (projections × tenants ≈ 10 × 1M = 10M rows max), but **HIGH WRITE FREQUENCY** — every projector tick UPDATEs its cursor. At 10 projections × 1M tenants × 1Hz = 10M UPDATEs/sec theoretical; realistic steady-state is far lower but still substantial. Default autovacuum thresholds (20% dead-tuple) means vacuum lags badly on this table. |
+| `projection_dlq` | ❌ | Only on handler failures | Low (failure-only) | Low | Low | Failure path; expected near-zero in steady state. |
+| `processed_events` | ❌ | Per `WithDedup` projection × event | Linear in (projections-using-dedup × events) | **MEDIUM** | Low | Opt-in dedup table. Adopters who enable it on hot projections face a large unpartitioned table at scale. Could become a row-count problem (not a churn problem — append-only). |
+| `state_stream_subscribers` | ❌ | Per state-stream drain delivery | (subscribers × tenants × streams) | **MEDIUM** | **MEDIUM** | At 1M tenants × 3 state-stream subscribers × 5 streams = **15M rows in one unpartitioned table**. Erasure for one tenant requires DELETE across the index. |
+| `subscriber_dlq` | ❌ | Only on subscriber failures | Low (failure-only) | Low | Low | Failure path; expected near-zero in steady state. |
+| Sequences (`events_global_position_seq`) | n/a | Every event (advisory-lock-serialized) | n/a | n/a | n/a | ADR 0009. Single global hot path — every append takes `pg_advisory_xact_lock` to serialize. Sequence consumption itself is cheap; the lock is the throughput ceiling. **Not a row-count concern; possibly a contention concern under burst writes.** |
+
+#### 11.1.2 Cross-cutting findings
+
+**Finding 1 — `state_cache` is the leading C-risk.** Unpartitioned,
+high-frequency UPSERT, JSONB-column UPDATE-in-place, no fillfactor
+tuning. This is the single highest-leverage place to target the
+spike's measurements. The brief's scenario C autovacuum SLO
+(< 1 h cycle, < 1.3× bloat) is most likely to fail here first.
+
+**Finding 2 — Four hot-write tables are unpartitioned.**
+`state_cache`, `projection_checkpoint`, `processed_events`,
+`state_stream_subscribers`. The framework's partition strategy
+addresses the *event* path (events, outbox, subject_keys) but does
+not extend to the projection / state-cache layer. ADR 0007 was
+sized for an event-volume-dominated workload; the spike's tenancy
+question reveals that the **state-cache layer** is the unpartitioned
+side of the same workload.
+
+**Finding 3 — Zero table-level autovacuum tuning.** No
+`reloptions` clauses anywhere in the migrations. All tables use
+Postgres defaults: `autovacuum_vacuum_scale_factor = 0.2` (vacuum
+when 20% of rows are dead), `autovacuum_naptime = 60s`. For
+`state_cache` and `projection_checkpoint` under steady burst load
+at 1M tenants, defaults will almost certainly fall behind. The
+spike should treat per-table tuning as a mitigation to MEASURE,
+not a recommendation to ASSUME.
+
+**Finding 4 — Advisory-lock contention is the burst-write ceiling,
+not partition design.** `events_global_position_seq` is allocated
+under `pg_advisory_xact_lock` (ADR 0009) — every append serializes
+store-wide. This caps the absolute write rate regardless of how
+many tenants are participating. The brief's scenario B (100K
+writes/minute = ~1.7K writes/sec) is well within reach, but the
+spike should measure the actual ceiling and document it as a
+deployment-shape parameter.
+
+**Finding 5 — Erasure cascade hits four unpartitioned tables.**
+Right-to-erasure for one tenant needs DELETEs on `state_cache`,
+`projection_checkpoint`, `processed_events`,
+`state_stream_subscribers`. At 1M tenants, each of these is a
+single table whose indexed delete pays a multi-million-row btree
+walk per tenant. The brief's scenario E target (< 5 s per delete)
+is plausible but **the order of magnitude depends on whether
+these tables get partitioned for the spike**.
+
+**Finding 6 — RLS adds per-query overhead.** Migration 00015
+enables `FORCE ROW LEVEL SECURITY` on every tenant-scoped table
+with policy `tenant_id = current_setting('app.tenant_id', false)`.
+The planner can use the GUC value for predicate pushdown
+(partition pruning works), but the policy adds CPU on every query.
+**Magnitude is small per-query but compounds at high QPS.** Spike
+should measure with RLS on (production shape) and once with RLS
+off (delta attribution).
+
+#### 11.1.3 Updated outcome prior (vs §6's pre-audit prior)
+
+The audit shifts my prior. The dominant finding is the gap between
+the partitioned event path and the unpartitioned state-cache layer:
+
+- **30% PASS** (was 40%) — events path stays solid, but
+  `state_cache` autovacuum behaviour under sustained burst is the
+  variable that's hardest to predict from schema alone. PASS requires
+  it landing within SLO without modification.
+- **55% QUALIFIED PASS** (was 45%) — the schema audit clearly
+  points at four hot tables needing either hash partitioning or
+  aggressive autovacuum tuning. The qualified-pass recipe lands
+  as the spike's recommendation: framework ships a migration that
+  hash-partitions `state_cache`, `projection_checkpoint`,
+  `processed_events`, `state_stream_subscribers`, plus per-table
+  autovacuum overrides on the two hottest, plus fillfactor=85 on
+  `state_cache`. ADR 0008 §2 stands with these mitigations
+  documented as Phase 12a substrate work.
+- **15% FAIL** (unchanged) — even with mitigations applied, the
+  combined unpartitioned-table pressure at 1M tenants under burst
+  exceeds what Postgres-as-configured can absorb on the deployment
+  shape we test. Escape hatch 1 (sharded virtual tenants) becomes
+  the recommendation.
+
+#### 11.1.4 Phase 1 measurement priorities (informed by the audit)
+
+The audit lets Phase 1's harness focus on the highest-leverage
+measurements rather than uniform coverage:
+
+1. **`state_cache` bloat ratio + autovacuum cycle duration** at
+   10K, 100K, 500K, 1M tiers under steady-state write. This is the
+   most important single measurement in the whole spike.
+2. **`state_cache` HOT update ratio** — `pg_stat_user_tables.n_tup_hot_upd /
+   n_tup_upd`. Predicts whether fillfactor tuning will move the needle.
+3. **`projection_checkpoint` UPDATE rate + lag** as a function of
+   how many projections are active. Cheap to measure; reveals the
+   second-order pressure.
+4. **Advisory lock wait time at `events_global_position_seq`**
+   under scenario B's 100K-writes/minute burst. Sets the deployment-
+   shape ceiling.
+5. **Erasure cascade time at 1M tenants** (scenario E) with and
+   without partitioning on the four hot tables. Establishes the
+   per-tenant delete cost delta.
+
+Items the audit explicitly de-prioritizes for Phase 1:
+
+- Detailed measurements on `events` partitioned tables — partition
+  strategy is solid; volume scales linearly; surprises unlikely.
+- `unique_claims`, `subject_keys`, `outbox`, `projection_dlq`,
+  `subscriber_dlq` measurements beyond row counts — these are
+  either well-partitioned or low-volume and unlikely to be the
+  bottleneck.
+
+#### 11.1.5 Pre-Phase-1 recommendation
+
+Before Phase 1 starts, draft a candidate mitigation migration
+(`00016_partition_state_layer.sql`) that hash-partitions the four
+unpartitioned hot tables AND tunes their autovacuum thresholds. The
+Phase 1 harness then runs each scenario **twice**: once on
+current main, once on the mitigation branch. Apples-to-apples
+delta tells us exactly which mitigations earned their keep.
+
+This roughly doubles the measurement work in Phase 1 but produces
+the qualified-pass recipe directly (you can read the recommended
+mitigations off the delta), turns the spike's output from
+"directional" into "operationally concrete," and saves a full
+re-run after the spike concludes.
+
+Estimated additional effort: +3–5 days (the migration is small;
+the doubled measurement runs reuse the harness). Highly worth it.
 
 ### 11.2 Smoke harness at 10K (Step 2)
 
