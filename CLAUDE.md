@@ -154,6 +154,47 @@ extra version bump on a non-material change. The first is harder
 to notice and harder to recover from. Bias toward `feat:` when
 genuinely uncertain.
 
+## Branching: trunk-based with held feature branches
+
+The repo runs trunk-based development. Almost everything goes
+straight to `main` via small PRs. There is no `develop`, no `v1`,
+no long-lived integration branch. Stability commitments are
+expressed via release tags (per `scripts/release.sh`), not via
+branches — adopters who need a fixed surface pin a tag.
+
+A PR may be **held** on its feature branch (open but not merged)
+only when ALL of these hold:
+
+1. There is a **documented validation gate** the PR is waiting
+   on. Examples: a spike's measurement phase, an external
+   dependency cutting a release, a regulator's sign-off. "We
+   haven't reviewed it yet" is not a gate.
+2. The gate has a **defined owner and target date**. If both
+   slip indefinitely the PR closes; the work either re-opens
+   later or never lands. Better to close cleanly than to
+   accumulate held PRs that no one tracks.
+3. The PR description names the **decision criterion** — what
+   would change the merge / don't-merge call. A reviewer should
+   be able to read the description and know what evidence would
+   move the needle.
+4. The branch is **rebased against main weekly** (or whenever
+   main lands a relevant change, whichever is sooner) to
+   surface drift early. A held PR that's two months behind main
+   has already lost the testing it claims to have.
+
+If a PR can't satisfy all four, it should not be held. Either
+merge it (with a feature flag if necessary, but the framework
+deliberately avoids flags — see the "Don'ts" section above),
+close it pending a redesign, or split it into a landable
+sub-change and a held remainder.
+
+The standard escape valve for "we want to land this but it's not
+ready everywhere" is **adding the capability without using it**:
+ship the new code path, leave the old in place, switch over in a
+follow-up. The eventstore framework's `WithoutRLS`,
+`StateCodec` (opt-in), and `aggregate.Runtime.Shredder` (optional)
+fields are examples of this pattern.
+
 ## Commands
 
 All via [Taskfile](./Taskfile.yml):
