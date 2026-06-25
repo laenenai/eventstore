@@ -130,3 +130,32 @@ Rejected. Parallelizes appends across tenants but breaks the store-wide
 `global_position` invariant. To support per-tenant parallelism, position
 would have to become per-tenant, which loses cross-tenant subscription
 semantics relied on by admin and billing flows.
+
+## Reference — measured ceiling
+
+The "Negative" section above states that append throughput is
+single-thread bound by Postgres commit speed at "empirically 5k-20k
+appends/sec store-wide on modern Postgres with NVMe." That figure
+remains the **production ceiling** on dedicated hardware. Spike 0001
+(`docs/spikes/0001-laenen-tenancy.md`) added a second data point at
+the other end of the hardware spectrum: the **development-environment
+floor**.
+
+| Environment | Sustained advisory-lock throughput | Notes |
+| --- | --- | --- |
+| Production-class Postgres on NVMe | 5,000–20,000 appends/sec | Original ADR estimate; unchanged. |
+| testcontainers Postgres on Docker, M1 Max laptop | ~167–180 appends/sec | Spike 0001 §11.2.2 — observed during the 100K saturation incident; confirmed by the 10K seed phase rate. |
+
+The two-orders-of-magnitude gap matters for adopters running the
+test suite or local dev: integration tests that simulate "busy
+production" (hundreds of writes/sec) will saturate the advisory
+lock on a developer laptop and produce queueing artefacts that do
+**not** reproduce in production. Bench harnesses (`estest/bench/`)
+default to write rates well below this floor — see
+`bench.DefaultConfig`'s godoc.
+
+This is documentation, not a decision change: the ceiling was
+always going to be hardware-dependent, and the original "5k-20k"
+range remains the operationally meaningful number. The reference
+exists so future readers comparing local-dev numbers against the
+ADR's headline figure understand why they look so different.
