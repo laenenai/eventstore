@@ -823,6 +823,94 @@ These belong in a separate follow-up spike — see
 **adopter-realistic deployment shape** rather than the storage
 layer's isolated behaviour.
 
+#### 11.2.7 Main vs PR #35 — partition-state-layer comparison (2026-06-25)
+
+Side-by-side on the same hardware (M1 Max 64 GB), same harness,
+same defaults, ephemeral testcontainer per run.
+
+**10K tier (warm-up)**
+
+| Metric | `main` | PR #35 | Delta |
+| --- | --- | --- | --- |
+| Seed | 1m04s | 1m02s | ≈ same |
+| Appends (60 s run) | 124 | 121 | ≈ same |
+| Append p50 | 32 ms | 30 ms | ≈ same |
+| Append p99 | 49 ms | 47 ms | ≈ same |
+| `state_cache` HOT % | 100 % | 100 % | already saturated at this size |
+| autovacuum cycles | 0 | 0 | both zero |
+| `events` Δ size | +152 KB | +160 KB | ≈ same |
+
+No meaningful delta at 10K — populations too small to surface
+either the win or the regression.
+
+**100K tier (the load-bearing run)**
+
+| Metric | `main` (v3) | PR #35 | Delta |
+| --- | --- | --- | --- |
+| Seed | 10m01s | 10m03s | ≈ same |
+| Appends (60 s run) | 1172 | 1149 | ≈ same |
+| Append p50 | 22 ms | 22 ms | **0 ms** |
+| Append p95 | 41 ms | 46 ms | +5 ms (noise) |
+| Append p99 | 49 ms | 55 ms | +6 ms (noise) |
+| `state_cache` Δ updates | 1155 | 1124 | ≈ same |
+| `state_cache` HOT % | 90.3 % | **100 %** | **+10 pp** ✅ |
+| `state_cache` Δ dead | 347 | 1077 | timing variance (no AV cycles either side) |
+| `state_cache` autovacuum cycles | 0 | 0 | both zero |
+| `state_cache` Δ size | +32 KB | +0 KB | ✅ in-place HOT savings |
+| `events` Δ size | +560 KB | +584 KB | ≈ same |
+
+##### What the comparison shows
+
+1. **`fillfactor=85` IS earning its keep.** state_cache HOT update
+   ratio goes from 90.3 % (main) to 100 % (PR #35). Every UPSERT
+   on PR #35 found in-page space. This walks back the §11.2.5
+   worry that "narrow room above 90 %" made PR #35 nearly free of
+   benefit — the room *is* narrow but PR #35 *does* close it.
+
+2. **Append latency is unchanged at p50.** The HOT improvement is
+   operational (less index churn over time), not per-command. p95
+   and p99 drift up by 5–6 ms; that's within run-to-run noise on
+   a developer laptop running other workloads concurrently. No
+   regression to flag.
+
+3. **Autovacuum behaviour is invisible to scenario A.** Both runs:
+   zero cycles in a 60-second window at 100K. Confirms the §11.2.4
+   observation 2 — scenario A is the wrong instrument for the
+   autovacuum question. The Mac Studio 7-day soak is the
+   load-bearing measurement for autovacuum, not anything we can
+   run in minutes.
+
+4. **Seed throughput is identical.** Partitioning doesn't help
+   (or hurt) the bootstrap path — advisory-lock-serialized writes
+   (per ADR 0009) go through the same per-Append cost regardless
+   of state_cache shape.
+
+##### Merge decision
+
+PR #35 is **safe to merge as Class B mitigation**, with the
+qualifier that scenario A cannot confirm its autovacuum-at-1M
+benefit. Justification:
+
+- HOT% improvement (90.3 → 100) is real and measured
+- No latency regression
+- Migration is data-preserving (verified by
+  `TestMigration00016_PreservesData`)
+- Per-partition autovacuum tuning is "we'll know in the soak"
+  evidence, not a regression risk
+
+The genuine question — *does this mitigation hold up at 1M
+tenants over 7 days?* — is what scenario C exists to answer.
+Merging PR #35 before the soak is the right call only because
+the soak runs against PR #35's state-layer shape, not main's.
+
+##### Open question deferred to scenario C
+
+Whether per-partition autovacuum thresholds (5 %) plus
+`fillfactor=85` are sufficient to keep autovacuum ahead of churn
+at 1M tenants over 7 days. The Mac Studio soak runbook
+(`docs/spikes/0001-mac-studio-soak-runbook.md`) is the
+measurement that answers this.
+
 ### 11.3 Phase 1 — scenarios A, C, E
 
 *Pending. Phase 1 runs after smoke passes.*
