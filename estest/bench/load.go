@@ -121,6 +121,18 @@ func (r *Recorder) Snapshot() ([]LatencySample, map[string]int64, map[string]int
 	return samples, success, failure
 }
 
+// Drain clears the in-memory samples slice without resetting the
+// success/failure counters. Used by scenario C's heartbeat loop so
+// each window starts with a fresh latency buffer — a 7-day soak
+// would otherwise accumulate ~100M LatencySamples and exhaust
+// memory. Counters stay so cumulative succ/fail across the whole
+// soak is still tracked.
+func (r *Recorder) Drain() {
+	r.mu.Lock()
+	r.samples = r.samples[:0]
+	r.mu.Unlock()
+}
+
 // makeEvent fabricates one EventToAppend with the supplied
 // counter value. UUIDs are random; nothing in the bench depends
 // on determinism beyond the tenant population.
