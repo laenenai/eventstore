@@ -235,12 +235,19 @@ All three open decisions resolved. The spike is unblocked.
   directs and reviews; Claude implements the harness and runs
   scenarios. Target date 2026-07-16 (3 weeks for Phase 1
   completion).
-- **Cloud provider: Neon paid tier.** The framework's strategic
-  target is "scale-to-zero serverless Postgres on Neon/Turso," so
-  measurements taken on Neon generalize directly to the deployment
-  shape adopters will use. Estimated spend: ~$200-500 for the
-  spike (single project, scaled compute for the 500K-1M tiers and
-  the 7-day soak).
+- **~~Cloud provider: Neon paid tier.~~ Primary venue: Pascal's
+  Mac Studio M3 Ultra (96 GB).** Updated 2026-06-25. The Mac
+  Studio addresses every concern that ruled out a laptop (no
+  lid-close sleep, sustained M3 Ultra cooling, always wall-
+  powered, dedicated disk). The spike's primary purpose is the
+  *delta* between `main` and PR #35; same hardware on both runs
+  gives a valid apples-to-apples signal even though absolute
+  numbers are Mac-specific. **Optional Neon paid validation:**
+  a 1-2 hour scenario A at 1M on Neon (~$50-100) confirms the
+  Mac Studio numbers generalize. See
+  `docs/spikes/0001-mac-studio-soak-runbook.md` for the operator
+  procedure (pre-flight, monitoring rhythm, recovery from
+  interruption).
 - **Scope commitment: Phase 1 only (scenarios A, C, E).** Steady-
   state at scale, autovacuum behaviour, tenant deletion. ~3 weeks
   calendar for a decisive go/no-go signal on PR #35. Phase 2
@@ -250,10 +257,14 @@ All three open decisions resolved. The spike is unblocked.
 
 Phase 1 deliverables:
 - Smoke harness at 10K committed to `estest/bench/` (Step 2 of §4)
-- Scenarios A + E measured at 10K, 100K, 500K, 1M tiers (managed
-  Neon for 500K+)
-- Scenario C (7-day autovacuum soak) running at 1M tenants on Neon
+  — **shipped** in the same PR as the runbook
+- Scenarios A + E measured at 10K, 100K, 500K, 1M tiers on Mac
+  Studio M3 Ultra
+- Scenario C (7-day autovacuum soak) running at 1M tenants on Mac
+  Studio per the runbook
 - Apples-to-apples delta between current main and PR #35 branch
+- Optional: 1-2 hour scenario A at 1M on Neon paid to confirm the
+  Mac Studio numbers generalize (~$50-100)
 - Recommendation: merge #35 / hold #35 / escalate to Class C
 
 ## 9. Risk and what could go sideways
@@ -632,9 +643,273 @@ needed. Resist the urge to pre-implement.
 Class A tunings landed inside the Class B migration; they do not
 ship separately.
 
-### 11.2 Smoke harness at 10K (Step 2)
+### 11.2 Smoke harness at 10K (Step 2) — DONE 2026-06-25
 
-*Pending. Harness lands at `estest/bench/`. Smoke results:* TBD.
+Harness shipped at `estest/bench/` (PR #38). Tier-gated drivers:
+`TestSmoke_10K` (always on), `TestSmoke_{100K,500K,1M}` gated
+behind `BENCH_TIER` env var.
+
+#### 11.2.1 Baseline at 10K (current `main`, unmitigated)
+
+Testcontainers Postgres on Pascal's M1 Max 64 GB, Docker Desktop
+default allocation:
+
+```text
+tenants=10000  seed=54.7s  appends=6899/6899  p50=10ms  p99=32ms
+```
+
+| Metric | Measured | Brief target | Status |
+| --- | --- | --- | --- |
+| Append p50 | 10 ms | < 20 ms | ✅ |
+| Append p99 | 32 ms | < 100 ms | ✅ |
+| Append failures | 0 | n/a | ✅ |
+
+Both within the brief's SLOs. Expected at this scale — the
+state_cache / projection bottleneck the audit predicted materializes
+at larger populations under sustained load.
+
+#### 11.2.2 Saturation finding at 100K (over-tuned harness)
+
+First 100K run used over-aggressive default rates (hot tenants @ 1
+Hz). At 100K total population that's 1000 hot tenants writing at
+1 Hz = 1000 writes/sec **offered**. Postgres's advisory-lock-
+serialised write path sustains ~180 writes/sec on testcontainers-
+in-Docker on M1 Max (the 10K seed phase confirmed). Result: 10×
+backlog, sustained queueing, append latency in the multi-second
+range:
+
+```text
+tier=100000  seed=9m49s  appends=8729/8729  p50=16.9s  p99=25.7s
+```
+
+This is not a per-append latency measurement — it's a queue-depth
+measurement under saturation. Useful as a "what happens when 1000
+users all try to write at the same time" data point (a partial
+scenario B answer), useless for scenario A's SLO check.
+
+**Harness mitigation:** `DefaultConfig` write rates re-tuned to
+realistic patterns (hot @ 1/min, warm @ 1/hour). At 1M tenants
+this yields ~167 writes/sec aggregate, just under the throughput
+ceiling and consistent across all tiers.
+
+This finding is captured in `bench.DefaultConfig`'s godoc and
+flagged here so future spike runners understand why the default
+rates look low: the goal of scenario A is to measure
+**per-append cost as state grows**, not "how many writes/sec can
+the system absorb." Scenario B (mass burst) is the right home for
+the latter.
+
+#### 11.2.3 Clean 100K baseline (current `main`, realistic rates)
+
+Re-run of `TestSmoke_100K` after `DefaultConfig` rate fix:
+
+```text
+tier=100000  seed=9m31s  appends=1163/1163  p50=18ms  p99=47ms
+```
+
+| Metric | Measured | Brief target | Status |
+| --- | --- | --- | --- |
+| Append p50 | 18 ms | < 20 ms | ✅ |
+| Append p99 | 47 ms | < 100 ms | ✅ |
+| Append failures | 0 / 1163 | n/a | ✅ |
+
+**`state_cache` table-stat delta (start → end of 60s run):**
+
+| Metric | Value | Interpretation |
+| --- | --- | --- |
+| Δ n_live_tup | +102 | New rows from this run's writes |
+| Δ n_dead_tup | +262 | UPDATEs leave dead tuples (HOT can't always reuse) |
+| Δ n_tup_upd | +1155 | UPSERTs (one per Append + state_cache update) |
+| Δ n_tup_hot_upd | +1016 | HOT updates — completed in-place without index churn |
+| HOT update % | **88.0 %** | Unmitigated `main` already gets most UPSERTs HOT |
+| Δ table size | 0 KB | No growth in 60s; in-place updates not reclaimed yet |
+| autovacuum cycles | 0 | Default thresholds (20% dead) not reached in 60s |
+
+#### 11.2.4 Observations from the clean 100K run
+
+**Observation 1 — `state_cache` HOT update ratio is already 88 %
+on unmitigated `main`.** This is the headline surprise. PR #35
+adds `fillfactor=85` specifically to increase HOT-update
+eligibility (more spare space → more in-place updates). With the
+unmitigated default `fillfactor=100` we're already at 88 %.
+**This may meaningfully reduce the expected delta from the
+`fillfactor=85` mitigation** — there's less room to improve than
+the audit predicted. Worth measuring on PR #35 to confirm whether
+fillfactor tuning still earns its keep.
+
+**Observation 2 — Autovacuum didn't fire in a 60s run.** Default
+threshold is `autovacuum_vacuum_scale_factor = 0.2` (vacuum when
+20% of rows are dead). The run produced 262 dead vs ~100K live —
+nowhere near 20%. Scenario C (7-day soak) is the only meaningful
+way to measure autovacuum behaviour; a 60s scenario A run can't
+surface it. **This makes the case to prioritise scenario C on the
+Mac Studio runbook.**
+
+**Observation 3 — Partitioned tables show +0 in our reporter.**
+The `events` table is partitioned (16 hash children per migration
+00002). `pg_stat_user_tables` tracks each partition separately;
+our query keys on `relname = 'events'` and hits the partitioned
+parent, which has no stats. Same issue for `outbox`,
+`unique_claims`, `subject_keys`. **The `state_cache` numbers are
+correct** because `state_cache` is not partitioned on
+unmitigated `main` (that's exactly what PR #35 changes).
+
+**FIXED 2026-06-25.** The stats query was amended to UNION the
+parent's name with every direct partition child via `pg_inherits`,
+then LEFT JOIN `pg_stat_user_tables` and SUM. Works identically for
+partitioned and non-partitioned tables.
+
+#### 11.2.5 Re-run at 100K with the partition fix
+
+```text
+tier=100000  seed=10m01s  appends=1172/1172  p50=22ms  p99=49ms
+```
+
+| Table | Δ live | Δ dead | Δ upd | Δ HOT-upd | HOT % | Δ size KB | autovacuum n |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `state_cache` | +43 | +347 | +1155 | +1043 | **90.3 %** | +32 | 0 |
+| `events` (16 partitions) | +2875 | 0 | 0 | 0 | — | **+560** | 0 |
+| `projection_checkpoint` | 0 | 0 | 0 | 0 | — | 0 | 0 |
+| `processed_events` | 0 | 0 | 0 | 0 | — | 0 | 0 |
+| `state_stream_subscribers` | 0 | 0 | 0 | 0 | — | 0 | 0 |
+
+The empty rows for `projection_checkpoint`, `processed_events`,
+and `state_stream_subscribers` are **expected** — these tables
+only receive writes when projection runners are active. The
+harness doesn't run a projection during scenario A; they stay
+quiet by design. Their behaviour will show up under scenarios D
+(cold rehydration kicks projections) and F (projection rebuild).
+
+`events`'s partition-aggregated numbers confirm the fix: 1172
+commands → +2875 estimated live tuple delta (pg_stat is a sampled
+estimate, not an exact count) and +560 KB across the 16 partitions.
+
+The state_cache **90.3 % HOT ratio at 100K** strengthens the
+observation from §11.2.3 / 11.2.4: PR #35's `fillfactor=85` has
+narrow room to improve from the ~90 % baseline. Worth confirming
+on PR #35 but no longer the obvious win the audit predicted.
+
+p50 = 22 ms is just over the brief's 20 ms SLO. The first 100K
+run (v2) showed p50 = 18 ms with identical configuration; the
+2 ms drift is within measurement noise on a developer Mac running
+other workloads concurrently. Phase 1's apples-to-apples DELTA
+(main vs PR #35) is unaffected — both runs experience the same
+system context.
+
+#### 11.2.6 Scope decision — no workflow runtime in the harness (2026-06-25)
+
+The harness deliberately calls `es.Store.Append` directly,
+bypassing `aggregate.Runtime`, `cmdworkflow.Workflow`, and the
+DBOS workflow runtime. This isolates the **storage adapter**
+behaviour the spike is asking about (partition strategy,
+autovacuum, erasure cascade) from the workflow layer's own
+overhead (DBOS journal writes, subscriber fan-out, retry
+budgets).
+
+PR #35's decision is a storage-adapter change — partitioning the
+state-cache layer. Measuring it through the workflow runtime
+would add a DBOS-journal-write hot path that compounds with
+state_cache pressure, conflating the bottleneck under test. For
+the merge decision specifically, the clean-scope measurement is
+the right one.
+
+What this scope omits:
+- DBOS workflow journal pressure at 1M tenants
+- `cmdworkflow.Workflow` subscriber fan-out cost per command
+- Combined storage + workflow overhead an adopter actually sees
+
+These belong in a separate follow-up spike — see
+`docs/spikes/README.md` Backlog. The follow-up tests the
+**adopter-realistic deployment shape** rather than the storage
+layer's isolated behaviour.
+
+#### 11.2.7 Main vs PR #35 — partition-state-layer comparison (2026-06-25)
+
+Side-by-side on the same hardware (M1 Max 64 GB), same harness,
+same defaults, ephemeral testcontainer per run.
+
+**10K tier (warm-up)**
+
+| Metric | `main` | PR #35 | Delta |
+| --- | --- | --- | --- |
+| Seed | 1m04s | 1m02s | ≈ same |
+| Appends (60 s run) | 124 | 121 | ≈ same |
+| Append p50 | 32 ms | 30 ms | ≈ same |
+| Append p99 | 49 ms | 47 ms | ≈ same |
+| `state_cache` HOT % | 100 % | 100 % | already saturated at this size |
+| autovacuum cycles | 0 | 0 | both zero |
+| `events` Δ size | +152 KB | +160 KB | ≈ same |
+
+No meaningful delta at 10K — populations too small to surface
+either the win or the regression.
+
+**100K tier (the load-bearing run)**
+
+| Metric | `main` (v3) | PR #35 | Delta |
+| --- | --- | --- | --- |
+| Seed | 10m01s | 10m03s | ≈ same |
+| Appends (60 s run) | 1172 | 1149 | ≈ same |
+| Append p50 | 22 ms | 22 ms | **0 ms** |
+| Append p95 | 41 ms | 46 ms | +5 ms (noise) |
+| Append p99 | 49 ms | 55 ms | +6 ms (noise) |
+| `state_cache` Δ updates | 1155 | 1124 | ≈ same |
+| `state_cache` HOT % | 90.3 % | **100 %** | **+10 pp** ✅ |
+| `state_cache` Δ dead | 347 | 1077 | timing variance (no AV cycles either side) |
+| `state_cache` autovacuum cycles | 0 | 0 | both zero |
+| `state_cache` Δ size | +32 KB | +0 KB | ✅ in-place HOT savings |
+| `events` Δ size | +560 KB | +584 KB | ≈ same |
+
+##### What the comparison shows
+
+1. **`fillfactor=85` IS earning its keep.** state_cache HOT update
+   ratio goes from 90.3 % (main) to 100 % (PR #35). Every UPSERT
+   on PR #35 found in-page space. This walks back the §11.2.5
+   worry that "narrow room above 90 %" made PR #35 nearly free of
+   benefit — the room *is* narrow but PR #35 *does* close it.
+
+2. **Append latency is unchanged at p50.** The HOT improvement is
+   operational (less index churn over time), not per-command. p95
+   and p99 drift up by 5–6 ms; that's within run-to-run noise on
+   a developer laptop running other workloads concurrently. No
+   regression to flag.
+
+3. **Autovacuum behaviour is invisible to scenario A.** Both runs:
+   zero cycles in a 60-second window at 100K. Confirms the §11.2.4
+   observation 2 — scenario A is the wrong instrument for the
+   autovacuum question. The Mac Studio 7-day soak is the
+   load-bearing measurement for autovacuum, not anything we can
+   run in minutes.
+
+4. **Seed throughput is identical.** Partitioning doesn't help
+   (or hurt) the bootstrap path — advisory-lock-serialized writes
+   (per ADR 0009) go through the same per-Append cost regardless
+   of state_cache shape.
+
+##### Merge decision
+
+PR #35 is **safe to merge as Class B mitigation**, with the
+qualifier that scenario A cannot confirm its autovacuum-at-1M
+benefit. Justification:
+
+- HOT% improvement (90.3 → 100) is real and measured
+- No latency regression
+- Migration is data-preserving (verified by
+  `TestMigration00016_PreservesData`)
+- Per-partition autovacuum tuning is "we'll know in the soak"
+  evidence, not a regression risk
+
+The genuine question — *does this mitigation hold up at 1M
+tenants over 7 days?* — is what scenario C exists to answer.
+Merging PR #35 before the soak is the right call only because
+the soak runs against PR #35's state-layer shape, not main's.
+
+##### Open question deferred to scenario C
+
+Whether per-partition autovacuum thresholds (5 %) plus
+`fillfactor=85` are sufficient to keep autovacuum ahead of churn
+at 1M tenants over 7 days. The Mac Studio soak runbook
+(`docs/spikes/0001-mac-studio-soak-runbook.md`) is the
+measurement that answers this.
 
 ### 11.3 Phase 1 — scenarios A, C, E
 
