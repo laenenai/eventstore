@@ -690,8 +690,7 @@ scenario B answer), useless for scenario A's SLO check.
 **Harness mitigation:** `DefaultConfig` write rates re-tuned to
 realistic patterns (hot @ 1/min, warm @ 1/hour). At 1M tenants
 this yields ~167 writes/sec aggregate, just under the throughput
-ceiling and consistent across all tiers. Re-run of 100K with
-realistic rates pending.
+ceiling and consistent across all tiers.
 
 This finding is captured in `bench.DefaultConfig`'s godoc and
 flagged here so future spike runners understand why the default
@@ -699,6 +698,68 @@ rates look low: the goal of scenario A is to measure
 **per-append cost as state grows**, not "how many writes/sec can
 the system absorb." Scenario B (mass burst) is the right home for
 the latter.
+
+#### 11.2.3 Clean 100K baseline (current `main`, realistic rates)
+
+Re-run of `TestSmoke_100K` after `DefaultConfig` rate fix:
+
+```text
+tier=100000  seed=9m31s  appends=1163/1163  p50=18ms  p99=47ms
+```
+
+| Metric | Measured | Brief target | Status |
+| --- | --- | --- | --- |
+| Append p50 | 18 ms | < 20 ms | ✅ |
+| Append p99 | 47 ms | < 100 ms | ✅ |
+| Append failures | 0 / 1163 | n/a | ✅ |
+
+**`state_cache` table-stat delta (start → end of 60s run):**
+
+| Metric | Value | Interpretation |
+| --- | --- | --- |
+| Δ n_live_tup | +102 | New rows from this run's writes |
+| Δ n_dead_tup | +262 | UPDATEs leave dead tuples (HOT can't always reuse) |
+| Δ n_tup_upd | +1155 | UPSERTs (one per Append + state_cache update) |
+| Δ n_tup_hot_upd | +1016 | HOT updates — completed in-place without index churn |
+| HOT update % | **88.0 %** | Unmitigated `main` already gets most UPSERTs HOT |
+| Δ table size | 0 KB | No growth in 60s; in-place updates not reclaimed yet |
+| autovacuum cycles | 0 | Default thresholds (20% dead) not reached in 60s |
+
+#### 11.2.4 Observations from the clean 100K run
+
+**Observation 1 — `state_cache` HOT update ratio is already 88 %
+on unmitigated `main`.** This is the headline surprise. PR #35
+adds `fillfactor=85` specifically to increase HOT-update
+eligibility (more spare space → more in-place updates). With the
+unmitigated default `fillfactor=100` we're already at 88 %.
+**This may meaningfully reduce the expected delta from the
+`fillfactor=85` mitigation** — there's less room to improve than
+the audit predicted. Worth measuring on PR #35 to confirm whether
+fillfactor tuning still earns its keep.
+
+**Observation 2 — Autovacuum didn't fire in a 60s run.** Default
+threshold is `autovacuum_vacuum_scale_factor = 0.2` (vacuum when
+20% of rows are dead). The run produced 262 dead vs ~100K live —
+nowhere near 20%. Scenario C (7-day soak) is the only meaningful
+way to measure autovacuum behaviour; a 60s scenario A run can't
+surface it. **This makes the case to prioritise scenario C on the
+Mac Studio runbook.**
+
+**Observation 3 — Partitioned tables show +0 in our reporter.**
+The `events` table is partitioned (16 hash children per migration
+00002). `pg_stat_user_tables` tracks each partition separately;
+our query keys on `relname = 'events'` and hits the partitioned
+parent, which has no stats. Same issue for `outbox`,
+`unique_claims`, `subject_keys`. **The `state_cache` numbers are
+correct** because `state_cache` is not partitioned on
+unmitigated `main` (that's exactly what PR #35 changes).
+
+The harness's stats query should be amended to aggregate across
+partition children when the target is a partitioned table —
+otherwise after PR #35 merges, `state_cache` would also start
+reporting +0. Tracked as a TODO in the package; see follow-up
+issue. For Phase 1 the unmitigated-main numbers are valid as
+captured.
 
 ### 11.3 Phase 1 — scenarios A, C, E
 
