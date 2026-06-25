@@ -432,6 +432,194 @@ re-run after the spike concludes.
 Estimated additional effort: +3–5 days (the migration is small;
 the doubled measurement runs reuse the harness). Highly worth it.
 
+#### 11.1.6 Mitigation action plan
+
+The mitigations cluster into three classes by risk/cost/timing.
+Class A ships independent of the spike (zero-risk tunings that
+don't change semantics). Class B is the candidate migration that
+needs spike validation before merging. Class C is structural work
+that may or may not be needed depending on Phase 1 findings.
+
+##### Class A — Ship now, independent of the spike (≈1 day total)
+
+These are zero-risk operational tunings: they alter Postgres
+autovacuum aggressiveness and tuple packing, change no semantics,
+no public API, no wire format. Land as a `chore:` migration; the
+spike measures the *combined* effect of Class A + Class B vs the
+unmitigated baseline.
+
+| # | Mitigation | Implementation | Why safe | Effort |
+| --- | --- | --- | --- | --- |
+| A1 | Per-table autovacuum tuning on `state_cache` | `ALTER TABLE state_cache SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_vacuum_cost_limit = 2000);` | More aggressive vacuum thresholds; default behaviour is to vacuum *less often*. Going more aggressive cannot break correctness. | 30 min |
+| A2 | Per-table autovacuum tuning on `projection_checkpoint` | Same shape — `scale_factor = 0.02` (this table is small + hot; even more aggressive is fine) | Same as A1 | 30 min |
+| A3 | Fillfactor=85 on `state_cache` | `ALTER TABLE state_cache SET (fillfactor = 85);` enables HOT updates when JSONB grows. | Reduces storage efficiency by ~15 %; the gain on update-heavy tables is well-known. New rows respect fillfactor; existing rows compact on next vacuum. | 30 min |
+| A4 | Document advisory-lock throughput ceiling in ADR 0009 | One paragraph in ADR 0009's Reference section explaining "absolute store-wide write rate is bounded by this lock" + spike will measure the actual number. | Pure docs. | 1 hour |
+
+**Decision gate for Class A:** none — these ship as a normal PR
+once reviewed. Land as `chore(postgres): autovacuum + fillfactor
+tuning for hot tables` or similar. No spike validation needed; the
+spike will measure the *delta* between unmitigated baseline and
+mitigated branch, so these naturally factor into the analysis.
+
+##### Breaking-change posture for Class B
+
+The hash-partitioning work changes the PostgreSQL schema, not the
+Go public API. Specifically:
+
+- **Go API (zero changes):** `aggregate.Runtime.Load`, `Append`,
+  the storage adapter methods, sqlc-generated query code — all
+  remain identical. Partitioning is SQL-transparent at the
+  parent-table level.
+- **SQL schema (breaking on populated DB):** four tables get
+  dropped and recreated. PostgreSQL has no in-place
+  ALTER TABLE … PARTITION BY syntax, so partitioning an existing
+  non-partitioned table requires either drop-and-recreate or
+  CNCD (create-new, copy, rename, drop-old).
+- **SQLite (no impact):** SQLite has no hash partitioning. The
+  migration is Postgres-only. SQLite deployments won't reach the
+  tenant counts where this matters and stay on the unpartitioned
+  shape.
+
+Per ADR 0030 this is a **Tier F migration**. The implementation
+preserves data automatically inside the goose transaction — no
+separate operator script needed.
+
+##### Migration path (B.M) — IMPLEMENTED in PR #35
+
+`adapters/storage/postgres/migrations/00016_partition_state_layer.sql`
+handles both fresh and populated databases in a single goose
+transaction. Per table:
+
+1. Create `<table>_partitioned` with `PARTITION BY HASH (tenant_id)`,
+   16 children matching the events convention
+2. Apply per-child storage tuning via `ALTER TABLE` (PostgreSQL
+   rejects storage parameters on partitioned parents — SQLSTATE
+   42809; the test caught this during development)
+3. Re-create non-PK indexes on the new parent
+4. Conditionally enable RLS + GRANT to the framework's roles
+   (no-op under `WithoutRLS` mode — also caught by the test)
+5. `INSERT INTO <new> SELECT * FROM <old>`
+6. **Row-count check** — `RAISE EXCEPTION` on mismatch, rolling
+   back the whole goose transaction
+7. `DROP` old table
+8. `RENAME` new → original name (parent, partitions, indexes)
+
+Empty databases skip the copy trivially (0 = 0 passes). Populated
+databases preserve every row end-to-end. **Down migration
+reverses the same pattern, also preserving data.**
+
+Data preservation is verified by
+`adapters/storage/postgres/migration_00016_test.go`
+(`TestMigration00016_PreservesData`): seeds a deterministic
+multi-tenant fixture into all four tables at version 15, runs
+migration 16, asserts every row survived semantically (parsed JSON
+roundtrip for JSONB columns, not byte equality), and confirms the
+new tables are actually partitioned via `pg_inherits`.
+
+The release that ships Class B is **v0.17.0**. Release notes call
+out the schema migration explicitly: "runs on next deploy; data
+preserved automatically inside the goose transaction; no
+application code changes required."
+
+##### Class B — IMPLEMENTED on branch, held pending spike Phase 1
+
+Implemented in **PR #35** on `feat/postgres-partition-state-layer`.
+**Held per CLAUDE.md held-PR criteria** (#36): do not merge until
+Phase 1 measurements confirm the delta justifies the schema
+change. The PR description names the decision criterion ("≥ X%
+improvement in autovacuum cycle vs baseline at 100K-tenant
+scale"); the branch rebases weekly against main.
+
+| # | Mitigation | Implementation | Risk | Status |
+| --- | --- | --- | --- | --- |
+| B1 | Hash-partition `state_cache` | Single goose migration `00016_partition_state_layer.sql` handles fresh + populated DBs via inline CNCD with row-count verification. Down migration also preserves data. See § Migration path (B.M) above. | Schema-only breaking change; data preserved automatically. | ✅ Implemented (PR #35), held |
+| B2 | Hash-partition `projection_checkpoint` | Same migration as B1. | Same as B1. | ✅ Implemented (PR #35), held |
+| B3 | Hash-partition `processed_events` | Same migration as B1. | Same as B1. | ✅ Implemented (PR #35), held |
+| B4 | Hash-partition `state_stream_subscribers` | Same migration as B1. | Same as B1. | ✅ Implemented (PR #35), held |
+| B5 | sqlc generated code | The parent tables keep their original names after RENAME; sqlc queries don't need regeneration. Verified — no code changes shipped. | None. | ✅ Verified (PR #35) |
+| B6 | SQLite parity (or explicit non-parity) | SQLite has no hash partitioning. Migration is Postgres-only; SQLite deployments stay on the unpartitioned shape (and won't hit 1M tenants). | None (existing SQLite limitation). | ✅ Confirmed in PR #35 description |
+
+**Open design question on B (decide before merging the held PR):**
+
+- **Partition count.** PR #35 uses 16 (matching `events`).
+  Phase 1 measurements may show that 32 or 64 partitions further
+  improve autovacuum cycle time. If so, re-issue the migration
+  before merging.
+
+**Decision gate for Class B:**
+
+- Phase 1 measurements on **mitigated branch** show
+  `state_cache` autovacuum cycle < 1 h AND bloat < 1.3× at 1M
+  tenants under sustained burst write → **merge PR #35** as the
+  v0.17.0 substantive change.
+- Phase 1 measurements show the mitigations don't meaningfully
+  move the needle → close PR #35 (per CLAUDE.md held-PR
+  criteria) and escalate to Class C.
+
+##### Class C — Structural work, only if Phase 1 says we need it
+
+Reserved for failure modes the audit can't rule out from schema
+inspection alone. Each item is non-trivial (1-3 weeks of work),
+so we don't commit to any until we have measurements.
+
+| # | Trigger | Mitigation | Effort |
+| --- | --- | --- | --- |
+| C1 | `state_cache` JSONB UPDATE churn dominates even with B1 + fillfactor | Move state_cache to a layout that supports column-level updates (split JSONB → typed columns per aggregate). Big API change for codegen. | 2-3 weeks |
+| C2 | Advisory-lock contention at `events_global_position_seq` is the burst-write ceiling | Implement ADR 0009 option C (xmin watermarking). Documented but deferred at the time. | 2-3 weeks |
+| C3 | Combined unpartitioned pressure at 1M can't be solved with table partitioning | Move to the brief's escape hatch 1 (sharded virtual tenants — group Individuals into virtual tenants at storage, keep per-Individual logical isolation at the application layer). Substantial rework. | 3-4 weeks |
+| C4 | RLS overhead measured non-trivial | Optimize the RLS policy (cache GUC, predicate hoist) or move to application-layer enforcement only for hot paths. | 1 week |
+
+**Decision gate for Class C:** strictly Phase 1 failure mode
+dependent. Do not start any C-class work speculatively.
+
+##### Sequenced timeline
+
+```
+Done       Week 1     Week 2     Week 3     Week 4     Week 5
+[B done]                                                           ← Class B implemented + data-preservation tested in PR #35 (held)
+   ↓
+   [Decide owner / cloud / scope]                                  ← Three open decisions (§8)
+            ↓
+            [Smoke harness at 10K]                                  ← Step 2: build estest/bench/
+                      ↓
+                      [Phase 1 baseline + mitigated runs]
+                                 ↓
+                                 [Decide: merge PR #35? escalate to C?]
+                                                  ↓
+                                                  [Spike conclusion + v0.17.0 cut if merged]
+```
+
+##### What I'd do next
+
+Class B (PR #35) is implemented and held with explicit gates per
+CLAUDE.md (#36). The remaining work to move the spike forward:
+
+1. **Decide kick-off owner / cloud provider / scope commitment**
+   (the three open decisions in §8). These gate Step 2 (smoke
+   harness). Should be decidable in a meeting; no engineering
+   time.
+2. **Class A tunings are already folded into PR #35** — the
+   migration applies them via per-child `ALTER TABLE`. There is
+   no separate Class A PR to ship; the autovacuum + fillfactor
+   tunings land with B.
+3. **Build the smoke harness at 10K** (Step 2 of §4). Lands at
+   `estest/bench/` as a `feat:` regardless of the spike's
+   outcome — the framework gains benchmark infrastructure it
+   doesn't have today.
+
+Class C stays unstarted until Phase 1 informs whether it's
+needed. Resist the urge to pre-implement.
+
+##### Release plan summary
+
+| Stage | Class | Release | Breaking? | Adopter action |
+| --- | --- | --- | --- | --- |
+| Held (PR #35) | B | **v0.17.0** when merged | Schema only; data preserved automatically inside the goose transaction | None — `Migrate(ctx)` handles it on next deploy |
+| Conditional | C | v0.18.0 or later | TBD per option chosen | TBD per option chosen |
+
+Class A tunings landed inside the Class B migration; they do not
+ship separately.
+
 ### 11.2 Smoke harness at 10K (Step 2)
 
 *Pending. Harness lands at `estest/bench/`. Smoke results:* TBD.
