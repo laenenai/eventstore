@@ -36,6 +36,26 @@ from. ADR 0033 § 4 documents the gate conditions for eventually
 removing the adapter — all three must hold, and the test is
 deliberately conservative.
 
+## Deletion gate
+
+The framework reconsiders deleting this adapter only when ALL THREE
+of the following conditions hold (ADR 0033 § 4):
+
+1. **No external adopter touch for six months.** No issue, PR, or
+   mailing-list post against the Restate adapter for at least six
+   months.
+2. **Two API changes with mechanical-only Restate updates.** Two
+   consecutive `cmdworkflow` API changes have shipped where the
+   Restate adapter received only mechanical adapter changes — no
+   design input, no contributor sign-off.
+3. **DBOS has overtaken on a `cmdworkflow` feature.** The DBOS
+   adapter has shipped at least one feature beyond the current
+   `cmdworkflow.WorkflowRuntime` interface (sagas, durable timers,
+   etc.) that the Restate adapter does not implement.
+
+Until all three hold, the adapter stays. Deletion is a one-way door;
+the gate is intentionally conservative.
+
 ## Using the Restate adapter today
 
 - Wiring is unchanged; see this directory's `doc.go` and the
