@@ -56,6 +56,16 @@ func (s TableStat) BloatRatio() float64 {
 // supplied table names. Must run as admin (BYPASSRLS) — these
 // system catalogs aren't tenant-scoped and the app role would see
 // truncated results.
+//
+// Partition-aware: pg_stat_user_tables tracks each hash-partition
+// child separately, and the partitioned parent has no stats of its
+// own. The query unions the parent's stats (zero for partitioned
+// tables) with every direct child's stats, then SUMs. Works
+// correctly for both partitioned tables (events, outbox,
+// subject_keys, unique_claims — and state_cache after PR #35) and
+// unpartitioned tables (currently state_cache,
+// projection_checkpoint, processed_events,
+// state_stream_subscribers).
 func SampleTables(ctx context.Context, admin *pgxpool.Pool, tables []string) ([]TableStat, error) {
 	if len(tables) == 0 {
 		return nil, nil
@@ -65,26 +75,34 @@ func SampleTables(ctx context.Context, admin *pgxpool.Pool, tables []string) ([]
 		var s TableStat
 		s.At = time.Now()
 		s.Table = table
-		// to_regclass('public.<name>') returns NULL on missing
-		// tables, which COALESCE handles cleanly. Casting a TEXT
-		// parameter to ::regclass directly fails parse-time
-		// ("operator does not exist: name = regclass") because the
-		// parameter type isn't known to the planner when the cast
-		// is applied.
+		// The CTE collects (a) the target table itself plus (b)
+		// every direct partition child of it via pg_inherits. The
+		// outer SELECT SUMs the stats columns across the set;
+		// non-partitioned targets contribute only their own row.
 		err := admin.QueryRow(ctx, `
+			WITH targets AS (
+				SELECT $1::text AS relname
+				UNION
+				SELECT child.relname::text
+				FROM pg_inherits i
+				JOIN pg_class parentc ON parentc.oid = i.inhparent
+				JOIN pg_class child   ON child.oid   = i.inhrelid
+				WHERE parentc.relname = $1
+			)
 			SELECT
-				COALESCE(n_live_tup, 0),
-				COALESCE(n_dead_tup, 0),
-				COALESCE(n_tup_ins, 0),
-				COALESCE(n_tup_upd, 0),
-				COALESCE(n_tup_del, 0),
-				COALESCE(n_tup_hot_upd, 0),
-				COALESCE(autovacuum_count, 0),
-				last_autovacuum,
-				COALESCE(pg_total_relation_size(to_regclass('public.' || $1)) / 1024, 0),
-				COALESCE(pg_relation_size(to_regclass('public.' || $1)) / 1024, 0)
-			FROM pg_stat_user_tables
-			WHERE schemaname = 'public' AND relname = $1`,
+				COALESCE(SUM(s.n_live_tup), 0)::BIGINT,
+				COALESCE(SUM(s.n_dead_tup), 0)::BIGINT,
+				COALESCE(SUM(s.n_tup_ins), 0)::BIGINT,
+				COALESCE(SUM(s.n_tup_upd), 0)::BIGINT,
+				COALESCE(SUM(s.n_tup_del), 0)::BIGINT,
+				COALESCE(SUM(s.n_tup_hot_upd), 0)::BIGINT,
+				COALESCE(SUM(s.autovacuum_count), 0)::BIGINT,
+				MAX(s.last_autovacuum),
+				COALESCE(SUM(pg_total_relation_size(to_regclass('public.' || t.relname))) / 1024, 0)::BIGINT,
+				COALESCE(SUM(pg_relation_size(to_regclass('public.' || t.relname))) / 1024, 0)::BIGINT
+			FROM targets t
+			LEFT JOIN pg_stat_user_tables s
+			    ON s.schemaname = 'public' AND s.relname = t.relname`,
 			table,
 		).Scan(
 			&s.LiveTup, &s.DeadTup,
