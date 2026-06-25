@@ -16,7 +16,7 @@ document, different states.
 
 | #    | Title                                                                                      | Status       |
 | ---- | ------------------------------------------------------------------------------------------ | ------------ |
-| 0001 | [Eventstore tenancy at `idi_*` scale](./0001-laenen-tenancy.md)                             | Audit complete; Smoke pending |
+| 0001 | [Eventstore tenancy at `idi_*` scale](./0001-laenen-tenancy.md)                             | Kicked off (2026-06-25); Smoke pending |
 
 ## Conventions
 
