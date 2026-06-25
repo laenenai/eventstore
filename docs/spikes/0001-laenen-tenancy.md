@@ -796,6 +796,33 @@ other workloads concurrently. Phase 1's apples-to-apples DELTA
 (main vs PR #35) is unaffected — both runs experience the same
 system context.
 
+#### 11.2.6 Scope decision — no workflow runtime in the harness (2026-06-25)
+
+The harness deliberately calls `es.Store.Append` directly,
+bypassing `aggregate.Runtime`, `cmdworkflow.Workflow`, and the
+DBOS workflow runtime. This isolates the **storage adapter**
+behaviour the spike is asking about (partition strategy,
+autovacuum, erasure cascade) from the workflow layer's own
+overhead (DBOS journal writes, subscriber fan-out, retry
+budgets).
+
+PR #35's decision is a storage-adapter change — partitioning the
+state-cache layer. Measuring it through the workflow runtime
+would add a DBOS-journal-write hot path that compounds with
+state_cache pressure, conflating the bottleneck under test. For
+the merge decision specifically, the clean-scope measurement is
+the right one.
+
+What this scope omits:
+- DBOS workflow journal pressure at 1M tenants
+- `cmdworkflow.Workflow` subscriber fan-out cost per command
+- Combined storage + workflow overhead an adopter actually sees
+
+These belong in a separate follow-up spike — see
+`docs/spikes/README.md` Backlog. The follow-up tests the
+**adopter-realistic deployment shape** rather than the storage
+layer's isolated behaviour.
+
 ### 11.3 Phase 1 — scenarios A, C, E
 
 *Pending. Phase 1 runs after smoke passes.*

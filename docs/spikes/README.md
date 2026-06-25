@@ -19,6 +19,16 @@ document, different states.
 | 0001 | [Eventstore tenancy at `idi_*` scale](./0001-laenen-tenancy.md)                             | Smoke harness shipped (2026-06-25); 10K passing on testcontainers |
 |      | [Mac Studio soak runbook](./0001-mac-studio-soak-runbook.md)                                | Companion to 0001 — operator procedure for the 7-day soak |
 
+## Backlog (planned but not started)
+
+Spikes with an identified question and a defined gate-on-completion
+but no plan document yet. A backlog entry crystallises into a
+numbered spike doc only when there's an owner and a target date.
+
+| Working title | Triggered by | Gate |
+| --- | --- | --- |
+| DBOS-in-the-loop at 1M tenants | Spike 0001 §11.2.6 — adopter-realistic measurement of storage + workflow journal combined pressure. Tests the deployment shape an actual laenen.ai backend would run, not the isolated storage layer. | Lands after spike 0001 concludes and PR #35 (partition migration) is decided. Tooling reuse: the `estest/bench` harness extends to optionally route Append through `cwdbos.Runtime`. |
+
 ## Conventions
 
 - **Numbering:** sequential, zero-padded to four digits, matching
