@@ -643,9 +643,62 @@ needed. Resist the urge to pre-implement.
 Class A tunings landed inside the Class B migration; they do not
 ship separately.
 
-### 11.2 Smoke harness at 10K (Step 2)
+### 11.2 Smoke harness at 10K (Step 2) — DONE 2026-06-25
 
-*Pending. Harness lands at `estest/bench/`. Smoke results:* TBD.
+Harness shipped at `estest/bench/` (PR #38). Tier-gated drivers:
+`TestSmoke_10K` (always on), `TestSmoke_{100K,500K,1M}` gated
+behind `BENCH_TIER` env var.
+
+#### 11.2.1 Baseline at 10K (current `main`, unmitigated)
+
+Testcontainers Postgres on Pascal's M1 Max 64 GB, Docker Desktop
+default allocation:
+
+```text
+tenants=10000  seed=54.7s  appends=6899/6899  p50=10ms  p99=32ms
+```
+
+| Metric | Measured | Brief target | Status |
+| --- | --- | --- | --- |
+| Append p50 | 10 ms | < 20 ms | ✅ |
+| Append p99 | 32 ms | < 100 ms | ✅ |
+| Append failures | 0 | n/a | ✅ |
+
+Both within the brief's SLOs. Expected at this scale — the
+state_cache / projection bottleneck the audit predicted materializes
+at larger populations under sustained load.
+
+#### 11.2.2 Saturation finding at 100K (over-tuned harness)
+
+First 100K run used over-aggressive default rates (hot tenants @ 1
+Hz). At 100K total population that's 1000 hot tenants writing at
+1 Hz = 1000 writes/sec **offered**. Postgres's advisory-lock-
+serialised write path sustains ~180 writes/sec on testcontainers-
+in-Docker on M1 Max (the 10K seed phase confirmed). Result: 10×
+backlog, sustained queueing, append latency in the multi-second
+range:
+
+```text
+tier=100000  seed=9m49s  appends=8729/8729  p50=16.9s  p99=25.7s
+```
+
+This is not a per-append latency measurement — it's a queue-depth
+measurement under saturation. Useful as a "what happens when 1000
+users all try to write at the same time" data point (a partial
+scenario B answer), useless for scenario A's SLO check.
+
+**Harness mitigation:** `DefaultConfig` write rates re-tuned to
+realistic patterns (hot @ 1/min, warm @ 1/hour). At 1M tenants
+this yields ~167 writes/sec aggregate, just under the throughput
+ceiling and consistent across all tiers. Re-run of 100K with
+realistic rates pending.
+
+This finding is captured in `bench.DefaultConfig`'s godoc and
+flagged here so future spike runners understand why the default
+rates look low: the goal of scenario A is to measure
+**per-append cost as state grows**, not "how many writes/sec can
+the system absorb." Scenario B (mass burst) is the right home for
+the latter.
 
 ### 11.3 Phase 1 — scenarios A, C, E
 

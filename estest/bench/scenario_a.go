@@ -108,12 +108,34 @@ type ScenarioAConfig struct {
 }
 
 // DefaultConfig returns the smoke-at-10K config.
+//
+// Write rates are deliberately modest so the offered load stays
+// below Postgres's advisory-lock-serialised throughput ceiling
+// (~180 writes/sec on testcontainers-in-Docker on M1 Max) at the
+// 1M tier. The brief's SLOs measure SINGLE-tenant append latency
+// under realistic load — not the system's saturation behaviour.
+//
+//   - Hot tenants: 1 write per minute. At 1M tenants × 1% hot
+//     gives ~167 writes/sec aggregate, just under the ceiling.
+//   - Warm tenants: 1 write per hour. Compressed; the brief's
+//     literal "one per day" produces ~0 writes in our 60s run
+//     window. The compressed rate keeps measurements meaningful
+//     without saturating.
+//
+// Scenario B (mass-write burst) is the place to deliberately
+// saturate; scenario A is the place to measure steady-state
+// latency under realistic load. The original defaults of
+// HotWritesPerSec=1.0 and WarmWritesPerMin=1.0 saturated the
+// system at 100K+ tiers, returning multi-second latencies that
+// measure queue depth rather than per-append cost. The 2026-06-25
+// 100K run on M1 Max captured this: p50=16.9s, p99=25.7s under
+// the saturating defaults.
 func DefaultConfig() ScenarioAConfig {
 	return ScenarioAConfig{
 		TenantsTotal:     10_000,
 		RunDuration:      60 * time.Second,
-		HotWritesPerSec:  1.0,
-		WarmWritesPerMin: 1.0,
+		HotWritesPerSec:  1.0 / 60.0, // 1 per minute per hot tenant
+		WarmWritesPerMin: 1.0 / 60.0, // 1 per hour per warm tenant
 		SeedConcurrency:  32,
 		RunConcurrency:   32,
 		Tables: []string{
