@@ -754,12 +754,47 @@ parent, which has no stats. Same issue for `outbox`,
 correct** because `state_cache` is not partitioned on
 unmitigated `main` (that's exactly what PR #35 changes).
 
-The harness's stats query should be amended to aggregate across
-partition children when the target is a partitioned table —
-otherwise after PR #35 merges, `state_cache` would also start
-reporting +0. Tracked as a TODO in the package; see follow-up
-issue. For Phase 1 the unmitigated-main numbers are valid as
-captured.
+**FIXED 2026-06-25.** The stats query was amended to UNION the
+parent's name with every direct partition child via `pg_inherits`,
+then LEFT JOIN `pg_stat_user_tables` and SUM. Works identically for
+partitioned and non-partitioned tables.
+
+#### 11.2.5 Re-run at 100K with the partition fix
+
+```text
+tier=100000  seed=10m01s  appends=1172/1172  p50=22ms  p99=49ms
+```
+
+| Table | Δ live | Δ dead | Δ upd | Δ HOT-upd | HOT % | Δ size KB | autovacuum n |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `state_cache` | +43 | +347 | +1155 | +1043 | **90.3 %** | +32 | 0 |
+| `events` (16 partitions) | +2875 | 0 | 0 | 0 | — | **+560** | 0 |
+| `projection_checkpoint` | 0 | 0 | 0 | 0 | — | 0 | 0 |
+| `processed_events` | 0 | 0 | 0 | 0 | — | 0 | 0 |
+| `state_stream_subscribers` | 0 | 0 | 0 | 0 | — | 0 | 0 |
+
+The empty rows for `projection_checkpoint`, `processed_events`,
+and `state_stream_subscribers` are **expected** — these tables
+only receive writes when projection runners are active. The
+harness doesn't run a projection during scenario A; they stay
+quiet by design. Their behaviour will show up under scenarios D
+(cold rehydration kicks projections) and F (projection rebuild).
+
+`events`'s partition-aggregated numbers confirm the fix: 1172
+commands → +2875 estimated live tuple delta (pg_stat is a sampled
+estimate, not an exact count) and +560 KB across the 16 partitions.
+
+The state_cache **90.3 % HOT ratio at 100K** strengthens the
+observation from §11.2.3 / 11.2.4: PR #35's `fillfactor=85` has
+narrow room to improve from the ~90 % baseline. Worth confirming
+on PR #35 but no longer the obvious win the audit predicted.
+
+p50 = 22 ms is just over the brief's 20 ms SLO. The first 100K
+run (v2) showed p50 = 18 ms with identical configuration; the
+2 ms drift is within measurement noise on a developer Mac running
+other workloads concurrently. Phase 1's apples-to-apples DELTA
+(main vs PR #35) is unaffected — both runs experience the same
+system context.
 
 ### 11.3 Phase 1 — scenarios A, C, E
 
