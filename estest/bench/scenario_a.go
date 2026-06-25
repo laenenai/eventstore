@@ -37,11 +37,17 @@ type ScenarioAResult struct {
 // Sub-millisecond precision is enough for our SLOs (< 20 ms p50,
 // < 100 ms p99 per the spike brief); we report in microseconds to
 // keep numbers readable.
+//
+// P999 carries the brief's scenario B tail target (< 2 s). It is
+// populated for every scenario; scenario A's reporter ignores it,
+// scenario B's reporter shows it. One shared type keeps cross-
+// scenario diffs comparable.
 type LatencySummary struct {
 	Count int
 	P50   time.Duration
 	P95   time.Duration
 	P99   time.Duration
+	P999  time.Duration
 	Max   time.Duration
 }
 
@@ -66,6 +72,7 @@ func summarize(samples []LatencySample) LatencySummary {
 		P50:   ds[idx(0.50)],
 		P95:   ds[idx(0.95)],
 		P99:   ds[idx(0.99)],
+		P999:  ds[idx(0.999)],
 		Max:   ds[len(ds)-1],
 	}
 }
