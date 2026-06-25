@@ -2,10 +2,19 @@
 
 A walking tour of `eventstore` through a real, runnable thing: a
 multi-tenant chat backend with crypto-shredded history, live token
-accounting, streaming responses, and a local LLM you can `ollama
-pull`. By the end you'll have a `chat.db` you can grep, a JSON KMS
-sidecar you can rotate, and a working mental model of how the
-framework's primitives compose.
+accounting, streaming responses, a local LLM you can `ollama pull`,
+and every command dispatched through DBOS workflows against the
+same SQLite file. By the end you'll have a `chat.db` you can grep,
+a JSON KMS sidecar you can rotate, and a working mental model of
+how the framework's primitives compose.
+
+Per [ADR 0033](../../docs/adr/0033-dbos-as-default-command-bus.md),
+DBOS is the framework's default production command-bus adapter, and
+SQLite + DBOS is an officially supported configuration. The CLI
+demonstrates the "one binary, one file, zero infrastructure" shape
+end-to-end: the eventstore SQLite adapter and the DBOS workflow
+journal share one `*sql.DB` handle pointing at one file. No Docker,
+no Postgres, no separate runtime — same architecture as production.
 
 You'll see this in your terminal:
 
@@ -263,35 +272,66 @@ go test ./examples/conversations/... -run TestConversation_EmptyMessageRejected 
 
 Open `examples/conversations/cmd/chat/main.go`. The bottom half of
 `run()` is the assembly that makes the aggregate work against SQLite +
-the file KMS. Stripped to the essentials:
+the file KMS + DBOS. Stripped to the essentials:
 
 ```go
 db, _ := sql.Open("sqlite", dbPath)               // 1. the SQLite file
+db.SetMaxOpenConns(1)                             //    single writer; SQLite + concurrent writes don't mix
 adapter := sqliteadapter.New(db)
 adapter.Migrate(ctx)                              //    creates events, state_cache, subject_keys, projection_checkpoint, ...
 
 keystore, _ := filekms.New(kmsFile)               // 2. file-backed KEK store (more on this next)
 shredder := shred.New(keystore, adapter)          //    Shredder owns DEK lifecycle + crypto
 
-rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
-    Store:    adapter,                            // 3. the runtime — generic over (State, Command, Event)
-    Decider:  conversations.Decider,              //    the only hand-written business logic
-    Codec:    conversationv1.EventCodec{},        //    codegen-emitted
-    Shredder: shredder,                           //    optional — wire only if you have PERSONAL fields
-}
+aggRuntime := aggregate.NewProto[*conversationv1.Conversation, // 3. the aggregate runtime
+    conversationv1.Command, conversationv1.Event](
+    adapter, conversations.Decider, conversationv1.EventCodec{},
+)
+aggRuntime.Shredder = shredder                    //    wire crypto-shredding for PERSONAL fields
+
+dctx, _ := dbossdk.NewDBOSContext(ctx,            // 4. DBOS sharing the same *sql.DB
+    dbossdk.Config{
+        AppName:        "conversations",
+        SqliteSystemDB: db,                       //    workflow journal lives in the same SQLite file
+    })
+
+wf := cmdworkflow.New[...](aggRuntime, adapter,   // 5. the command bus — over DBOS
+    cwdbos.New(), conversationv1.EventCodec{})
+svc := conversationv1dbos.NewDBOSService(wf)      //    codegen-emitted service
+
+dbossdk.RegisterWorkflow(dctx, svc.Start, ...)    // 6. register one workflow per command
+dbossdk.RegisterWorkflow(dctx, svc.AppendUserMessage, ...)
+dbossdk.RegisterWorkflow(dctx, svc.AppendAssistantMessage, ...)
+dbossdk.RegisterWorkflow(dctx, svc.Close, ...)
+dbossdk.RegisterWorkflow(dctx, svc.AsyncDispatch, ...)
+dctx.Launch()                                     //    no more RegisterWorkflow after this point
+
+dbossdk.RunWorkflow(dctx, svc.AppendUserMessage,  // 7. dispatch commands through DBOS
+    &conversationv1.AppendUserMessage{...})       //    Append, fan-out, state journal — all durable
 ```
 
-That's the whole framework integration in 8 lines. Everything else —
-`HandleCmd` for commands, `Load` for state, OCC on append, the
-state_cache update, encryption, the audit trail — is the runtime's
-job.
+Everything is one process, one binary, one file. The same SQLite
+handle backs the event log, the state_cache, the subject_keys,
+projection checkpoints, AND the DBOS workflow journal. One backup
+captures the whole world; one `rm` resets it.
 
-The interesting bit is the runtime's type parameters: it's generic
-over `(S, C, E)`. The Decider declares those three types; the codec
-serializes/deserializes the event sum; the shredder hooks the
-encrypt/decrypt path. **No central registry**, no global init, no
-reflection. You can run two runtimes for two different aggregates in
-the same process against the same DB.
+Two non-obvious bits:
+
+- **`aggregate.NewProto`** pre-wires `ProtoStateCodec` so the bus
+  can journal the post-Decide state once per dispatch (ADR 0029).
+  The bus relies on that for replay-determinism — subscribers must
+  see the same state on replay that they saw on the first run.
+- **The `(es.v1.tenant_id)` and `(es.v1.stream_id)` annotations** on
+  each command in `proto/myapp/conversation/v1/conversation.proto`
+  tell the DBOS codegen where to read the tenant + stream identity
+  on each command. Without them the codegen can't emit
+  `DBOSService.AppendUserMessage` (et al).
+
+The interesting bit is that nothing about the DBOS wiring is
+SQLite-specific — switching to Postgres is one `sql.Open` change
+and a different `dbossdk.Config`. Same workflow code, same Decider,
+same subscribers. ADR 0033 §2 documents the SQLite case as
+officially supported; ADR 0026 covers the production Postgres path.
 
 ---
 
@@ -660,8 +700,13 @@ persists, swap to a smaller model (`llama3.2:1b`) and try again.
 - ADR 0010 — crypto-shredding (the DEK/KEK design)
 - ADR 0020 — projections and the three tiers
 - ADR 0023 — `state_cache` (read-your-writes without replay)
+- ADR 0025 — workflow-orchestrated command bus
+- ADR 0026 — workflow adapters (Restate + DBOS)
 - ADR 0027 — data classification (the enum + codegen behaviour)
+- ADR 0033 — DBOS as the default command-bus adapter (and why
+  this CLI runs on SQLite + DBOS together)
 - Cookbook 11 — crypto-shredding operator runbook
+- Cookbook 14 — `cmdworkflow` deployment patterns
 - Cookbook 21 — schema evolution / upcasters
 - Cookbook 22 — sync read models with subscribers
 
