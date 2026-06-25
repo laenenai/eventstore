@@ -235,12 +235,19 @@ All three open decisions resolved. The spike is unblocked.
   directs and reviews; Claude implements the harness and runs
   scenarios. Target date 2026-07-16 (3 weeks for Phase 1
   completion).
-- **Cloud provider: Neon paid tier.** The framework's strategic
-  target is "scale-to-zero serverless Postgres on Neon/Turso," so
-  measurements taken on Neon generalize directly to the deployment
-  shape adopters will use. Estimated spend: ~$200-500 for the
-  spike (single project, scaled compute for the 500K-1M tiers and
-  the 7-day soak).
+- **~~Cloud provider: Neon paid tier.~~ Primary venue: Pascal's
+  Mac Studio M3 Ultra (96 GB).** Updated 2026-06-25. The Mac
+  Studio addresses every concern that ruled out a laptop (no
+  lid-close sleep, sustained M3 Ultra cooling, always wall-
+  powered, dedicated disk). The spike's primary purpose is the
+  *delta* between `main` and PR #35; same hardware on both runs
+  gives a valid apples-to-apples signal even though absolute
+  numbers are Mac-specific. **Optional Neon paid validation:**
+  a 1-2 hour scenario A at 1M on Neon (~$50-100) confirms the
+  Mac Studio numbers generalize. See
+  `docs/spikes/0001-mac-studio-soak-runbook.md` for the operator
+  procedure (pre-flight, monitoring rhythm, recovery from
+  interruption).
 - **Scope commitment: Phase 1 only (scenarios A, C, E).** Steady-
   state at scale, autovacuum behaviour, tenant deletion. ~3 weeks
   calendar for a decisive go/no-go signal on PR #35. Phase 2
@@ -250,10 +257,14 @@ All three open decisions resolved. The spike is unblocked.
 
 Phase 1 deliverables:
 - Smoke harness at 10K committed to `estest/bench/` (Step 2 of §4)
-- Scenarios A + E measured at 10K, 100K, 500K, 1M tiers (managed
-  Neon for 500K+)
-- Scenario C (7-day autovacuum soak) running at 1M tenants on Neon
+  — **shipped** in the same PR as the runbook
+- Scenarios A + E measured at 10K, 100K, 500K, 1M tiers on Mac
+  Studio M3 Ultra
+- Scenario C (7-day autovacuum soak) running at 1M tenants on Mac
+  Studio per the runbook
 - Apples-to-apples delta between current main and PR #35 branch
+- Optional: 1-2 hour scenario A at 1M on Neon paid to confirm the
+  Mac Studio numbers generalize (~$50-100)
 - Recommendation: merge #35 / hold #35 / escalate to Class C
 
 ## 9. Risk and what could go sideways

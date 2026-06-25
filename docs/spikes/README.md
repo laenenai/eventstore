@@ -16,7 +16,8 @@ document, different states.
 
 | #    | Title                                                                                      | Status       |
 | ---- | ------------------------------------------------------------------------------------------ | ------------ |
-| 0001 | [Eventstore tenancy at `idi_*` scale](./0001-laenen-tenancy.md)                             | Kicked off (2026-06-25); Smoke pending |
+| 0001 | [Eventstore tenancy at `idi_*` scale](./0001-laenen-tenancy.md)                             | Smoke harness shipped (2026-06-25); 10K passing on testcontainers |
+|      | [Mac Studio soak runbook](./0001-mac-studio-soak-runbook.md)                                | Companion to 0001 — operator procedure for the 7-day soak |
 
 ## Conventions
 
