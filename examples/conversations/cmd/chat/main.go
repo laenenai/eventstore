@@ -1,7 +1,15 @@
 // Command chat is the runnable end-to-end demo of the conversations
 // example: a SQLite-backed Conversation aggregate driven by a local
-// Ollama LLM. Multi-tenant, crypto-shredded, read-your-writes via the
-// Tier-1 state_cache.
+// Ollama LLM, dispatched through the framework's DBOS command bus
+// against the same SQLite file. Multi-tenant, crypto-shredded,
+// read-your-writes via the Tier-1 state_cache.
+//
+// Per ADR 0033 (DBOS as the Default Command-Bus Adapter), DBOS is the
+// recommended production command-bus story. DBOS v0.16.0+ supports a
+// SqliteSystemDB hook that lets the workflow journal live next to the
+// event log in one SQLite file — same architecture as production, no
+// Postgres, no Docker, no testcontainers. This CLI demonstrates that
+// "one binary, one file, zero infrastructure" shape end-to-end.
 //
 // Run:
 //
@@ -36,12 +44,16 @@ import (
 
 	"path/filepath"
 
+	dbossdk "github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 
+	cwdbos "github.com/laenenai/eventstore/adapters/cmdworkflow/dbos"
+	conversationv1dbos "github.com/laenenai/eventstore/adapters/cmdworkflow/dbos/gen/myapp/conversation/v1"
 	filekms "github.com/laenenai/eventstore/adapters/kms/file"
 	sqliteadapter "github.com/laenenai/eventstore/adapters/storage/sqlite"
 	"github.com/laenenai/eventstore/aggregate"
+	"github.com/laenenai/eventstore/cmdworkflow"
 	"github.com/laenenai/eventstore/es"
 	"github.com/laenenai/eventstore/examples/conversations"
 	conversationv1 "github.com/laenenai/eventstore/gen/myapp/conversation/v1"
@@ -55,7 +67,7 @@ func main() {
 		tenant       = flag.String("tenant", "demo", "Tenant id")
 		userID       = flag.String("user", "", "User id (required; used as crypto-shred subject)")
 		model        = flag.String("model", "llama3.2", "Ollama model to chat with (must be pulled locally)")
-		dbPath       = flag.String("db", "./chat.db", "SQLite file (created if missing)")
+		dbPath       = flag.String("db", "./chat.db", "SQLite file (created if missing). DBOS lays its workflow journal alongside the event log in the same file (ADR 0033 §2).")
 		systemPrompt = flag.String("system", "You are a helpful assistant. Be concise.", "System prompt")
 		ollamaURL    = flag.String("ollama", conversations.DefaultOllamaURL, "Ollama base URL")
 		conversation = flag.String("conversation", "", "Resume an existing conversation id; empty starts a new one")
@@ -94,6 +106,15 @@ func run(
 		return fmt.Errorf("open sqlite %s: %w", dbPath, err)
 	}
 	defer db.Close()
+
+	// SQLite's single-writer model means a multi-connection pool fights
+	// itself on concurrent writes — the eventstore append and DBOS's
+	// workflow journal both write through this handle. One connection
+	// is the simplest path to deterministic ordering; production
+	// adopters on Postgres tune the pool against their workload. The
+	// dbos sqlite spike fixture follows the same convention
+	// (adapters/cmdworkflow/dbos/testsupport/sqlite.go).
+	db.SetMaxOpenConns(1)
 
 	adapter := sqliteadapter.New(db)
 	if err := adapter.Migrate(ctx); err != nil {
@@ -151,11 +172,52 @@ func run(
 	}()
 	reader := &conversations.TokenUsageReader{DB: db}
 
-	rt := &aggregate.Runtime[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event]{
-		Store:    adapter,
-		Decider:  conversations.Decider,
-		Codec:    conversationv1.EventCodec{},
-		Shredder: shredder,
+	// Aggregate runtime, wrapped behind the framework's cmdworkflow
+	// command bus. The bus journals each step (Append, read-back,
+	// load-state, subscriber fan-out) through whichever WorkflowRuntime
+	// adapter is plugged in — here, DBOS sharing the same *sql.DB
+	// handle so the journal lives in the same SQLite file as the event
+	// log. ADR 0025 + ADR 0026 + ADR 0033 §2 cover the design.
+	//
+	// aggregate.NewProto pre-wires the ProtoStateCodec — required by
+	// the bus so it can journal post-Decide state once per dispatch
+	// (ADR 0029). Shredder is set after construction because NewProto
+	// doesn't take it as a parameter; the Conversation's PERSONAL
+	// fields still travel through the same encrypt/decrypt path.
+	aggRuntime := aggregate.NewProto[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event](
+		adapter, conversations.Decider, conversationv1.EventCodec{},
+	)
+	aggRuntime.Shredder = shredder
+
+	// DBOSContext shares the same *sql.DB handle the eventstore is
+	// using. SqliteSystemDB landed in dbos-transact-golang v0.16.0;
+	// this CLI is a worked example of the "one binary, one file, zero
+	// infrastructure" shape ADR 0033 §2 retracted ADR 0026 §4's
+	// "SQLite + DBOS not supported" caveat to enable.
+	dctx, err := dbossdk.NewDBOSContext(ctx, dbossdk.Config{
+		AppName:        "conversations",
+		SqliteSystemDB: db,
+	})
+	if err != nil {
+		return fmt.Errorf("init dbos: %w", err)
+	}
+	defer dctx.Shutdown(10 * time.Second)
+
+	wf := cmdworkflow.New[*conversationv1.Conversation, conversationv1.Command, conversationv1.Event](
+		aggRuntime, adapter, cwdbos.New(), conversationv1.EventCodec{},
+	)
+	svc := conversationv1dbos.NewDBOSService(wf)
+
+	// DBOS forbids RegisterWorkflow after Launch. Register every
+	// codegen-emitted method here, then Launch once.
+	dbossdk.RegisterWorkflow(dctx, svc.Start, dbossdk.WithWorkflowName("Conversation.Start"))
+	dbossdk.RegisterWorkflow(dctx, svc.AppendUserMessage, dbossdk.WithWorkflowName("Conversation.AppendUserMessage"))
+	dbossdk.RegisterWorkflow(dctx, svc.AppendAssistantMessage, dbossdk.WithWorkflowName("Conversation.AppendAssistantMessage"))
+	dbossdk.RegisterWorkflow(dctx, svc.Close, dbossdk.WithWorkflowName("Conversation.Close"))
+	dbossdk.RegisterWorkflow(dctx, svc.AsyncDispatch, dbossdk.WithWorkflowName("Conversation.AsyncDispatch"))
+
+	if err := dctx.Launch(); err != nil {
+		return fmt.Errorf("dbos launch: %w", err)
 	}
 
 	conversationID := resumeID
@@ -169,16 +231,19 @@ func run(
 		return fmt.Errorf("build stream id: %w", err)
 	}
 
-	// Start the conversation if it doesn't exist yet. Load first;
-	// only Start when the load returns Initial-equivalent state.
-	state, _, err := rt.Load(tenantCtx, sid)
+	// Read-side queries (Load for resume detection, post-decide state
+	// for the LLM prompt) bypass the command bus — they're not
+	// commands. The aggregate runtime exposes Load for free; using it
+	// directly here keeps the prompt-assembly hot path off DBOS's
+	// workflow machinery.
+	state, _, err := aggRuntime.Load(tenantCtx, sid)
 	if err != nil {
 		return fmt.Errorf("load conversation: %w", err)
 	}
 	if state.GetConversationId() == "" {
 		fmt.Printf("starting new conversation %s (tenant=%s user=%s model=%s)\n",
 			conversationID, tenantID, userID, model)
-		if _, err := rt.Handle(tenantCtx, sid, &conversationv1.Start{
+		if _, err := dbossdk.RunWorkflow(dctx, svc.Start, &conversationv1.Start{
 			TenantId:       tenantID,
 			ConversationId: conversationID,
 			UserId:         userID,
@@ -219,11 +284,12 @@ func run(
 			break
 		}
 
-		// Append the user's turn. Token count is a rough estimate;
-		// real adopters call a tokenizer (tiktoken-go, ollama's
-		// /api/embeddings count endpoint, etc.) for accuracy.
+		// Append the user's turn through the DBOS workflow. Token
+		// count is a rough estimate; real adopters call a tokenizer
+		// (tiktoken-go, ollama's /api/embeddings count endpoint, etc.)
+		// for accuracy.
 		userTokens := approxTokens(line)
-		if _, err := rt.Handle(tenantCtx, sid, &conversationv1.AppendUserMessage{
+		if _, err := runWorkflow(dctx, svc.AppendUserMessage, &conversationv1.AppendUserMessage{
 			TenantId:       tenantID,
 			ConversationId: conversationID,
 			UserId:         userID,
@@ -236,7 +302,7 @@ func run(
 
 		// Read post-decide state for the LLM call — this is the
 		// state_cache (Tier-1) hit; no replay.
-		state, _, err := rt.Load(tenantCtx, sid)
+		state, _, err := aggRuntime.Load(tenantCtx, sid)
 		if err != nil {
 			return fmt.Errorf("load state for LLM: %w", err)
 		}
@@ -264,14 +330,14 @@ func run(
 			continue
 		}
 
-		// Persist the assistant's reply. Token counts come from
-		// Ollama itself; fall back to the estimator if Ollama
-		// reported 0 (older models occasionally do).
+		// Persist the assistant's reply through DBOS. Token counts
+		// come from Ollama itself; fall back to the estimator if
+		// Ollama reported 0 (older models occasionally do).
 		outTokens := resp.TokensOutput
 		if outTokens == 0 {
 			outTokens = approxTokens(resp.Content)
 		}
-		if _, err := rt.Handle(tenantCtx, sid, &conversationv1.AppendAssistantMessage{
+		if _, err := runWorkflow(dctx, svc.AppendAssistantMessage, &conversationv1.AppendAssistantMessage{
 			TenantId:       tenantID,
 			ConversationId: conversationID,
 			UserId:         userID,
@@ -292,8 +358,8 @@ func run(
 		}
 	}
 
-	// Clean close.
-	if _, err := rt.Handle(tenantCtx, sid, &conversationv1.Close{
+	// Clean close, also through DBOS.
+	if _, err := runWorkflow(dctx, svc.Close, &conversationv1.Close{
 		TenantId:       tenantID,
 		ConversationId: conversationID,
 		UserId:         userID,
@@ -315,6 +381,23 @@ func run(
 	// cleanly rather than abandoning a running poll loop.
 	_ = projDone
 	return nil
+}
+
+// runWorkflow dispatches a DBOS workflow and waits for the result.
+// Local wrapper because dbossdk.RunWorkflow returns a handle whose
+// GetResult blocks; collapsing the two calls keeps the per-turn
+// path readable. Workflow registration happened at startup.
+func runWorkflow[P, R any](
+	dctx dbossdk.DBOSContext,
+	fn func(dbossdk.DBOSContext, P) (R, error),
+	cmd P,
+) (R, error) {
+	var zero R
+	h, err := dbossdk.RunWorkflow(dctx, fn, cmd)
+	if err != nil {
+		return zero, err
+	}
+	return h.GetResult()
 }
 
 // assertKMSMatchesStore fails fast when the persisted subject_keys row

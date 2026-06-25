@@ -246,6 +246,12 @@ func (x *Turn) GetTokens() int64 {
 	return 0
 }
 
+// Each command carries the tenant + stream identity inline so the
+// codegen-emitted runtime services (DBOS, Restate) can derive the
+// StreamID and tenant context without an out-of-band registry. The
+// annotations are Tier-A additive — proto field options are not part
+// of the wire format, so existing serialized commands round-trip
+// unchanged.
 type Start struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	TenantId       string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -1056,28 +1062,28 @@ const file_myapp_conversation_v1_conversation_proto_rawDesc = "" +
 	"\x04Role\x12\x14\n" +
 	"\x10ROLE_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tROLE_USER\x10\x01\x12\x12\n" +
-	"\x0eROLE_ASSISTANT\x10\x02\"\xad\x01\n" +
-	"\x05Start\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x1d\n" +
+	"\x0eROLE_ASSISTANT\x10\x02\"\xb9\x01\n" +
+	"\x05Start\x12!\n" +
+	"\ttenant_id\x18\x01 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\x12-\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tB\x04\xa0\xb5\x18\x01R\x0econversationId\x12\x1d\n" +
 	"\auser_id\x18\x03 \x01(\tB\x04\x80\xb5\x18\x01R\x06userId\x12\x14\n" +
 	"\x05model\x18\x04 \x01(\tR\x05model\x12)\n" +
-	"\rsystem_prompt\x18\x05 \x01(\tB\x04\xb8\xb5\x18\x02R\fsystemPrompt\"\xb0\x01\n" +
-	"\x11AppendUserMessage\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x1d\n" +
+	"\rsystem_prompt\x18\x05 \x01(\tB\x04\xb8\xb5\x18\x02R\fsystemPrompt\"\xbc\x01\n" +
+	"\x11AppendUserMessage\x12!\n" +
+	"\ttenant_id\x18\x01 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\x12-\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tB\x04\xa0\xb5\x18\x01R\x0econversationId\x12\x1d\n" +
 	"\auser_id\x18\x03 \x01(\tB\x04\x80\xb5\x18\x01R\x06userId\x12\x1e\n" +
 	"\acontent\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x03R\acontent\x12\x16\n" +
-	"\x06tokens\x18\x05 \x01(\x03R\x06tokens\"\xb5\x01\n" +
-	"\x16AppendAssistantMessage\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x1d\n" +
+	"\x06tokens\x18\x05 \x01(\x03R\x06tokens\"\xc1\x01\n" +
+	"\x16AppendAssistantMessage\x12!\n" +
+	"\ttenant_id\x18\x01 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\x12-\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tB\x04\xa0\xb5\x18\x01R\x0econversationId\x12\x1d\n" +
 	"\auser_id\x18\x03 \x01(\tB\x04\x80\xb5\x18\x01R\x06userId\x12\x1e\n" +
 	"\acontent\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x03R\acontent\x12\x16\n" +
-	"\x06tokens\x18\x05 \x01(\x03R\x06tokens\"\x8a\x01\n" +
-	"\x05Close\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12'\n" +
-	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12\x1d\n" +
+	"\x06tokens\x18\x05 \x01(\x03R\x06tokens\"\x96\x01\n" +
+	"\x05Close\x12!\n" +
+	"\ttenant_id\x18\x01 \x01(\tB\x04\xa8\xb5\x18\x01R\btenantId\x12-\n" +
+	"\x0fconversation_id\x18\x02 \x01(\tB\x04\xa0\xb5\x18\x01R\x0econversationId\x12\x1d\n" +
 	"\auser_id\x18\x03 \x01(\tB\x04\x80\xb5\x18\x01R\x06userId\x12\x1c\n" +
 	"\x06reason\x18\x04 \x01(\tB\x04\xb8\xb5\x18\x02R\x06reason\"\xd5\x02\n" +
 	"\bCommands\x124\n" +

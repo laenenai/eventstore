@@ -55,33 +55,39 @@ message Turn {
 
 // ---- Commands ------------------------------------------------------------
 
+// Each command carries the tenant + stream identity inline so the
+// codegen-emitted runtime services (DBOS, Restate) can derive the
+// StreamID and tenant context without an out-of-band registry. The
+// annotations are Tier-A additive — proto field options are not part
+// of the wire format, so existing serialized commands round-trip
+// unchanged.
 message Start {
-  string tenant_id       = 1;
-  string conversation_id = 2;
+  string tenant_id       = 1 [(es.v1.tenant_id) = true];
+  string conversation_id = 2 [(es.v1.stream_id) = true];
   string user_id         = 3 [(es.v1.subject_field) = true];
   string model           = 4;
   string system_prompt   = 5 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
 }
 
 message AppendUserMessage {
-  string tenant_id       = 1;
-  string conversation_id = 2;
+  string tenant_id       = 1 [(es.v1.tenant_id) = true];
+  string conversation_id = 2 [(es.v1.stream_id) = true];
   string user_id         = 3 [(es.v1.subject_field) = true];
   string content         = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
   int64  tokens          = 5;
 }
 
 message AppendAssistantMessage {
-  string tenant_id       = 1;
-  string conversation_id = 2;
+  string tenant_id       = 1 [(es.v1.tenant_id) = true];
+  string conversation_id = 2 [(es.v1.stream_id) = true];
   string user_id         = 3 [(es.v1.subject_field) = true];
   string content         = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_PERSONAL];
   int64  tokens          = 5;
 }
 
 message Close {
-  string tenant_id       = 1;
-  string conversation_id = 2;
+  string tenant_id       = 1 [(es.v1.tenant_id) = true];
+  string conversation_id = 2 [(es.v1.stream_id) = true];
   string user_id         = 3 [(es.v1.subject_field) = true];
   string reason          = 4 [(es.v1.data_classification) = DATA_CLASSIFICATION_INTERNAL];
 }
