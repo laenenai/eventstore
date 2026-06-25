@@ -1,8 +1,9 @@
 # Spike 0001 — Eventstore tenancy at `idi_*` scale
 
-**Status:** Audit complete (Step 1 of 4). Smoke + Phase 1 pending.
+**Status:** Kicked off 2026-06-25. Audit complete; smoke harness pending. Target Phase 1 completion 2026-07-16.
 **Date opened:** 2026-06-24.
-**Owner:** TBD.
+**Owner:** Pascal Laenen + Claude (paired execution). Decided 2026-06-25.
+**Target date:** 2026-07-16 (3 weeks from kick-off; Phase 1 completion).
 **Hard prerequisite for:** ADR 0008 §2 Phase 12a in the laenen.ai
 repo. Phase 12a substrate work does not start until this spike
 concludes.
@@ -226,23 +227,34 @@ When the spike concludes, this document carries:
    Recommendation section into the laenen.ai repo's spike doc per
    the upstream brief's instructions.
 
-## 8. Open decisions before kick-off
+## 8. Kick-off decisions (RESOLVED 2026-06-25)
 
-Before any of the engineering starts, three things need to be
-nailed:
+All three open decisions resolved. The spike is unblocked.
 
-- **Owner.** "TBD" in the brief; "TBD" here. The brief estimates
-  one engineer familiar with eventstore internals for ~2 weeks
-  active; this plan estimates ~25–30 days across 5–7 weeks
-  calendar. Who. Without an owner, this sits.
-- **Cloud provider for the 500K+ tiers.** Neon paid? AWS RDS?
-  GCP Cloud SQL? Decision affects the spike's cost basis and how
-  closely the results generalize to production deployment shapes.
-- **Scope commitment.** Phase 1 only (~3 weeks calendar, decisive
-  go/no-go signal) vs. full six scenarios (5–7 weeks, more
-  granular qualified-pass shape). The brief implies the full set;
-  this plan's recommendation is Phase 1 first, Phase 2 gated on
-  the result.
+- **Owner: Pascal Laenen + Claude (paired execution).** Pascal
+  directs and reviews; Claude implements the harness and runs
+  scenarios. Target date 2026-07-16 (3 weeks for Phase 1
+  completion).
+- **Cloud provider: Neon paid tier.** The framework's strategic
+  target is "scale-to-zero serverless Postgres on Neon/Turso," so
+  measurements taken on Neon generalize directly to the deployment
+  shape adopters will use. Estimated spend: ~$200-500 for the
+  spike (single project, scaled compute for the 500K-1M tiers and
+  the 7-day soak).
+- **Scope commitment: Phase 1 only (scenarios A, C, E).** Steady-
+  state at scale, autovacuum behaviour, tenant deletion. ~3 weeks
+  calendar for a decisive go/no-go signal on PR #35. Phase 2
+  (scenarios B, D, F) extends only if Phase 1 lands as
+  QUALIFIED PASS and the extra detail materially helps the
+  recommendation.
+
+Phase 1 deliverables:
+- Smoke harness at 10K committed to `estest/bench/` (Step 2 of §4)
+- Scenarios A + E measured at 10K, 100K, 500K, 1M tiers (managed
+  Neon for 500K+)
+- Scenario C (7-day autovacuum soak) running at 1M tenants on Neon
+- Apples-to-apples delta between current main and PR #35 branch
+- Recommendation: merge #35 / hold #35 / escalate to Class C
 
 ## 9. Risk and what could go sideways
 
