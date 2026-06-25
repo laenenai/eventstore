@@ -70,6 +70,16 @@ type Option func(*Adapter)
 //  2. Another system in the same database uses the default key value
 //     for unrelated advisory locks (extremely rare given the FNV-1a
 //     derivation of the default).
+//
+// DANGER: if any two processes that share a database disagree on the
+// lock key, ADR 0009's gap-free monotonic global_position guarantee
+// is silently broken — the disagreeing writers don't serialize against
+// each other, so a projector polling
+// `WHERE global_position > cursor ORDER BY global_position` can advance
+// past a position whose late-committing predecessor hasn't been
+// inserted yet, permanently skipping the predecessor when it lands.
+// Override only with every writer for the database configured the same
+// way, or not at all.
 func WithLockKey(key int64) Option {
 	return func(a *Adapter) { a.lockKey = key }
 }

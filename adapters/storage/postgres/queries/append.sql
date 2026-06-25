@@ -10,6 +10,16 @@
 -- Optimistic concurrency is enforced by the events PRIMARY KEY
 -- (tenant_id, stream_id, version) — a stale read produces a
 -- unique-violation that the adapter translates to ErrConflict.
+--
+-- "Gap-free" precisely: the COMMITTED global_position column has no
+-- late-committing predecessor below any projector's cursor — i.e.,
+-- given two committed rows with positions A < B, A is visible to the
+-- projector no later than B. It does NOT mean the integer sequence is
+-- dense: nextval() is non-transactional, so a rolled-back append still
+-- consumes its sequence value and leaves a hole in the integer column.
+-- Holes between committed positions are harmless; what would break the
+-- projector contract is a hole appearing BELOW a cursor that has
+-- already advanced — that's what the advisory lock prevents.
 
 -- name: AdvisoryLock :exec
 -- Acquire the store-wide append lock. Auto-releases on commit/rollback.
