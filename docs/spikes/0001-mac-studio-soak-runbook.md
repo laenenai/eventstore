@@ -191,6 +191,15 @@ What to look for, in order:
 | `panic` or `database is locked` | ❌ Driver / concurrency issue; debug before re-launching |
 | Heartbeats fire but `succ=0` | ❌ Pacer or workers broken at this scale |
 
+A healthy shakeout exits `--- PASS`. `TestSoak_1M_7Day` scales its
+heartbeat-count assertion to the configured `BENCH_SOAK_DURATION` /
+`BENCH_SOAK_HEARTBEAT`, so the ~13 heartbeats a 1 h / 5 m run produces
+clear the floor. (Before that fix the documented shakeout always
+`FAIL`ed on `only N heartbeats captured; expected ~336` even when the
+soak itself was clean — if you see that error, your tree predates the
+fix.) Read the verdict from the Step C signals above, not from the
+heartbeat count alone.
+
 ### Kicking off the real 7-day
 
 After the shakeout passes:
