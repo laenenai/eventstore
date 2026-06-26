@@ -114,11 +114,16 @@ func TestSoak_1M_7Day(t *testing.T) {
 	if res.AppendSucc == 0 {
 		t.Errorf("no successful appends — pacer or worker pool broken")
 	}
-	if len(res.Heartbeats) < 100 {
-		// 168 h / 30 min = 336 heartbeats expected. Anything below
-		// ~100 means the heartbeat goroutine was wedged.
-		t.Errorf("only %d heartbeats captured; expected ~336 for a 7-day run",
-			len(res.Heartbeats))
+	// Derive the floor from the *configured* soak — the runbook's
+	// shakeout (BENCH_SOAK_DURATION=1h, BENCH_SOAK_HEARTBEAT=5m)
+	// legitimately yields ~13 heartbeats, so a hardcoded 7-day count
+	// would fail every documented shakeout. Half the expected count
+	// still catches a wedged heartbeat goroutine without flagging a
+	// healthy short run.
+	expected := int(cfg.SoakDuration / cfg.HeartbeatInterval)
+	if len(res.Heartbeats) < expected/2 {
+		t.Errorf("only %d heartbeats captured; expected ~%d for a %s soak at %s cadence",
+			len(res.Heartbeats), expected, cfg.SoakDuration, cfg.HeartbeatInterval)
 	}
 }
 
