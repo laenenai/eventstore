@@ -140,3 +140,12 @@ tasks:
       vars: [VERSION]
     cmds:
       - ./scripts/release.sh {{.VERSION}}
+
+  soak:
+    desc: Kick off the spike 0001 7-day autovacuum soak (scenario C) — see docs/spikes/0001-mac-studio-soak-runbook.md
+    # Thin wrapper: the script owns pre-flight checks, the caffeinate
+    # wrapper, branch-aware log naming, and the confirmation prompt.
+    # Pass overrides as env (BENCH_SOAK_*, SOAK_YES=1, ...); run inside
+    # tmux/screen so a closed terminal doesn't kill the week-long run.
+    interactive: true
+    cmd: ./scripts/spike-0001-soak.sh
