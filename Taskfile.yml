@@ -149,3 +149,30 @@ tasks:
     # tmux/screen so a closed terminal doesn't kill the week-long run.
     interactive: true
     cmd: ./scripts/spike-0001-soak.sh
+
+  bench:
+    desc: Run the full spike-0001 bench harness at the 10K smoke tier (scenarios A/B/E + soak code-path smoke). Requires Docker.
+    # One command to exercise every scenario end-to-end without
+    # remembering test names or env knobs — the "is the harness
+    # healthy?" check. Each scenario spins its own testcontainers
+    # Postgres, runs in ~2-4 min, and writes a markdown report to a
+    # temp file (path printed in -v output). -tags soak compiles the
+    # soak harness too; the -run filter keeps the 7-day TestSoak_1M_7Day
+    # out — use `task soak` for that. Set BENCH_VERBOSE=1 to inline the
+    # reports into test output.
+    cmd: >
+      go test -tags soak -count=1 -v -timeout 30m
+      -run 'TestSmoke_10K|TestBurst_10K|TestDelete_10K|TestSoak_CodepathSmoke'
+      ./estest/bench/...
+
+  bench:tier:
+    desc: 'Run scenarios A/B/E at a larger population — task bench:tier TIER=100k (100k|500k|1m|all). Long; dominated by the seed phase.'
+    vars:
+      TIER: '{{.TIER | default "100k"}}'
+    # Same scenarios as `task bench`, scaled up via BENCH_TIER (the
+    # gateTier opt-in in the *_test.go files). The 1m tier is the Mac
+    # Studio target; budget hours, not minutes, for the seed.
+    cmd: >
+      BENCH_TIER={{.TIER}} go test -tags soak -count=1 -v -timeout 8h
+      -run 'TestSmoke|TestBurst|TestDelete'
+      ./estest/bench/...
