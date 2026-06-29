@@ -927,6 +927,64 @@ measurement that answers this.
 
 #### Scenario C — autovacuum behaviour (7-day soak)
 
+**What this scenario tests and why.** Scenario C is not a throughput
+benchmark; it is the evidence behind the merge / don't-merge call on
+PR #35 (`feat/postgres-partition-state-layer`). The measurement is a
+**delta**: the same harness, on the same host, with the same Postgres
+tuning, is run once on `main` and once on the partition branch, and the
+two time-series are compared. Same hardware on both arms is what makes
+the comparison legitimate (see the Mac Studio runbook) — absolute
+numbers don't generalize to Neon, but the *difference between arms*
+does.
+
+The table under the microscope is `state_cache`. Per ADR 0023, aggregate
+state is mirrored synchronously into `state_cache` inside the append
+transaction, so **every** `Append` issues an `UPDATE` of that tenant's
+row. Under MVCC each UPDATE leaves a dead tuple for autovacuum to
+reclaim. The open question — deferred here from the 100K comparison in
+§11.2.7 — is whether, at 1M tenants under sustained update load over
+*days*, `state_cache` bloats without bound (dead tuples climbing, table
+growing, HOT-update ratio collapsing, autovacuum falling behind) and
+whether that degrades append latency. If it does, that is precisely the
+failure mode PR #35's partitioned state layer is meant to remove.
+
+**Population model** (`estest/bench/tenants.go`). One million tenants in
+three cohorts, mirroring real traffic where most tenants are idle: ~90 %
+**cold** (seeded once, never written again), ~9 % **warm** (a handful of
+writes), ~1 % **hot** (the bulk of writes). During the soak only the
+hot + warm tenants form the candidate pool; cold tenants sit untouched.
+Concentrating churn on ~10 % of rows is both realistic and the worst
+case for HOT-update locality.
+
+**Load model** (`estest/bench/scenario_c.go`). After a one-Append-per-
+tenant seed phase (~16 min for 1M at ~1060/s), a fixed worker pool fed
+by a token-bucket pacer drives a steady **167 writes/sec aggregate** for
+168 hours. Each write is one `Append` with optimistic concurrency
+(`ExpectedVersion`) that writes the event and updates `state_cache` in
+the same transaction. The rate is deliberate: 167/s sits just under the
+measured advisory-lock serialization ceiling (~180/s on testcontainers,
+§11.2.2), so the soak measures **per-Append cost as state ages**, not
+queue depth. If the system ever can't keep up the pacer drops ticks and
+cumulative counts fall below expected — that drop is the saturation
+signal.
+
+**Measurement.** Every 30 minutes a heartbeat snapshots the window's
+latency percentiles (p50/p99/p999, then drains the sample buffer so
+memory stays bounded), the `pg_stat` counters for `state_cache`,
+`events`, and the projection/subscriber tables (live tuples, dead
+tuples, HOT-update %, autovacuum cycle count, table size), and
+cumulative WAL bytes. Lines append to the heartbeat log live; the full
+per-heartbeat trajectory lands in a markdown report at the end.
+
+**What "pass" looks like** for the partitioned arm over 7 days:
+`state_cache` dead tuples bounded (not monotonically climbing), table
+size flat (no bloat), HOT-update % high, append latency flat (no drift
+as the table ages), zero append failures, and retained WAL bounded
+(checkpoints recycling it). The decision on PR #35 is the comparison of
+this arm against the `main` arm, not either arm's absolute numbers.
+
+The targets below are the hard SLOs the run is scored against:
+
 | Metric | Measured | Target |
 | --- | --- | --- |
 | Autovacuum cycle on largest table | TBD | < 1 h |
