@@ -48,11 +48,11 @@ jobs:
           - TestDelete_10K         # scenario E — tenant deletion
           - TestSoak_CodepathSmoke # scenario C — soak code-path (30s)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # mise installs go + task at the versions pinned in .mise.toml,
       # matching local dev so generated/test behaviour can't drift.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
 
       # Docker is preinstalled on github-hosted ubuntu runners;
       # testcontainers-go drives the host Docker socket directly, so no

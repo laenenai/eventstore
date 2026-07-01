@@ -44,7 +44,7 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # buf breaking needs main as a reachable ref. Fetch enough
           # history that it resolves on a feature-branch checkout.
@@ -64,14 +64,14 @@ jobs:
       # task) at the exact version devs use locally. Without pinning,
       # `task generate:check` flakes when a new sqlc release changes
       # generated output between dev and CI environments.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
 
       - run: task ci
 
   ci-integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -82,7 +82,7 @@ jobs:
         if: github.ref != 'refs/heads/main'
         run: git fetch origin main:refs/heads/main
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
 
       # Docker is preinstalled on github-hosted ubuntu runners;
       # testcontainers-go uses the host Docker socket. No services:
@@ -94,13 +94,13 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
           ref: main
 
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@v4
 
       - name: Compute next version
         id: version
@@ -145,7 +145,7 @@ jobs:
 
       - name: Create GitHub release
         if: steps.version.outputs.skip == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.version }}
