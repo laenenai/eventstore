@@ -927,12 +927,19 @@ measurement that answers this.
 
 #### Scenario C — autovacuum behaviour (7-day soak)
 
-| Metric | Measured | Target |
+*Partial: run reached 120h of 168h before a mains power loss on
+2026-07-01 (no clean resume). Full write-up:
+[`0001-scenario-c-partial-run-2026-07-01.md`](./0001-scenario-c-partial-run-2026-07-01.md).
+Config includes PR #35 partition state layer. Re-run of the full
+168h pending.*
+
+| Metric | Measured (120h, partial) | Target |
 | --- | --- | --- |
-| Autovacuum cycle on largest table | TBD | < 1 h |
-| Bloat ratio on hot projections | TBD | < 1.3× |
-| WAL generation rate (sustained) | TBD | within storage budget |
-| Tables without vacuum > 24h | TBD | 0 (hard) |
+| Autovacuum cycle on largest table (`events`) | ~24 min ✅ | < 1 h |
+| Bloat ratio on hot projection (`state_cache`) | ~1.0× (302 MB, flat) ✅ | < 1.3× |
+| WAL generation rate (sustained) | ~639 GB/day (~4.4 TB / 7d proj.) ⚠️ | within storage budget |
+| Tables without vacuum > 24h | 0 ✅ | 0 (hard) |
+| Append failures / p99 | 0 fail, ~4 ms p99 ✅ | — |
 
 #### Scenario E — tenant deletion (10K parallel)
 
