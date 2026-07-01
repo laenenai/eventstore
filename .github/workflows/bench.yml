@@ -1,0 +1,64 @@
+name: bench
+
+# Spike 0001 bench harness — scenario smoke at the 10K tier, one matrix
+# job per scenario so they run on SEPARATE runners. That is real
+# parallelism with no cross-scenario CPU/IO/page-cache contention —
+# which matters because these scenarios measure latency, and two
+# sharing a host would corrupt each other's numbers.
+#
+# This is a PASS/FAIL signal, not a measurement run: it proves each
+# scenario compiles, seeds, runs end-to-end, and meets its HARD gates
+# (scenario E: zero residual rows after purge; scenario B: deadlock
+# count). The spike's actual numbers — and the main-vs-PR#35 delta —
+# come from SERIAL runs on a dedicated quiet host via `task bench` /
+# `task bench:tier` / `task soak`, never from a shared CI runner.
+#
+# Not wired to pull_request: each scenario spins its own testcontainers
+# Postgres + a 10K seed (~2-4 min/job), too heavy to block every PR on.
+# Trigger manually (workflow_dispatch) or let the nightly schedule run
+# it. Add a path-filtered pull_request trigger if you later want it
+# gating changes under estest/bench/**.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 04:00 UTC — surfaces a harness regression within a day
+    # without paying the container cost on every push.
+    - cron: '0 4 * * *'
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.scenario }}
+    strategy:
+      # One scenario failing must not cancel the others — we want the
+      # full pass/fail picture across the harness in a single run.
+      fail-fast: false
+      matrix:
+        scenario:
+          - TestSmoke_10K          # scenario A — steady-state
+          - TestBurst_10K          # scenario B — mass write burst
+          - TestDelete_10K         # scenario E — tenant deletion
+          - TestSoak_CodepathSmoke # scenario C — soak code-path (30s)
+    steps:
+      - uses: actions/checkout@v4
+
+      # mise installs go + task at the versions pinned in .mise.toml,
+      # matching local dev so generated/test behaviour can't drift.
+      - uses: jdx/mise-action@v2
+
+      # Docker is preinstalled on github-hosted ubuntu runners;
+      # testcontainers-go drives the host Docker socket directly, so no
+      # services: block is needed. -tags soak compiles the soak harness
+      # (needed for TestSoak_CodepathSmoke); the anchored -run keeps
+      # each job to exactly its one 10K-tier test, never the gated
+      # 100k/500k/1m tiers.
+      - name: ${{ matrix.scenario }}
+        run: go test -tags soak -count=1 -v -timeout 30m -run '^${{ matrix.scenario }}$' ./estest/bench/...
